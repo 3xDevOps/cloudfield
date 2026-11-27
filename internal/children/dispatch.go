@@ -113,11 +113,20 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 		return s.cfg.Runs.LoginPayer(ctx, c.WorkspaceID, c.OwnerID, c.Harness, c.Mode)
 	})
 	// A subsession names no login, so one billed per use serves it only
-	// when no login with readable usage left can.
+	// when no login with readable usage left can, unless something else
+	// signs the agent in: that pays on every account.
 	perUse, err := s.cfg.Runs.LoginPerUse(ctx, c.OwnerID, domain.Account{Member: c.AccountID, Login: login}, c.Harness)
 	if err != nil {
 		refuse(err.Error())
 		return
+	}
+	if perUse {
+		paidBy, payerErr := payer()
+		if payerErr != nil {
+			refuse(payerErr.Error())
+			return
+		}
+		perUse = paidBy == ""
 	}
 	measured, err := fallback.MeasureStart(ctx, s.cfg.Store, s.cfg.Usage, c.OwnerID, domain.Account{Member: c.AccountID, Login: login}, c.Harness, c.Fallback, perUse)
 	if err != nil {

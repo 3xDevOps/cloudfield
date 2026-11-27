@@ -514,6 +514,39 @@ func TestAnUnnamedStartBilledPerUseYieldsToReadableUsage(t *testing.T) {
 	}
 }
 
+// A default login billed per use because something outside its file signs
+// the agent in, such as an apiKeyHelper in its owner's settings, does not
+// send a launch that names none to a teammate's account: that payer pays
+// there too, so the launcher's own unspent account serves.
+func TestAnUnnamedStartAPayerSignsInStaysOnItsAccount(t *testing.T) {
+	e := newLoginEnv(t)
+	ctx := context.Background()
+	e.seed(t, e.member.ID, "lgn-work000000", "work", "ada@work.example.test")
+	_, grace := addMember(t, e.testEnv, "Grace", domain.RoleCollaborator, false)
+	if _, err := e.store.ShareAccount(ctx, grace.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.store.GrantWorkspace(ctx, e.ws.ID, grace.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	installUsageStub(e.testEnv, usageByLogin{domain.AccountOf(e.member.ID): 10, domain.AccountOf(grace.ID): 10})
+	e.runs.mu.Lock()
+	e.runs.perUse = map[domain.LoginID]bool{"": true}
+	e.runs.environmentPays = true
+	e.runs.mu.Unlock()
+	raw, perr := e.call(t, e.member.ID, protocol.MethodRunLaunch, protocol.RunLaunchParams{WorkspaceID: string(e.ws.ID), Task: "t", Harness: "claude"})
+	if perr != nil {
+		t.Fatalf("run.launch: %v", perr)
+	}
+	var result protocol.RunLaunchResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	if launches := e.runs.LaunchOptions(); result.Run.AccountMemberID != string(e.member.ID) || len(launches) != 1 || launches[0].AccountLogin != "" {
+		t.Fatalf("session on %s, launches %+v; want one on Ada's own default login", result.Run.AccountMemberID, launches)
+	}
+}
+
 // A launch that names an added login where a workspace variable signs the
 // agent in is refused with the reason, never moved to another login.
 func TestANamedLoginAVariableWouldPayForIsRefused(t *testing.T) {

@@ -322,7 +322,7 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 		if p.Login != "" {
 			return fallback.Measure(ctx, s.cfg.Store, s.cfg.Services.Usage, member, domain.Account{Member: account, Login: login}, p.Harness, policy)
 		}
-		return MeasureUnnamed(ctx, &s.cfg, member, domain.Account{Member: account, Login: login}, p.Harness, policy)
+		return MeasureUnnamed(ctx, &s.cfg, member, domain.Account{Member: account, Login: login}, p.Harness, policy, payer)
 	}
 	measured, err := measure()
 	if err != nil {

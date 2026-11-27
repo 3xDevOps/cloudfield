@@ -41,6 +41,9 @@ type fakeRuns struct {
 	childRefusal error
 	// payerReads counts LoginPayer's calls.
 	payerReads atomic.Int32
+	// payer is what LoginPayer answers, and perUse what LoginPerUse does.
+	payer  string
+	perUse bool
 }
 
 func (f *fakeRuns) LaunchWithOptions(ctx context.Context, ws domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode, opts domain.LaunchOptions) (*domain.Run, error) {
@@ -111,11 +114,11 @@ func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.M
 
 func (f *fakeRuns) LoginPayer(context.Context, domain.WorkspaceID, domain.MemberID, string, domain.LaunchMode) (string, error) {
 	f.payerReads.Add(1)
-	return "", nil
+	return f.payer, nil
 }
 
 func (f *fakeRuns) LoginPerUse(context.Context, domain.MemberID, domain.Account, string) (bool, error) {
-	return false, nil
+	return f.perUse, nil
 }
 
 // ChildLogin inherits an added login and starts on the default otherwise.
@@ -1252,5 +1255,32 @@ func TestDispatchWithoutLoginsReadsNoPayer(t *testing.T) {
 	}
 	if n := h.runs.payerReads.Load(); n != 0 {
 		t.Fatalf("LoginPayer read %d times; want none", n)
+	}
+}
+
+// A subsession whose start is billed per use because something outside the
+// login signs the agent in stays on its owner's unspent account, and is
+// listed by that account's usage: that payer pays on a teammate's account
+// too.
+func TestDispatchWhereAPayerSignsInStaysOnTheOwnersAccount(t *testing.T) {
+	h := newHarness(t)
+	h.addLogin(h.ada.ID, "lgn-work000000", "work")
+	if _, err := h.db.ShareAccount(h.ctx, h.bob.ID, h.ada.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.db.GrantWorkspace(h.ctx, h.ws.ID, h.bob.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	h.svc.cfg.Usage = usageByLogin{domain.AccountOf(h.ada.ID): 10, domain.AccountOf(h.bob.ID): 10}
+	h.runs.perUse, h.runs.payer = true, "apiKeyHelper in ~/.claude/settings.json signs the agent in"
+	parent := h.run(h.ada.ID, domain.LaunchACP, "parent")
+	h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "claude"})
+	h.settle()
+	if len(h.runs.accounts) != 1 || h.runs.accounts[0] != h.ada.ID {
+		t.Fatalf("subsessions launched on %v; want one on Ada's own account", h.runs.accounts)
+	}
+	h.svc.cfg.Usage = usageByLogin{domain.AccountOf(h.ada.ID): 100, domain.AccountOf(h.bob.ID): 10}
+	if got := h.options(parent.ID)["claude"]; got.Status != choiceExhausted {
+		t.Fatalf("claude on Ada's spent account = %s (%s); want exhausted, as its usage reads", got.Status, got.Detail)
 	}
 }

@@ -189,12 +189,12 @@ func (s *Service) dispatchUsed(ctx context.Context, p *policy, start domain.Acco
 	if err != nil {
 		return 0, false
 	}
-	policy := domain.AccountFallback{Disabled: p.parent.Fallback.Disabled, Order: []domain.MemberID{start.Member}}
-	measured, err := fallback.MeasureStart(ctx, s.cfg.Store, s.cfg.Usage, p.owner, start, harness, policy, perUse)
+	payer, err := s.cfg.Runs.LoginPayer(ctx, p.parent.WorkspaceID, p.owner, harness, mode)
 	if err != nil {
 		return 0, false
 	}
-	payer, err := s.cfg.Runs.LoginPayer(ctx, p.parent.WorkspaceID, p.owner, harness, mode)
+	policy := domain.AccountFallback{Disabled: p.parent.Fallback.Disabled, Order: []domain.MemberID{start.Member}}
+	measured, err := fallback.MeasureStart(ctx, s.cfg.Store, s.cfg.Usage, p.owner, start, harness, policy, perUse && payer == "")
 	if err != nil {
 		return 0, false
 	}
