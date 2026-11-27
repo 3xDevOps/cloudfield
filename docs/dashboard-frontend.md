@@ -681,8 +681,9 @@ its own under them on the Changes tab only. A session on an added login, or
 moved to another account by a fallback, has the account on a line of its own
 under the title (from a server with the `logins` feature, or for a run that
 carries a login; a server without them shows the phone what it did before), wrapping rather than cut: "On your account, login console"
-with a **Billed per use** badge, or "On Ada's account, …" on a teammate's;
-a removed login is named by its id.
+with a **Billed per use** badge, whose tooltip and accessible name say
+"Billed per use to your account, login console", or "On Ada's account, …"
+on a teammate's; a removed login is named by its id.
 
 **More** opens with a **Views** group (Trace, Files, Browser, **Session
 details**, **Session tree**, **Search…**, **Assistant**), then the session's
@@ -2905,7 +2906,8 @@ for every device." until the account or fallback changes again. Beside it,
 it says what it saves: "Saves this account and fallback for launches on
 every device.", "Saves the fallback …" with only the caller's own account,
 and "; not the login" while the **Login** field shows, since the login is
-not saved. It saves the fallback list as the session sends
+not saved; with several logins it names the move switch instead (see
+**Login** below). It saves the fallback list as the session sends
 it, without the selected account. **Session**, **Default mode** and **Set up** on
 Agents, and the onboarding wizard, save their agent and mode the same way
 (`rememberChoice`); **Default mode** leaves the preselected agent alone.
@@ -3002,13 +3004,14 @@ login is, and, whenever another login with Automatic on that a move could
 reach is billed per use, "Can move to <name>, billed per use, when the logins
 before it run out." ("when <picked> runs out" for a picked login, "when
 <picked>'s credit is spent" for one billed per use) or, with automatic
-changes off, "Stays on <name>, so it never moves to <name>." Directly under
-that line sits the **Let this session move to another login** switch
-(`PerUseMove` in `login-picker.tsx`), which sets `no_fallback`, the same
-state as the **Fallback** checkbox below, so the two always agree. On a
-phone the line and the switch sit in the sheet above **More options**, in
-view with it shut, and the shut summary names a picked login, "<name>,
-billed per use" for one billed per use. The menu is as wide as the
+changes off, "Stays on <name>, so it never moves to <name>.", without the
+icon, since nothing is billed. Under those lines sits the dialog's one
+control for moves, the **Let this session move to another login** switch
+(**… login or account** when another account is shared with the caller;
+`MoveSwitch` in `login-picker.tsx`), for Automatic and for a picked login
+alike, which sets `no_fallback`. On a phone the Login field, its lines and
+the switch sit in the sheet above **More options**, in view whether it is
+shut or open. The menu is as wide as the
 field and its options wrap; each shows as muted detail "Tries <name> first"
 for Automatic, and for a login its kind and plan ("Subscription · pro",
 "Console · billed per use"), an Automatic that is off, and
@@ -3023,10 +3026,16 @@ afresh, and the pick is sent only once that read holds it: while it is read
 the field says "<name>: reading your logins…", a failed read shows "Your
 logins could not be read." with the error verbatim and **Retry login read**,
 and a login removed meanwhile reads "You have no login <name> any more. Pick
-another to launch."; **Launch** stays off in all three. With only the
-caller's own account but several logins, **Fallback** and **Save as my
-default** still show, since `no_fallback` also stops moves between one
-account's logins.
+another to launch."; **Launch** stays off in all three. With several
+logins, **Save as my default** still shows, since `no_fallback` also stops
+moves between one account's logins, and names what it saves: "Saves
+whether a session may move to another login, for launches on every device;
+not the login.", or with other accounts "Saves this account, the fallback
+accounts and whether a session may move to another login or account, …".
+**Fallback** then holds only what the switch does not: **Fallback accounts ·
+Most usage left first** (or **In your order**) **· after your logins**, the
+other accounts' list without a checkbox, shown while the switch is on and
+another account is shared with the caller, and gone otherwise.
 
 Where the server offers `run.children.allow`, the form has a **Child
 sessions** select: **Use my setting** (naming it, "(off)"), **Allow for this
@@ -3035,12 +3044,11 @@ session** and **Off for this session**, sent as `run.launch` `subsessions: "on"`
 
 The collapsed **Fallback** under the account list, whose caption reads
 "On", "On, ordered" or "Off", then "when <owner>'s usage runs out" with only
-the name truncated ("when a login runs out" on the caller's own account with
-several logins), holds the [usage
+the name truncated (on the caller's own account with several logins it is
+**Fallback accounts**, above), holds the [usage
 fallback](teams.md#usage-fallback) controls (`launch-options.tsx`): a
-**Fall back to another account** checkbox (**Move to another login or
-account** on the caller's own account with several logins, **Move to another
-login** when no other account is shared with them) and the **Fallback
+**Fall back to another account** checkbox (left out with several logins,
+where the switch under **Login** is that control) and the **Fallback
 accounts** list,
 each account with a checkbox, "You" or "Shared", the account list's status
 ("Skipped: <status>" where a launch would be refused, which usage fallback
@@ -3348,21 +3356,29 @@ protected session. The row holds, from the left:
   controls, from 560px of row width, they are the
   [Session tree panel](#session-tree-panel)'s chip.
 - From 560px of row width, the reason, then `repo +N` on a
-  [multi-repo session](#multi-repo-sessions), the mode ("Standard"; the
-  tooltip adds the `agent.list` display name, `run.model` and `run.effort`,
-  "Claude Code · Standard · opus · high"), "On `<name>`'s account (fallback)" when the session carries
-  `requested_account_member_id` ([usage fallback](teams.md#usage-fallback);
-  a `run.account` event updates it live when the session moves), "On
-  `<name>`'s account, login `<login>`", or "On your account, …" to its
-  owner, when it is on an added login (`account_login_name`, or the
-  `account_login` id once that login is removed, as the activity line
-  names it), "Launched via
-  `<name>`". Each part that does not fit drops whole,
-  last first; the reason truncates last, and with under 96px left for it
-  drops whole too, before the view switch gives way. A session on a login
-  billed per use (`account_login_per_use`) has a **Billed per use** badge,
-  led by a coins icon (`PerUseBadge`, the same on every surface),
-  after those parts, which stays at every width.
+  [multi-repo session](#multi-repo-sessions), the account line, the mode
+  ("Standard"; the tooltip adds the `agent.list` display name, `run.model`
+  and `run.effort`, "Claude Code · Standard · opus · high"), "Launched via
+  `<name>`". The account line is "On `<name>`'s account (fallback)" when the
+  session carries `requested_account_member_id` ([usage
+  fallback](teams.md#usage-fallback); a `run.account` event updates it live
+  when the session moves), "On `<name>`'s account, login `<login>`", or "On
+  your account, …" to its owner, when it is on an added login
+  (`account_login_name`, or the `account_login` id once that login is
+  removed, as the activity line names it). Each part that does not fit
+  drops whole, last first, so the mode goes before the account line; the
+  reason truncates last, and with under 96px left for it drops whole too,
+  before the view switch gives way.
+- Whose account pays, kept out of those parts so that it stays at every
+  width: the account line of a session on another member's account, or on
+  a login billed per use, truncating only when nothing else is left, with
+  the full line as its tooltip. A session on a login billed per use
+  (`account_login_per_use`) has a **Billed per use** badge, led by a coins
+  icon (`PerUseBadge`, the same on every surface), whose tooltip and
+  accessible name say "Billed per use to Ada's account, login console".
+  Below 800px of row width, where the views are icons, the badge takes the
+  account line's place and names the payer itself: "Billed per use · Ada",
+  or "Billed per use · your account".
 - From 560px, the **Root access** (needs-you tone) or **Isolated** badge and,
   on the tile that carries the session's controls, the watch button. Neither
   yields to a long reason.
@@ -5746,7 +5762,9 @@ and applies again once there is room. Sections (`details.tsx`):
   cannot re-add the row, and a retried send that turns out to target an
   already-deleted note drops its own sticky too, rather than leaving an orphan.
 - **Details**: the task, Owner, Agent account (when it is someone else's),
-  Agent and mode, Branch, Created, Changed, Last commit, In control,
+  Login (an added one, with the **Billed per use** badge whose tooltip names
+  the account and login that pay, since a session does not know the
+  login's organisation), Agent and mode, Branch, Created, Changed, Last commit, In control,
   Watching, Sandbox ("Starting", "Running", "Stopped, kept for reopening"
   or "Removed"), Sandbox size (what a Docker session wrote inside its container
   outside the mounted home, checkout and cache; shown to the session's owner and
@@ -5962,8 +5980,8 @@ in **Needs you**.
   [usage fallback](teams.md#usage-fallback) move reads "Moved from Alice's
   account to your account" (`run.account`, filter **Account changed**); a
   move to or from an added login names both logins, "Moved from login work
-  to login console" and the **Billed per use** badge when the login that now
-  pays is billed per use, with each account only when the two
+  to login console" and the **Billed per use** badge, titled "Billed per use
+  to login console", when the login that now pays is billed per use, with each account only when the two
   differ, and
   the headless Claude output that triggered it "Usage limit reached: You've
   hit your session limit · resets 3pm (UTC)", the agent's message cut at 160
@@ -6686,17 +6704,17 @@ names none starts from before usage is weighed), a **Billed per use** badge,
 and, in the needs-you colour with a gauge icon, "At its limit (<window>) ·
 resets in …" while one of its current usage windows is at 95% or more (the
 server's `ExhaustedPercent`), naming the window that resets last; email and
-organisation; the Use for shares state and whom it
-reaches ("Off for shares", "On for shares: your account is not shared", "On
-for shares: no share reaches it while Automatic is off", or "On for shares:
-also serves" the teammates from `account.list` `shared_with`, which for a
-login billed per use reads "Sessions of <teammates> can run on this login
-too, charged per use to <organisation>." with the login's name when it has
-no organisation; "On for shares:
-a share cannot use this kind of login" for a default login kept as an API key
-or a Console profile, which has no file a share mounts; and plain "On for
-shares" until `account.list` answers, whose error the list's lead shows
-verbatim instead of calling the account not shared); its
+organisation; with Use for shares on, a line only where it adds a fact
+beyond the switch: whom the share serves, "Sessions of <teammates> can run
+here too." (the teammates from `account.list` `shared_with`), which for a
+login billed per use adds ", charged per use to <organisation>" ("login
+<name>" when it has no organisation); "No share reaches it while Automatic
+is off."; or "A share cannot use this kind of login." for a default login
+kept as an API key or a Console profile, which has no file a share mounts.
+Nothing is said while `account.list` is unanswered, whose error the list's
+lead shows verbatim, or when the account is shared with nobody, which the
+lead says. The badge's tooltip and accessible name name the payer, "Billed
+per use to <organisation>"; its
 **Automatic** (`agent.login.automatic`) and **Use for shares**
 (`agent.login.share`) switches, each a row of its own; and its usage windows
 (`account.usage` with `login`), whose reset reads in days and hours past 24
@@ -6719,18 +6737,28 @@ Members, where a share is revoked. The default login has neither button and
 says why: it is the one `cloudfield agent login claude` signs in. On a
 phone the switches sit under the facts and above the usage bars.
 
-**Add login** (`add-login.tsx`) asks for a name, and a line under the field
-says the new login starts with Automatic and Use for shares on: Cloudfield
-may start or move the member's sessions onto it, and the teammates
-`account.list` names ("teammates you share your account with" until it
-answers) can use it; either is turned off with the switches on its row. It
-calls `agent.login.add`,
+**Add login** (`add-login.tsx`) asks for a name (placeholder "e.g.
+team-max", which no login can be named), and a line under the field says
+Automatic and Use for shares both start on: Cloudfield may start or move the
+member's sessions onto it, and the teammates `account.list` names
+("teammates you share your account with" until it answers) can use it; the
+next screen can turn either off as soon as the login is added. The switches
+cannot sit on this step: `agent.login.add` takes only the name, and the
+login does not exist until its sign-in ends. It calls `agent.login.add`,
 and runs the sign-in under the heading "Sign in to <name>" in the
 assistant's sign-in terminal on `/ws/terminal?agent_login=<id>`, then shows
-how it ended: "Added login <name>" with its kind and plan, email and
-organisation, and for a login billed per use the **Billed per use** badge
-and the row's line on whose sessions it is charged for; or the refusal with
-**Start again**. The
+how it ended. A login added retitles the panel "Added <name>", drops the
+sign-in instructions, and shows a callout with its kind and plan, email and
+organisation (with the **Billed per use** badge for a login billed per use)
+and the login's live **Automatic** and **Use for shares** switches, the
+same calls, pending state and verbatim refusal as on its row, each with a
+line on what it does for this login: "Your automatic sessions can move here
+when the logins above it run out." and "Sessions of <teammates> can run here
+too", adding ", charged per use to <organisation>" for a login billed per
+use ("No share reaches it while Automatic is off." once Automatic is off).
+The switches show the login as the page's read of the list holds it, which
+each change reads again. A refused sign-in shows the refusal with **Start
+again**. The
 running sign-in is kept in `store/login-sign-in.ts` while the member moves
 between pages, and the Agents page holds the one `agent.login.result` wait
 for it, which the panel reads; an answer the server did not give (the
@@ -6741,13 +6769,13 @@ terminal is still starting, the panel says it is cancelling and sends it as
 soon as the terminal is up. A dropped socket reconnects to the same sign-in
 ("Reconnecting to the sign-in…") instead of ending it. A line under the
 buttons says the member can leave the page and how long the sign-in keeps
-running: the minutes left of its 15 when this tab opened its terminal, else
-"up to 15 minutes from its start". While a sign-in runs, the Claude Code row
+running: "until 15 minutes after its start", with "(<n> minutes left)" when
+this tab opened its terminal. While a sign-in runs, the Claude Code row
 says "Sign-in for <name> is still running." with **Return to the sign-in**, which reattaches its terminal, and
-Add login offers the same as its primary button with the name field and
-**Start sign-in** disabled. The server refuses another add while one runs,
-naming it; the refusal shows the same way, with the server's words
-verbatim, until that sign-in ends. Every other refusal shows verbatim under
+Add login leads with the same callout, its primary button and **Cancel**,
+and hides the form until that sign-in ends. The server refuses another add
+while one runs, naming it; the refusal shows the same way, with the server's
+words verbatim, until that sign-in ends. Every other refusal shows verbatim under
 "Sign-in not started". Once the server has ended a sign-in the panel shows
 that outcome alone: a refused attach of its terminal adds no **Try again**.
 The terminal opens only the links the sign-in button would, https pages on
