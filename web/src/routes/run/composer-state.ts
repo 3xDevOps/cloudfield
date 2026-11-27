@@ -125,12 +125,11 @@ interface EnhancedGate {
 }
 
 /** The gates that hold whatever the stream is doing: the caller keeps the box through a reconnect. */
-export function enhancedBlock({ run, maySteer, canReopen, refused, sessionLive, pending, hasLease }: {
+export function enhancedBlock({ run, maySteer, canReopen, refused, pending, hasLease }: {
   run: RunRecord
   maySteer: boolean
   canReopen: boolean
   refused: string | undefined
-  sessionLive: boolean
   pending: number
   hasLease: boolean
 }): EnhancedGate | null {
@@ -139,8 +138,6 @@ export function enhancedBlock({ run, maySteer, canReopen, refused, sessionLive, 
   const base = composerBlock(run, maySteer, canReopen)
   if (base) return { reason: base }
   if (refused) return { reason: refused }
-  // A message to a sleeping session wakes it.
-  if (!sessionLive && !run.asleep_since) return { reason: 'The agent is not running.' }
   if (pending > 0 && hasLease) return { reason: 'Answer the request above to continue.', interrupt: true }
   return null
 }

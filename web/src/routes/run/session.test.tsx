@@ -910,25 +910,35 @@ describe('the Enhanced composer draft', () => {
     return view
   }
 
-  it.each(['its event', 'its stream\'s ack'])('keeps the box through a wake when %s comes first', async (first) => {
+  it('keeps the focused box and what is typed when the session falls asleep and wakes, whichever of the stream and the event comes first', async () => {
     const ack = (live: boolean) => act(() => useStore.getState().acpAck('run_1', { ok: true, seq: 0, replay: 0, epoch: 0, live, has_control: true, state: live ? state() : undefined }))
-    const shown = () => screen.queryByRole('combobox', { name: 'Message the agent' })
-    const woke = () => act(() => useStore.getState().patchRun('run_1', { asleep_since: undefined }))
-    open({ asleep_since: '2026-11-11T09:00:00Z' })
+    const asleep = (since?: string) => act(() => useStore.getState().patchRun('run_1', { asleep_since: since }))
+    open()
     acpSocket().open(lease)
-    ack(false)
     const field = await box()
-    if (first === 'its event') woke()
-    expect(shown()).toBe(field)
-    drop('reconnecting')
-    expect(shown()).toBe(field)
-    ack(true)
-    drop('live')
-    if (first !== 'its event') woke()
-    expect(shown()).toBe(field)
-    ack(false)
-    expect(shown()).toBeNull()
-    expect(screen.getByText('The agent is not running.')).toBeDefined()
+    await userEvent.type(field, 'Round')
+    const steps = [
+      () => ack(false),
+      () => asleep('2026-11-11T09:00:00Z'),
+      () => asleep(),
+      () => drop('reconnecting'),
+      () => ack(true),
+      () => drop('live'),
+      () => drop('reconnecting'),
+      () => ack(false),
+      () => drop('live'),
+    ]
+    for (const [at, step] of steps.entries()) {
+      step()
+      expect(document.activeElement).toBe(field)
+      await userEvent.keyboard(String(at))
+    }
+    expect(field).toHaveProperty('value', 'Round012345678')
+    const refusal = 'scheduler: the Enhanced agent is not running'
+    vi.mocked(api.runInject).mockClear().mockRejectedValueOnce(new Error(refusal))
+    await userEvent.keyboard('{Enter}')
+    expect((await screen.findByRole('alert')).textContent).toContain(refusal)
+    expect(field).toHaveProperty('value', 'Round012345678')
   })
 
   it('keeps each run\'s unsent prompt and images while another run or page is shown, until the prompt is sent', async () => {
@@ -1112,6 +1122,9 @@ describe('the Enhanced composer draft', () => {
     expect(waits()).toHaveLength(1)
     expect(waits()[0]!.className).toBe('sr-only')
     expect(footer.contains(waits()[0]!)).toBe(false)
+    const why = document.getElementById(field.getAttribute('aria-describedby')!)!
+    expect(why.textContent).toBe(reconnecting)
+    expect(why.className).not.toContain('sr-only')
     expect(footer.querySelectorAll('*')).toHaveLength(footerElements)
     expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true)
     await userEvent.hover(screen.getByRole('button', { name: 'Send' }).parentElement!)
@@ -1123,6 +1136,7 @@ describe('the Enhanced composer draft', () => {
     expect(field).toHaveProperty('value', 'Round the totals')
     act(() => useStore.getState().acpStream('run_1', 'live'))
     expect(waits()).toHaveLength(0)
+    expect(why.className).toBe('sr-only')
     expect(field.getAttribute('placeholder')).toBe(placeholder)
     await userEvent.keyboard('{Enter}')
     await waitFor(() => expect(api.runInject).toHaveBeenCalledWith('run_1', 'Round the totals', expect.any(String), expect.anything()))
@@ -1135,6 +1149,7 @@ describe('the Enhanced composer draft', () => {
     const field = await box()
     drop('reconnecting')
     expect(waits()).toHaveLength(1)
+    expect(document.getElementById(field.getAttribute('aria-describedby')!)!.className).toBe('sr-only')
     expect(screen.getByRole('button', { name: 'Interrupt the agent' })).toHaveProperty('disabled', true)
     await userEvent.type(field, '   ')
     expect(waits()).toHaveLength(1)

@@ -45,7 +45,7 @@ export function useWakeOnTyping(run: RunRecord, maySteer: boolean): (body: strin
     const since = run.asleep_since
     if (!maySteer || since === undefined || run.waking || isTerminal(run.status) || !body.trim() || woke.current === since) return
     woke.current = since
-    // The server puts a failed wake on the run, where the sleep notice shows it.
+    // Only a head start: Send wakes the session too, and shows its error.
     void api.runWake(run.id).catch(() => {})
   }
 }

@@ -255,10 +255,10 @@ function ComposerBox({ textarea, autoFocus, collapsed, value, onChange, onCaret,
   )
 }
 
-function ComposerHint({ id, uploading, description }: { id: string; uploading: boolean; description: string }) {
+function ComposerHint({ id, uploading, shown, description }: { id: string; uploading: boolean; shown?: boolean; description: string }) {
   return uploading
     ? <p id={id} role="status" className="line-clamp-2 px-4 text-ui-sm text-muted">Uploading…</p>
-    : <p id={id} className="sr-only">{description}</p>
+    : <p id={id} className={shown ? 'line-clamp-2 px-4 text-ui-sm text-muted' : 'sr-only'}>{description}</p>
 }
 
 function SendActions({ pill, label, hint, description, disabled, onClick, onCancel, dictation }: {
@@ -455,18 +455,11 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
   const lastLive = useRef<{ canAct: boolean; waiting: boolean }>(undefined)
   if (stream === 'live') lastLive.current = { canAct: control.canAct, waiting: backgroundWait(run, session) !== null }
   const shape = lastLive.current
-  // A sleeping session's ack says its agent is gone. After the wake it holds until an ack says the agent is live, or the stream has resubscribed.
-  const sleepAck = useRef<'held' | 'resubscribing'>(undefined)
-  if (run.asleep_since) sleepAck.current = 'held'
-  else if (session?.live) sleepAck.current = undefined
-  else if (sleepAck.current && stream !== 'live') sleepAck.current = 'resubscribing'
-  else if (sleepAck.current === 'resubscribing') sleepAck.current = undefined
   const gate = enhancedBlock({
     run,
     maySteer,
     canReopen: maySteer && cap.hasMethod('run.relaunch') && canReopenRun(run),
     refused: stream === 'refused' ? session?.streamError ?? 'The agent stream was refused.' : undefined,
-    sessionLive: shape && !sleepAck.current ? session?.live ?? false : true,
     pending: session?.pending.length ?? 0,
     hasLease: shape?.canAct ?? true,
   })
@@ -719,7 +712,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
           }
         }}
       />
-      <ComposerHint id={hintID} uploading={images.uploading} description={hintText} />
+      <ComposerHint id={hintID} uploading={images.uploading} shown={Boolean(connecting) && hasContent} description={hintText} />
       <p role="status" className="sr-only">{connecting}</p>
     </ComposerFrame>
   )
