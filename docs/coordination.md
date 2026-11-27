@@ -1365,7 +1365,11 @@ another agent`. Who may turn them off is in [teams.md](teams.md#subsessions).
   subsession that has a free slot; when one starts, the next is tried at
   once. A younger subsession of the same parent does not start ahead of a
   waiting one, but a subsession asked for while others wait gets its own
-  first attempt and can take room they were waiting for. A capacity refusal
+  first attempt and can take room they were waiting for. An attempt the
+  server makes by itself frees no disk: only a launch somebody asks for
+  runs the reclaim in
+  [Recover from disk pressure](failure-handling.md#recover-from-disk-pressure).
+  A capacity refusal
   more than 24 hours after the subsession was asked for is final: it is
   `refused` with that refusal.
 - `subsession cancel` stops a subsession or drops it from the queue; a subsession still

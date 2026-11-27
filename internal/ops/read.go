@@ -501,7 +501,7 @@ func addChildren(ctx context.Context, read Call, l links, book accountBook, id s
 	for _, ch := range res.Children[:min(len(res.Children), defaultRows)] {
 		row := childRow{RunID: ch.RunID, State: ch.State, choice: choiceOf(ch.Harness, ch.Mode, ch.Model, ch.AccountMemberID, book),
 			URL: l.run(ch.RunID)}
-		if ch.State == protocol.ChildQueued {
+		if ch.State == protocol.ChildQueued || ch.State == protocol.ChildStarting {
 			row.Waiting = ch.Error
 		}
 		if ch.Report != nil {

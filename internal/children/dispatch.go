@@ -45,9 +45,10 @@ func (s *Service) dispatch(ctx context.Context) error {
 		}
 		for free := limits.MaxLive - counts.Busy; free > 0 && len(list) > 0; free-- {
 			c := list[0]
-			// One subsession that waits for room is tried at a time, and a
-			// younger one of its parent does not start ahead of it.
-			if c.Error != "" && !s.retryDue() {
+			// The launch that queued it again has yet to end, or it waits
+			// for room and its attempt is not due. A younger one of its
+			// parent does not start ahead of it.
+			if s.held(c.RunID) || c.Error != "" && !s.retryDue() {
 				break
 			}
 			list = list[1:]
@@ -55,6 +56,9 @@ func (s *Service) dispatch(ctx context.Context) error {
 			// A subsession tried again keeps the refusal it waits on in sight.
 			if err := s.cfg.Store.SetChildState(ctx, c.RunID, domain.ChildLaunching, c.Error, domain.ChildQueued); err != nil {
 				s.setInFlight(c.RunID, false)
+				if c.Error != "" {
+					s.retryNow()
+				}
 				if errors.Is(err, store.ErrConflict) {
 					free++
 					continue
@@ -75,6 +79,14 @@ func (s *Service) dispatch(ctx context.Context) error {
 // then hands it to the scheduler under its reserved ID.
 func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 	defer s.setInFlight(c.RunID, false)
+	// An attempt that ended any other way than waiting again did not show
+	// the server full: the next one waiting is tried without the delay.
+	waits := false
+	defer func() {
+		if c.Error != "" && !waits {
+			s.retryNow()
+		}
+	}()
 	refuse := func(reason string) {
 		if err := s.cfg.Store.SetChildState(ctx, c.RunID, domain.ChildRefused, reason, domain.ChildLaunching); err != nil {
 			slog.Warn("subsessions: refuse subsession", "child", c.RunID, "error", err)
@@ -150,6 +162,7 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 	created := false
 	_, err = s.cfg.Runs.LaunchWithOptions(ctx, c.WorkspaceID, c.OwnerID, account, c.Task, c.Harness, c.Mode, domain.LaunchOptions{
 		Model: c.Model, Permission: parent.Permission, RequestedAccount: requested, Fallback: c.Fallback, ReservedRunID: c.RunID,
+		Retry:      c.Error != "",
 		FromCommit: c.BaseCommit, FromBranch: c.BaseBranch, ExtraWorkspaces: workspaces[1:], Admitted: unlock,
 		LinearIssueURL: cmp.Or(linear.FindIssueURL(c.Task), parent.LinearIssueURL),
 		Created: func(domain.RunID) {
@@ -162,7 +175,7 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 	if err != nil && !created {
 		// Queued again before the lock goes, so a cancel behind it finds
 		// the subsession in the queue.
-		waits := s.cfg.Runs.CapacityRefused(err) && s.cfg.Now().Sub(c.CreatedAt) < capacityWaitLimit && s.wait(ctx, c, err.Error())
+		waits = s.cfg.Runs.CapacityRefused(err) && s.cfg.Now().Sub(c.CreatedAt) < capacityWaitLimit && s.wait(ctx, c, err.Error())
 		unlock()
 		if waits {
 			s.toldWaiting(ctx, c, err.Error())
@@ -170,13 +183,6 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 		}
 		refuse(err.Error())
 		return
-	}
-	if c.Error != "" {
-		// There is room again: the next one waiting need not sit out the
-		// time between attempts.
-		s.mu.Lock()
-		s.retryAt = time.Time{}
-		s.mu.Unlock()
 	}
 	s.Kick()
 }
@@ -229,6 +235,20 @@ func (s *Service) retryDue() bool {
 	}
 	s.retryAt = now.Add(capacityRetryEvery)
 	return true
+}
+
+// retryNow lets the next subsession that waits for room be tried at once.
+func (s *Service) retryNow() {
+	s.mu.Lock()
+	s.retryAt = time.Time{}
+	s.mu.Unlock()
+}
+
+// held reports whether a launch goroutine holds run's reservation.
+func (s *Service) held(run domain.RunID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inFlight[run]
 }
 
 // setInFlight records whether a launch goroutine holds run's reservation.
