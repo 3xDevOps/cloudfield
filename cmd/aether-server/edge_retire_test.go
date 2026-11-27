@@ -31,6 +31,10 @@ func TestEdgeStatusRetiringRow(t *testing.T) {
 	dated := retiring
 	dated.Date = "2027-03-01"
 	elsewhere := edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: "https://edge-third.example.test", Replacement: other}
+	const third = "https://edge-fourth.example.test"
+	// movedOff is the notice that made the server move off other to old,
+	// the address edge-url names.
+	movedOff := edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: other, Replacement: old}
 	tests := []struct {
 		name    string
 		status  edgeagent.Status
@@ -54,11 +58,20 @@ func TestEdgeStatusRetiringRow(t *testing.T) {
 			row: "retiring     " + old + " is retiring; move this server with: sudo cloudfield-server edge move " + other +
 				" (the edge sent this with the connection that pinned its key, so it is trusted on first use and shown only)"},
 		{name: "the running server is elsewhere", status: edgeagent.Status{Edge: other, Connected: true, Since: since, PID: os.Getpid(), Heartbeat: now},
-			notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{dated}},
+			notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{movedOff}},
 			row:     "running      the running server is at " + other + "; restart to apply edge-url: sudo systemctl restart aether-server"},
 		{name: "moved off a retired address, not restarted", status: edgeagent.Status{Edge: other, Error: gone, Since: since},
-			notices:    edgeagent.StoredNotices{Notices: []edgeproto.Notice{dated}},
+			notices:    edgeagent.StoredNotices{Notices: []edgeproto.Notice{movedOff}},
 			row:        "running      the server last dialed " + other + "; restart to apply edge-url: sudo systemctl restart aether-server",
+			connection: "connection   disconnected since " + since.Local().Format(time.DateTime) + ": " + gone, err: errNotConnected},
+		{name: "edge-url names an address that is leaving too", status: edgeagent.Status{Edge: other, Connected: true, Since: since, PID: os.Getpid(), Heartbeat: now},
+			notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{movedOff, {State: edgeproto.NoticeRetired, Origin: old, Replacement: third}}},
+			row: "running      the running server is at " + other + "; edge-url names " + old + ", but " + old + " is retired; move this server with: " +
+				"sudo cloudfield-server edge move " + third + ", then sudo systemctl restart aether-server"},
+		{name: "edge-url names an address that is leaving too, server stopped", status: edgeagent.Status{Edge: other, Error: gone, Since: since},
+			notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{movedOff, dated}},
+			row: "running      the server last dialed " + other + "; edge-url names " + old + ", but " + old + " is retiring on 2027-03-01; move this server with: " +
+				"sudo cloudfield-server edge move " + other + ", then sudo systemctl restart aether-server",
 			connection: "connection   disconnected since " + since.Local().Format(time.DateTime) + ": " + gone, err: errNotConnected},
 		{name: "last dialed another address, no notice", status: edgeagent.Status{Edge: other, Error: gone, Since: since},
 			connection: "connection   disconnected since " + since.Local().Format(time.DateTime) + ": " + gone, err: errNotConnected},
@@ -71,7 +84,7 @@ func TestEdgeStatusRetiringRow(t *testing.T) {
 		{name: "a damaged entry that still parses", status: connected,
 			notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: old, Replacement: "not-a-url"}}}},
 		{name: "a stale connection at another address", status: edgeagent.Status{Edge: other, Connected: true, Since: since, PID: os.Getpid(), Heartbeat: now.Add(-time.Hour)},
-			notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{dated}},
+			notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{movedOff}},
 			row:     "running      the server last dialed " + other + "; restart to apply edge-url: sudo systemctl restart aether-server", err: errNotConnected},
 		{name: "an unreadable notices file", status: connected, raw: "{not json",
 			row:        "notices      unreadable, so none is shown: edgeagent: ",

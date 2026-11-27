@@ -24,6 +24,29 @@ export function EdgeMoveSteps({ need }: { need: EdgeNeed }) {
   const caution = need.notice.first_use && (
     <p>This came with the server's first connection to the edge, when it pinned the edge's key: confirm the new address with whoever runs the edge before you move.</p>
   )
+  if (need.notice.moved_to && need.notice.moved_to_state) {
+    const leaving = need.notice.moved_to_state
+    if (!need.moveOn) {
+      return (
+        <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">
+          {caution}
+          <p className="break-words">The server's options file names {need.notice.moved_to}, which is itself {leaving}, so a restart would move the server to a leaving address. The edge names a new address for it that is not a plain https address, so there is no command to run:</p>
+          <code className="min-w-0 border-l-2 border-current pl-2.5 font-code text-muted break-all">{need.notice.moved_to_replacement}</code>
+          <p>Confirm the new address with whoever runs the edge.</p>
+        </div>
+      )
+    }
+    return (
+      <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">
+        {caution}
+        <p className="break-words">The server's options file names {need.notice.moved_to}, which is itself {leaving}, so a restart would move the server to a leaving address. Move it to {need.notice.moved_to_replacement} first, on the server's host:</p>
+        <p>1. Move the server:</p>
+        <CopyableCommand command={need.moveOn} wrap />
+        <p>2. Restart it to apply:</p>
+        <CopyableCommand command={need.restart} />
+      </div>
+    )
+  }
   if (need.notice.moved_to) {
     return (
       <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">

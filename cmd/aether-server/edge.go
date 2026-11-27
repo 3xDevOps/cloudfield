@@ -194,6 +194,14 @@ func edgeStatus(w io.Writer, dataDir, edgeURL, configPath string, policy edgepro
 	elsewhere := status.Edge != "" && !sameOrigin(status.Edge, origin)
 	cmds := serverCommands(configPath)
 	switch {
+	case elsewhere && noticed:
+		// Restarting would take the server to an address that is leaving too.
+		at := "the running server is at"
+		if !status.Connected || stale != nil {
+			at = "the server last dialed"
+		}
+		_, _ = fmt.Fprintf(tw, "running\t%s %s; edge-url names %s, but %s\n", at, status.Edge, origin,
+			edgeagent.NoticeLine(notice, cmds.Server("edge move "+shellquote.Quote(notice.Replacement))+", then "+cmds.Restart))
 	case status.Connected && stale == nil && elsewhere:
 		_, _ = fmt.Fprintf(tw, "running\tthe running server is at %s; restart to apply edge-url: %s\n", status.Edge, cmds.Restart)
 	case elsewhere && (noticed || noticedThere):

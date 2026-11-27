@@ -349,6 +349,8 @@ export interface EdgeNeed {
   reason: string
   /** Run on the server's host, then restart; no command when the replacement is not a bare https origin. */
   move?: string
+  /** The same for moved_to_replacement, when the configured address is leaving too. */
+  moveOn?: string
   restart: string
 }
 
@@ -377,6 +379,11 @@ export function bareOrigin(value: string): boolean {
   return match[2] !== undefined ? ipv6(match[2]) : ipv4.test(match[1]) || dnsName(match[1])
 }
 
+/** Brackets are shell glob characters, so an IPv6 address is quoted. */
+function moveCommand(origin: string): string {
+  return `sudo cloudfield-server edge move ${origin.includes('[') ? `'${origin}'` : origin}`
+}
+
 /** The notice the server's pinned edge key signed about the address the server is enrolled at. */
 export function edgeNotice(edge: ServerEdge | null): EdgeNeed | undefined {
   const notice = edge?.notice
@@ -388,10 +395,8 @@ export function edgeNotice(edge: ServerEdge | null): EdgeNeed | undefined {
     notice,
     edgeURL: edge.edge_url,
     reason,
-    // Brackets are shell glob characters, so an IPv6 address is quoted.
-    ...(bareOrigin(notice.replacement) && {
-      move: `sudo cloudfield-server edge move ${notice.replacement.includes('[') ? `'${notice.replacement}'` : notice.replacement}`,
-    }),
+    ...(bareOrigin(notice.replacement) && { move: moveCommand(notice.replacement) }),
+    ...(notice.moved_to_replacement && bareOrigin(notice.moved_to_replacement) && { moveOn: moveCommand(notice.moved_to_replacement) }),
     restart: 'sudo systemctl restart aether-server',
   }
 }

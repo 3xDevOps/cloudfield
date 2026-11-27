@@ -213,6 +213,22 @@ describe('a retiring or retired edge address', () => {
     expect(unusable.queryByText(/systemctl|cloudfield-server|Change the flag/)).toBeNull()
   })
 
+  it('says to move on first when the configured address is leaving too', () => {
+    const third = 'https://edge-third.example.test'
+    seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement, restart_pending: true, moved_to: replacement, moved_to_state: 'retired', moved_to_replacement: third } })
+    render(<RemoteAccessSection client={api()} />)
+    const callout = within(screen.getByRole('status'))
+    expect(callout.getByText(`The server's options file names ${replacement}, which is itself retired, so a restart would move the server to a leaving address. Move it to ${third} first, on the server's host:`)).toBeTruthy()
+    expect(callout.getByText(`sudo cloudfield-server edge move ${third}`)).toBeTruthy()
+    expect(callout.getByText('sudo systemctl restart aether-server')).toBeTruthy()
+  })
+
+  it('tells other members a pending change is to a leaving address', () => {
+    seed('collaborator', { ...claimed, notice: { state: 'retiring', replacement, restart_pending: true, moved_to_state: 'retiring' } })
+    render(<RemoteAccessSection client={api()} />)
+    expect(screen.getByText(`${edgeURL} is retiring; the edge recommends ${replacement}. A change of the server's edge address is configured and waits for a restart, and that address is itself retiring.`)).toBeTruthy()
+  })
+
   it('tells other members a move waits for a restart', () => {
     seed('collaborator', { ...claimed, notice: { state: 'retiring', replacement, restart_pending: true } })
     render(<RemoteAccessSection client={api()} />)

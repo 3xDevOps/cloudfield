@@ -263,7 +263,14 @@ Until the restart `edge status` prints `running      the server last dialed
 <old>; restart to apply edge-url: sudo systemctl restart aether-server`. Settings
 › Remote access and Needs you read the config file's `edge-url` again and, while
 it names another address than the running one, show super admins only the
-restart command and other members that a restart is pending.
+restart command and other members that a restart is pending. When the
+stored notices say the address `edge-url` now names is itself retiring or
+retired, a restart would land on a leaving address: `edge status` prints
+`running      the running server is at <old>; edge-url names <new>, but <new>
+is retired; move this server with: sudo cloudfield-server edge move <next>,
+then sudo systemctl restart aether-server`, Settings and Needs you give super
+admins the same two commands, and other members read that the configured
+address is itself leaving.
 
 All of this assumes `edge-url` comes from the config file, not a flag on
 `ExecStart`; check that first, as in step 1 of

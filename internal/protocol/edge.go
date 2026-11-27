@@ -35,6 +35,12 @@ type EdgeNotice struct {
 	// canonical.
 	RestartPending bool   `json:"restart_pending,omitempty"`
 	MovedTo        string `json:"moved_to,omitempty"`
+	// MovedToState, retiring or retired, is what the same verified notices
+	// say of that edge-url, so a restart would land on a leaving address.
+	// MovedToReplacement, for super admins only, is the address they name
+	// for it.
+	MovedToState       string `json:"moved_to_state,omitempty"`
+	MovedToReplacement string `json:"moved_to_replacement,omitempty"`
 }
 
 // EdgeAccount is an account signed in at an edge.

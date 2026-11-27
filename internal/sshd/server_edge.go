@@ -49,6 +49,12 @@ func (s *Server) serverEdge(ctx context.Context, member domain.MemberID, _ json.
 			if admin {
 				out.Notice.MovedTo = moved
 			}
+			if m, ok := notices.For(moved); ok {
+				out.Notice.MovedToState = m.State
+				if admin {
+					out.Notice.MovedToReplacement = m.Replacement
+				}
+			}
 		}
 	}
 	return out, nil

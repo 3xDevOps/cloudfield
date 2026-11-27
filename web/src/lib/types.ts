@@ -1531,6 +1531,10 @@ export interface EdgeNotice {
   restart_pending?: boolean
   /** Super admins only: that edge-url, canonical. */
   moved_to?: string
+  /** The same notices say that edge-url is leaving too. */
+  moved_to_state?: 'retiring' | 'retired'
+  /** Super admins only: the address they name for it. */
+  moved_to_replacement?: string
 }
 
 /** server.edge.claimcode: a claim code bound to the calling admin. */

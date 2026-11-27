@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -171,6 +172,29 @@ func TestServerEdgeNoticeAfterAMove(t *testing.T) {
 			if got := string(raw["notice"]); got != call.want {
 				t.Errorf("config %q: notice %s, want %s", tc.config, got, call.want)
 			}
+		}
+	}
+	e.srv.SetEdgeOwner(&fakeEdgeOwner{notices: edgeagent.StoredNotices{Notices: append(slices.Clone(notices.Notices),
+		edgeproto.Notice{State: edgeproto.NoticeRetired, Origin: other, Replacement: "https://edge3.example"})}})
+	if err := os.WriteFile(path, []byte("edge-url = "+other+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range []struct {
+		client interface {
+			Call(string, any, any) error
+		}
+		want string
+	}{
+		{admin, `{"state":"retiring","replacement":"https://edge2.example","restart_pending":true,"moved_to":"https://edge2.example",` +
+			`"moved_to_state":"retired","moved_to_replacement":"https://edge3.example"}`},
+		{bob, `{"state":"retiring","replacement":"https://edge2.example","restart_pending":true,"moved_to_state":"retired"}`},
+	} {
+		var raw map[string]json.RawMessage
+		if err := call.client.Call(protocol.MethodServerEdge, struct{}{}, &raw); err != nil {
+			t.Fatal(err)
+		}
+		if got := string(raw["notice"]); got != call.want {
+			t.Errorf("edge-url names a retired address: notice %s, want %s", got, call.want)
 		}
 	}
 }
