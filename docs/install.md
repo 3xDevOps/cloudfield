@@ -87,9 +87,10 @@ The old names keep working, with no end date.
 With `session-runtime vm`, each session runs in its own Cloud Hypervisor
 virtual machine ([environments.md](environments.md#sessions-in-virtual-machines)).
 The host must be x86-64 and expose `/dev/kvm`: bare metal, or a cloud VM with
-nested virtualization. It needs Linux 6.8 or newer, the oldest host kernel
-Cloud Hypervisor v55.0 supports: `uname -r` prints the version. Ubuntu 24.04
-ships 6.8, Debian 12 ships 6.1.
+nested virtualization. It needs Linux 6.8 or newer: Cloud Hypervisor v55.0
+exits on a kernel whose KVM lacks `KVM_CAP_USER_MEMORY2`, which 6.8 added.
+`uname -r` prints the version. Ubuntu 24.04 ships 6.8; the 6.1 Debian 12
+ships is too old.
 
 Before installing, put the data directory on a filesystem that can share
 blocks between files: XFS made with `reflink=1`, the `mkfs.xfs` default, or
@@ -120,11 +121,13 @@ sudo cloudfield-server install --session-runtime vm   # a new server
 sudo cloudfield-server vm install                     # a server already installed
 ```
 
-Both first open `/dev/kvm` and stop with the error when they cannot, such as
-`session VMs need KVM: open /dev/kvm: no such file or directory`; `install`
-then writes nothing. They install `qemu-img`, `mkfs.ext4`,
+Both first open `/dev/kvm` and ask it for `KVM_CAP_USER_MEMORY2`, and stop
+with the error when either fails, such as
+`session VMs need KVM: open /dev/kvm: no such file or directory` or
+`session VMs need Linux 6.8 or newer: /dev/kvm has no KVM_CAP_USER_MEMORY2, which Cloud Hypervisor v55.0 requires`;
+`install` then writes nothing. They install `qemu-img`, `mkfs.ext4`,
 `/usr/libexec/virtiofsd`, `iptables`, `nft` and `ip` with `apt-get` when
-missing (Debian 12 or Ubuntu 24.04 and newer ship `virtiofsd` at that path), Cloud Hypervisor
+missing (Ubuntu 24.04 and newer ship `virtiofsd` at that path), Cloud Hypervisor
 v55.0 at `/usr/local/bin/cloud-hypervisor` after checking its SHA-256, the
 oh-my-pi release whose auth broker holds session VMs' omp logins at
 `/usr/local/libexec/aether/omp` after checking its SHA-256
@@ -826,12 +829,13 @@ With `session-runtime vm`, `sudo cloudfield-server update` has the new binary ru
 boot the release's Cloud Hypervisor and guest kernel. Running VMs keep theirs,
 and their helper disk, until they stop, and a VM saved to disk wakes on the
 new Cloud Hypervisor: v55.0 wakes a VM that v54.1 saved. Ctrl-C during that
-step undoes the update. Before it starts any VM, a server started by its systemd unit also puts
+step undoes the update. Before it starts any VM, a server started by its systemd unit also
+runs the `/dev/kvm` check and then puts
 its release's Cloud Hypervisor and kernel in place, downloading the kernel only
 when the one there came from another release. That covers an update from a
 client or the dashboard, and a rollback. If it cannot during an update's first
-start, the update rolls back; on any other start the server logs the error and
-keeps serving. `AETHER_NO_UPDATE_CHECK=1` turns that check off.
+start, the update rolls back with the old Cloud Hypervisor still in place; on
+any other start the server logs the error and keeps serving. `AETHER_NO_UPDATE_CHECK=1` turns that check off.
 
 `cloudfield server update --when idle` waits until no session is working, no terminal
 is attached and no SSH connection into a session is open; `--cancel` clears that

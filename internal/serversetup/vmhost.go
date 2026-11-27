@@ -62,15 +62,6 @@ var VMTools = []VMTool{
 	{Program: "ip", Package: "iproute2"},
 }
 
-// CheckKVM opens device read-write, as Cloud Hypervisor does.
-func CheckKVM(device string) error {
-	f, err := os.OpenFile(device, os.O_RDWR, 0)
-	if err != nil {
-		return fmt.Errorf("session VMs need KVM: %w; run the server on bare metal or on a cloud VM with nested virtualization (docs/install.md#hosts-for-vm-sessions)", err)
-	}
-	return f.Close()
-}
-
 // MissingVMTools returns the VMTools this host cannot run.
 func MissingVMTools() []VMTool {
 	var missing []VMTool
