@@ -15,6 +15,7 @@ import { TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip } from '@/components/ui/tooltip'
 import { StatusDot } from '@/components/ui/status-dot'
 import { useIsMobile } from '@/lib/breakpoints'
+import { memberName } from '@/lib/member-name'
 import { runLoginName, useRunAccountOwner, useRunAccountWords, useRunPayer } from '@/lib/run-account'
 import { extraRepoCount, repoLabel } from '@/lib/repos'
 import { isSudo } from '@/lib/run-requests'
@@ -151,9 +152,13 @@ function StateLine({ run, agentName, narrow, compact, controls, chip }: { run: R
   const account = useRunAccountWords(run)
   const payer = useRunPayer(run)
   const owner = useRunAccountOwner(run)
-  // Whose account pays stays in sight at every width; on a narrow row the viewer's own subscription login leaves with the rest.
-  const pinned = account !== null && (payer !== null || owner !== null || !narrow)
   const login = runLoginName(run)
+  // A fallback with no login to name reads, and wraps out of sight, as it did before logins.
+  const fallbackOnly = !login && !run.account_login_per_use
+  const accountID = fallbackOnly && run.requested_account_member_id ? run.account_member_id ?? '' : ''
+  const accountOwner = useStore((s) => memberName(s, accountID))
+  // Whose account pays stays in sight at every width; on a narrow row the viewer's own subscription login leaves with the rest.
+  const pinned = account !== null && !fallbackOnly && (payer !== null || owner !== null || !narrow)
   const shortAccount = compact && owner !== null && login ? `${owner}'s login ${login}` : account
   const mode = modeLabel[run.mode] ?? run.mode
   const watch = useStore((s) => runWatch(s, run.id))
@@ -225,6 +230,12 @@ function StateLine({ run, agentName, narrow, compact, controls, chip }: { run: R
                 {mode}
               </span>
             </span>
+            {accountID && (
+              <span className={part}>
+                <span aria-hidden>·</span>
+                <span className="min-w-0 truncate">On {accountOwner}&apos;s account (fallback)</span>
+              </span>
+            )}
             {run.via && (
               <span className={part}>
                 <span aria-hidden>·</span>

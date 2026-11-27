@@ -1049,7 +1049,7 @@ describe('new run', () => {
       await userEvent.click(screen.getByRole('button', { name: /^Fallback/ }))
       const fallbacks = screen.getByRole('list', { name: 'Fallback accounts' })
       await waitFor(() => expect(within(fallbacks).getAllByRole('checkbox').map((box) => box.closest('label')?.textContent)).toEqual(['BobSharedReady', 'VeraSharedReady', 'CarolSharedReady']))
-      expect(screen.getByRole('button', { name: /^Fallback/ }).textContent).toBe("Fallback· On · whenAlice's usage runs out")
+      expect(screen.getByRole('button', { name: /^Fallback/ }).textContent).toBe('Fallback· Automatic · ifAliceruns out')
       expect(screen.getByText("If Alice's usage is 95% or more at launch, or the vendor reports the limit mid-session, the session moves to the ticked account with the most usage left.")).toBeDefined()
 
       await userEvent.click(screen.getByRole('button', { name: 'Move Carol up' }))
@@ -1394,6 +1394,42 @@ describe('login', () => {
     expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).not.toHaveProperty('login')
   })
 
+  it('shows Fallback as before logins to a member with one login, on a server with them or without', async () => {
+    vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice, bob], shared_with: [] })
+    for (const features of [['logins'], []]) {
+      useStore.setState({ info: { ...serverInfo, features } })
+      const view = render(<LaunchDialog />)
+      await waitFor(() => expect(launchButton().disabled).toBe(false))
+      const fallback = screen.getByRole('button', { name: /^Fallback/ })
+      expect(fallback.textContent).toBe('Fallback· Automatic · ifAliceruns out')
+      fireEvent.click(fallback)
+      fireEvent.click(screen.getByRole('checkbox', { name: new RegExp(`^${bob.display_name}`) }))
+      expect(fallback.textContent).toBe('Fallback· Off · ifAliceruns out')
+      expect(screen.getByRole('checkbox', { name: 'Fall back to another account' }).getAttribute('aria-checked')).toBe('true')
+      view.unmount()
+      useStore.setState({ launchDraft: null })
+    }
+  })
+
+  it('says nothing of a failed login read to a member who has not added a login, and says it once several were read', async () => {
+    vi.mocked(api.agentLoginList).mockRejectedValue(new Error('agent.login.list: server unreachable: dial tcp: connection refused'))
+    await open()
+    await waitFor(() => expect(api.agentLoginList).toHaveBeenCalled())
+    await act(async () => {})
+    expect(screen.queryByText('Your logins could not be read.')).toBeNull()
+    cleanup()
+
+    vi.mocked(api.agentLoginList).mockResolvedValue(logins)
+    render(<PaletteDialogs />)
+    await screen.findByRole('combobox', { name: 'Login' })
+    setTask('several logins')
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByLabelText('Task')).toBeNull())
+    vi.mocked(api.agentLoginList).mockRejectedValue(new Error('agent.login.list: server unreachable: dial tcp: connection refused'))
+    act(() => useStore.getState().openPaletteDialog('launch'))
+    expect((await screen.findByText('Your logins could not be read.')).closest('[role="alert"]')!.textContent).toContain('agent.login.list: server unreachable: dial tcp: connection refused')
+  })
+
   it('starts automatically, says in full which login billed per use it can reach, and sends a login only when one is picked', async () => {
     vi.mocked(api.agentLoginList).mockResolvedValue(logins)
     await open()
@@ -1413,7 +1449,7 @@ describe('login', () => {
     await pickOption(picker, 'console')
     expect(picker.textContent).toBe('console')
     expect(screen.getByText(/is billed per use to/).textContent).toBe('console is billed per use to Alice API.')
-    expect(screen.getByText(/^The session starts on this login/).textContent).toBe('The session starts on this login. It has no usage windows, so it moves only when its credit is spent, to the first other automatic login in your order with usage left.')
+    expect(screen.getByText(/^The session starts on this login/).textContent).toBe("The session starts on this login. It has no usage windows, so it moves to the first other automatic login in your order with usage left only if Anthropic reports it out of credit with a usage-limit message; otherwise it stops with Anthropic's error.")
     expect(screen.getByRole('switch', { name: 'Let this session move to another login' })).toBeDefined()
     expect(screen.queryByText(/^Can move to/)).toBeNull()
     setTask('on console')
@@ -1485,6 +1521,31 @@ describe('login', () => {
     expect(within(menu).getByRole('option', { name: 'default' }).textContent).toBe('defaultSubscription · Automatic off · At its limit (7 days) · resets in 1d 16h')
     expect(within(menu).getByRole('option', { name: 'work' }).textContent).toBe('workSubscription')
     expect(api.accountUsage).not.toHaveBeenCalledWith(expect.objectContaining({ login: expect.anything() }))
+  })
+
+  it('says nothing of a limit for a per-model window or a stale read, which the server does not start a session on', async () => {
+    vi.mocked(api.agentLoginList).mockResolvedValue(logins)
+    vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice, bob], shared_with: [] })
+    const resets = new Date(Date.now() + 40 * 3_600_000).toISOString()
+    let status: 'ok' | 'stale' = 'ok'
+    let windows = [{ id: 'seven_day', label: '7 days', used_percent: 40, resets_at: resets }, { id: 'seven_day_opus', label: '7 days (Opus)', used_percent: 97, resets_at: resets }]
+    vi.mocked(api.accountUsage).mockImplementation(async (params = {}) => ({
+      account_member_id: params.account_member_id ?? alice.id,
+      providers: params.account_member_id ? [] : [{ provider: 'claude', status, checked_at: resets, windows }],
+    }))
+    const shows = async () => {
+      const view = render(<LaunchDialog />)
+      await waitFor(() => expect(api.accountUsage).toHaveBeenCalledWith({}))
+      await act(async () => {})
+      await pickOption(await screen.findByRole('combobox', { name: 'Login' }), 'default')
+      const help = screen.getByText(/^This login is at its limit|^The session starts on this login/).textContent
+      view.unmount()
+      return help
+    }
+    expect(await shows()).toBe('The session starts on this login, and moves to the first other automatic login in your order with usage left when it runs out.')
+    status = 'stale'
+    windows = [{ id: 'seven_day', label: '7 days', used_percent: 96, resets_at: resets }]
+    expect(await shows()).toBe('The session starts on this login, and moves to the first other automatic login in your order with usage left when it runs out.')
   })
 
   it('sends no login for Automatic with several logins', async () => {
@@ -1597,6 +1658,39 @@ describe('login', () => {
     setTask('stays put')
     fireEvent.click(launchButton())
     await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ no_fallback: true })))
+  })
+
+  it('keeps moves between your own logins with every other account unticked, and saves and reads that back as your logins only', async () => {
+    vi.mocked(api.agentLoginList).mockResolvedValue(logins)
+    vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice, bob], shared_with: [] })
+    const view = render(<LaunchDialog />)
+    await waitFor(() => expect(launchButton().disabled).toBe(false))
+    await screen.findByRole('combobox', { name: 'Login' })
+    fireEvent.click(screen.getByRole('button', { name: /^Fallback accounts/ }))
+    fireEvent.click(screen.getByRole('checkbox', { name: new RegExp(`^${bob.display_name}`) }))
+    expect(screen.getByRole('switch', { name: 'Let this session move to another login or account' }).getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByRole('button', { name: /^Fallback accounts/ }).textContent).toBe('Fallback accounts · None · your logins only')
+    expect(screen.getByText(/^If a login's usage/).textContent).toBe("If a login's usage is 95% or more at launch, or the vendor reports its limit mid-session, the session moves to the first other automatic login in your order with usage left.")
+    fireEvent.click(screen.getByRole('button', { name: 'Save as my default' }))
+    await waitFor(() => expect(api.launchDefaultsSet).toHaveBeenCalledWith({ defaults: { account_member_id: '', fallback: { policy: 'ordered', order: [alice.id] } }, revision: 0 }))
+    setTask('my logins only')
+    fireEvent.click(launchButton())
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalled())
+    expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).toMatchObject({ fallback_account_member_ids: [alice.id] })
+    expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).not.toHaveProperty('no_fallback')
+    view.unmount()
+
+    vi.mocked(api.runLaunch).mockClear()
+    vi.mocked(api.launchDefaultsGet).mockResolvedValue({ revision: 1, defaults: { fallback: { policy: 'ordered', order: [alice.id] } } })
+    await open()
+    await screen.findByRole('combobox', { name: 'Login' })
+    expect(screen.getByRole('switch', { name: 'Let this session move to another login or account' }).getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByRole('button', { name: /^Fallback accounts/ }).textContent).toBe('Fallback accounts · None · your logins only')
+    setTask('saved logins only')
+    fireEvent.click(launchButton())
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalled())
+    expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).toMatchObject({ fallback_account_member_ids: [alice.id] })
+    expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).not.toHaveProperty('no_fallback')
   })
 
   it('offers no login on a teammate account', async () => {

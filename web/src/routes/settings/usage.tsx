@@ -62,9 +62,13 @@ function resetsIn(resetsAt: string | undefined, now: number): string | null {
 /** The server's ExhaustedPercent (internal/fallback): a window used this far counts as run out. */
 const exhaustedPercent = 95
 
-/** "At its limit (7 days) · resets in 1d 16h" while a current window is run out; the one that resets last says when the login serves again. */
+/** The windows internal/fallback judges a Claude Code login on, and only from a current read; a per-model window shows usage alone. */
+const startWindows = ['five_hour', 'seven_day']
+
+/** "At its limit (7 days) · resets in 1d 16h" while a window the server judges is run out; the one that resets last says when the login serves again. */
 export function limitWords(provider: UsageProvider | undefined, now: number): string | null {
-  const spent = currentWindows(provider, now).filter((window) => window.used_percent >= exhaustedPercent)
+  if (provider?.status !== 'ok') return null
+  const spent = currentWindows(provider, now).filter((window) => startWindows.includes(window.id) && window.used_percent >= exhaustedPercent)
   if (spent.length === 0) return null
   const resets = (window: UsageWindow) => (window.resets_at ? Date.parse(window.resets_at) : Infinity)
   const last = spent.reduce((latest, window) => (resets(window) > resets(latest) ? window : latest))

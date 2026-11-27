@@ -14,8 +14,8 @@ export function fallbackFromSaved(saved: SavedLaunchDefaults['fallback'], accoun
 }
 
 /** The policy a launch with `fallback` sends; `skip` is the account the Run tab leaves out of its list, as the launch does. */
-export function fallbackToSaved(fallback: Fallback, accounts: Member[], skip: string): NonNullable<SavedLaunchDefaults['fallback']> {
-  const params = fallbackParams(fallback, accounts, skip)
+export function fallbackToSaved(fallback: Fallback, accounts: Member[], skip: string, logins: boolean): NonNullable<SavedLaunchDefaults['fallback']> {
+  const params = fallbackParams(fallback, accounts, skip, logins)
   if (params.no_fallback) return { policy: 'off' }
   if (params.fallback_account_member_ids) return { policy: 'ordered', order: params.fallback_account_member_ids }
   return { policy: 'automatic' }

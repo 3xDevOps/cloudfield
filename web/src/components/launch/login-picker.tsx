@@ -91,14 +91,14 @@ export function LoginPicker({ logins, value, onChange, usage = {}, now, moves, m
   const start = picked ?? first
   const reach = logins.filter((login) => login.automatic && login.per_use && login !== start)
   const never = reach.length ? `: it never moves to ${orList(reach.map((login) => login.name))}` : ''
-  const when = !picked ? 'when the automatic logins before it run out' : picked.per_use ? `when ${picked.name}'s credit is spent` : `when ${picked.name} runs out`
+  const when = !picked ? 'when the automatic logins before it run out' : picked.per_use ? `if Anthropic reports ${picked.name} out of credit` : `when ${picked.name} runs out`
   const help = picked
     ? !moves
       ? `The session starts on this login and stays on it${never}.`
       : pickedLimit
         ? `This login is at its limit, so the session may start on ${nextLogin}.`
         : picked.per_use
-          ? `The session starts on this login. It has no usage windows, so it moves only when its credit is spent, to ${nextLogin}.`
+          ? `The session starts on this login. It has no usage windows, so it moves to ${nextLogin} only if Anthropic reports it out of credit with a usage-limit message; otherwise it stops with Anthropic's error.`
           : `The session starts on this login, and moves to ${nextLogin} when it runs out.`
     : moves
       ? 'Starts on the first automatic login in your order with usage left, and moves to the first other one with usage left when it runs out.'

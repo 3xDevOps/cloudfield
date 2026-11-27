@@ -27,6 +27,8 @@ import { stillWaiting, usePastDeadline } from '@/store/optimistic'
 /** Only Claude Code has added logins. */
 export const loginAgent = 'claude'
 
+const loginsGuide = 'https://github.com/3xDevOps/cloudfield/blob/main/docs/agents.md#several-logins'
+
 export type LoginsClient = Pick<Api, 'agentLoginRename' | 'agentLoginRemove' | 'agentLoginOrder' | 'agentLoginAutomatic' | 'agentLoginShare' | 'accountUsage'>
 
 /** The signed-in member's logins: a read made for another identity never shows. */
@@ -35,18 +37,29 @@ export function useAgentLogins(client: Pick<Api, 'agentLoginList'>, enabled: boo
   const [read, setRead] = useState<{ identity: string | null; logins: AgentLogin[] | null; error: string | null }>({ identity: null, logins: null, error: null })
   // Only the newest read lands, so an older answer arriving last never replaces it.
   const reads = useRef(0)
-  const reload = useCallback((): Promise<void> => {
-    if (!enabled) return Promise.resolve()
+  // Each caller waits for the newest read, which says whether a list read since the call is now shown.
+  const waiting = useRef<((shown: boolean) => void)[]>([])
+  const reload = useCallback((): Promise<boolean> => {
+    if (!enabled) return Promise.resolve(false)
     const read = ++reads.current
     const at = useStore.getState().identityKey
-    return client.agentLoginList(loginAgent).then(
+    const done = new Promise<boolean>((resolve) => waiting.current.push(resolve))
+    const settle = (landed: boolean) => {
+      for (const resolve of waiting.current.splice(0)) resolve(landed)
+    }
+    client.agentLoginList(loginAgent).then(
       (list) => {
-        if (read === reads.current) setRead({ identity: at, logins: list, error: null })
+        if (read !== reads.current) return
+        setRead({ identity: at, logins: list, error: null })
+        settle(true)
       },
       (err: unknown) => {
-        if (read === reads.current) setRead((current) => ({ identity: at, logins: current.identity === at ? current.logins : null, error: message(err) }))
+        if (read !== reads.current) return
+        setRead((current) => ({ identity: at, logins: current.identity === at ? current.logins : null, error: message(err) }))
+        settle(false)
       },
     )
+    return done
   }, [client, enabled])
   useEffect(() => { void reload() }, [reload, identity])
   const shown = enabled && read.identity === identity
@@ -83,7 +96,7 @@ export function shareWords(login: AgentLogin, sharedWith: Member[] | null): stri
 export function reach(login: AgentLogin, sharedWith: Member[] | null): string | null {
   if (!login.shared) return null
   if (login.id === 'default' && (login.kind === 'api_key' || login.kind === 'console')) return 'A share cannot use this kind of login.'
-  if (!login.automatic) return 'No share reaches it while Automatic is off.'
+  if (!login.automatic) return 'No new teammate session starts or moves onto it while Automatic is off; one already on it keeps running.'
   return sharedWith?.length ? shareWords(login, sharedWith) : null
 }
 
@@ -153,7 +166,7 @@ function RenameForm({ login, client, onDone, onFailed, onCancel }: { login: Agen
 }
 
 // The server names the caller's own sessions that hold a login after "your sessions", and points at the CLI to revoke a teammate's share.
-const ownSessions = /your sessions (.*?) \(end them\)/
+const ownSessions = /your sessions (.*?) \(end them/
 const runIDs = /\brun-[0-9a-z]{10}\b/g
 const revokeCommand = 'cloudfield account revoke'
 const teammateSessions = "of your teammates' sessions"
@@ -243,15 +256,15 @@ export function SwitchRow({ label, detail, checked, pending, onChange }: { label
  * Pending login controls by `<control>:<login id>` (and `order` with the login it moves), and the last refusal.
  * A failure without an answer may hide a committed change, so every outcome reads the list again through `onChanged`.
  */
-export function useLoginControls(onChanged: () => Promise<void>) {
+export function useLoginControls(onChanged: () => Promise<unknown>) {
   const [pending, setPending] = useState<Record<string, string>>({})
   const [error, setError] = useState<string | null>(null)
-  const act = (key: string, value: string, call: Promise<unknown>) => {
+  const act = (key: string, value: string, call: Promise<unknown>, reread = onChanged) => {
     setPending((current) => ({ ...current, [key]: value }))
     setError(null)
-    call.then(onChanged, (err: unknown) => {
+    call.then(reread, (err: unknown) => {
       setError(message(err))
-      return onChanged()
+      return reread()
     }).finally(() => setPending(({ [key]: _, ...rest }) => rest))
   }
   return { pending, error, act }
@@ -267,7 +280,7 @@ function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, orde
   firstAutomatic: boolean
   usage: Usage | undefined
   sharedWith: Member[] | null
-  /** An order call or the read after it is pending: every arrow waits, since the next order is built from the list. */
+  /** An order call or the read after it is pending, or that read failed: every arrow waits, since the next order is built from the list. */
   ordering: boolean
   /** That call moved this login. */
   moving: boolean
@@ -364,18 +377,25 @@ export function LoginList({ logins, sharedWith, sharedError, client, onChanged }
   sharedWith: Member[] | null
   sharedError?: string | null
   client: LoginsClient
-  /** Reads the list again; a pending control waits for it, so it shows what the server keeps. */
-  onChanged: () => Promise<void>
+  /** Reads the list again, resolving true once a list read since is shown; a pending control waits for it, so it shows what the server keeps. */
+  onChanged: () => Promise<boolean>
 }) {
   const usage = useLoginUsage(client, logins)
   useClock()
   const { pending, error, act } = useLoginControls(onChanged)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [removing, setRemoving] = useState<AgentLogin | null>(null)
+  // The read after an order call failed, so the order shown may not be the server's until another list lands.
+  const [unread, setUnread] = useState(false)
+  const [shown, setShown] = useState(logins)
+  if (shown !== logins) {
+    setShown(logins)
+    setUnread(false)
+  }
   const move = (index: number, by: number) => {
     const ids = logins.map((login) => login.id)
     ;[ids[index], ids[index + by]] = [ids[index + by], ids[index]]
-    act('order', logins[index]!.id, client.agentLoginOrder(loginAgent, ids))
+    act('order', logins[index]!.id, client.agentLoginOrder(loginAgent, ids), () => onChanged().then((landed) => setUnread(!landed)))
   }
   const firstAutomatic = logins.find((login) => login.automatic)?.id
   return (
@@ -386,6 +406,7 @@ export function LoginList({ logins, sharedWith, sharedError, client, onChanged }
           ? ` Your account is shared with ${names(sharedWith)}: logins on for shares serve their sessions too.`
           : ' Your account is not shared with anyone.')}
         {!sharedWith && sharedError && <> Whom your account is shared with was not read: <span className="font-code">{sharedError}</span></>}
+        {' '}<a href={loginsGuide} target="_blank" rel="noreferrer" className="text-accent underline-offset-2 hover:underline">How logins work</a>
       </p>
       {error && <Callout tone="failed" role="alert"><span className="font-code">{error}</span></Callout>}
       <ol aria-label="Claude Code logins in priority order" className="flex flex-col divide-y divide-seam">
@@ -398,7 +419,7 @@ export function LoginList({ logins, sharedWith, sharedError, client, onChanged }
             firstAutomatic={login.id === firstAutomatic}
             usage={usage[login.id]}
             sharedWith={sharedWith}
-            ordering={'order' in pending}
+            ordering={'order' in pending || unread}
             moving={pending.order === login.id}
             pending={{ ...(`automatic:${login.id}` in pending && { automatic: true }), ...(`shared:${login.id}` in pending && { shared: true }) }}
             onMove={(by) => move(index, by)}

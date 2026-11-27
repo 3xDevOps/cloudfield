@@ -112,13 +112,14 @@ describe('open in Standard', () => {
     }))
   })
 
-  it('relaunches on the login of the run it replaces, but not on one a fallback to another account chose', async () => {
+  it('names no login for the replacement, since the run does not say whether its login was named or chosen', async () => {
     const launch = vi.spyOn(api, 'runLaunch').mockResolvedValue(run({ id: 'run_2', status: 'running' }))
     vi.spyOn(api, 'runClose').mockResolvedValue(run({ id: 'run_1', status: 'completed' }))
     const session = { turns: [{ items: [{ kind: 'notice', notice: { title: 'Enhanced agent failed' } }] }], live: false } as unknown as AcpSession
     useStore.setState({ acpSessions: { run_1: session }, info: { member: { id: 'mem-me' } } as never })
     const nav = { go: vi.fn(), reveal: vi.fn(), focusComposer: vi.fn(), focusRequest: vi.fn() }
     const relaunch = async (over: Parameters<typeof run>[0]) => {
+      launch.mockClear()
       const record = runRecords(run({ id: 'run_1', harness: 'claude', status: 'running', member_id: 'mem-me', ...over })).run_1!
       const view = render(<SessionFailureCallout run={record} session={session} switchable={false} shells={{} as RunShells} nav={nav} />)
       fireEvent.click(screen.getByRole('button', { name: 'Open in Standard' }))
@@ -127,9 +128,9 @@ describe('open in Standard', () => {
       view.unmount()
       return launch.mock.lastCall![0]
     }
-    expect(await relaunch({ account_member_id: 'mem-me', account_login: 'lgn-work0000001', account_login_name: 'work' })).toMatchObject({ login: 'lgn-work0000001' })
-    launch.mockClear()
-    expect(await relaunch({ account_member_id: 'mem-ada', requested_account_member_id: 'mem-me', account_login: 'lgn-ada00000001' })).not.toHaveProperty('login')
+    expect(await relaunch({ account_member_id: 'mem-me', account_login: 'lgn-work0000001', account_login_name: 'work' })).not.toHaveProperty('login')
+    expect(await relaunch({ account_member_id: 'mem-me', account_login: 'lgn-console0001', account_login_name: 'console', account_login_per_use: true })).not.toHaveProperty('login')
+    expect(await relaunch({ account_member_id: 'mem-me', account_login: 'lgn-gone0000001' })).not.toHaveProperty('login')
   })
 
   it('lists close warnings before it closes the run it replaces', async () => {

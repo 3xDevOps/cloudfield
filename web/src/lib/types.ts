@@ -217,7 +217,7 @@ export interface Run {
   account_login?: string
   /** That login's name; empty for the default login. */
   account_login_name?: string
-  /** The run is on a login billed per use (an added Console login). */
+  /** The run is on a login billed per use: a Console login, or a default login kept as an API key or a Console profile or signed in by `~/.claude/settings.json`. */
   account_login_per_use?: boolean
   /** The run's fallback order; absent means automatic, or a server too old to say. */
   fallback_account_member_ids?: string[]
@@ -406,7 +406,7 @@ export interface AgentLogin {
   email?: string
   organization_id?: string
   organization_name?: string
-  /** Billed per use: a Console login. */
+  /** Billed per use: a Console login, or a default login kept as an API key. */
   per_use?: boolean
   automatic: boolean
   /** Whether the owner's account shares reach this login. */

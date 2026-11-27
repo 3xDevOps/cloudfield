@@ -296,6 +296,22 @@ describe('Claude Code logins', () => {
     expect(api.accountList).not.toHaveBeenCalled()
   })
 
+  it('lists a lone default login with a switch off, so it can be turned back on', async () => {
+    vi.mocked(api.agentLoginList).mockResolvedValue([{ id: 'default', name: 'default', kind: 'subscription', automatic: false, shared: true, position: 0 }])
+    vi.mocked(api.agentLoginAutomatic).mockResolvedValue({})
+    vi.mocked(api.accountList).mockResolvedValue({ accounts: [], shared_with: [] })
+    mount()
+    await flush()
+    const row = within(within(claudeRow()).getByRole('region', { name: 'Claude Code logins' })).getByRole('listitem', { name: 'Login default' })
+    expect(within(row).queryByRole('button', { name: 'Rename default' })).toBeNull()
+    expect(within(row).queryByRole('button', { name: 'Remove default' })).toBeNull()
+    expect(within(row).getByRole('switch', { name: 'Use for shares' }).getAttribute('aria-checked')).toBe('true')
+    const automatic = within(row).getByRole('switch', { name: 'Automatic' })
+    expect(automatic.getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(automatic)
+    expect(api.agentLoginAutomatic).toHaveBeenCalledWith('claude', 'default', true)
+  })
+
   it('lists several logins under the Claude Code row and names the teammates shares reach', async () => {
     vi.mocked(api.agentLoginList).mockResolvedValue([
       { id: 'default', name: 'default', kind: 'subscription', automatic: true, shared: true, position: 0 },
@@ -309,7 +325,7 @@ describe('Claude Code logins', () => {
     expect(within(claudeRow()).getAllByRole('button', { name: 'Add login' })).toHaveLength(1)
     await waitFor(() => expect(logins.textContent).toContain('Your account is shared with Bob'))
     expect(claudeRow().textContent).toContain('Installed · 2 logins')
-    expect(within(claudeRow()).queryByRole('link')).toBeNull()
+    expect(within(claudeRow()).getAllByRole('link').map((link) => link.textContent)).toEqual(['How logins work'])
   })
 
   it('keeps a sign-in left running on the Claude Code row until it ends, and returns to it, with one wait on its result', async () => {
@@ -458,6 +474,89 @@ describe('Claude Code logins', () => {
     await waitFor(() => expect(form.textContent).toContain('and sessions of Bob can run on it too.'))
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(screen.getByRole('list', { name: 'Agents' })).toBeDefined()
+  })
+
+  describe('order', () => {
+    const three = [
+      { id: 'default', name: 'default', kind: 'subscription' as const, automatic: true, shared: true, position: 0 },
+      { id: 'lgn-work0000001', name: 'work', kind: 'subscription' as const, automatic: true, shared: true, position: 1 },
+      { id: 'lgn-console0001', name: 'console', kind: 'console' as const, per_use: true, automatic: false, shared: true, position: 2 },
+    ]
+    let served = three
+    // Each read answers when the test says, with the logins the server keeps then.
+    let reads: ((error?: Error) => void)[] = []
+    const answer = (index: number, error?: Error) => act(async () => reads[index]!(error))
+    const row = (name: string) => screen.getByRole('listitem', { name: `Login ${name}` })
+    const arrows = () => within(screen.getByRole('list', { name: 'Claude Code logins in priority order' })).getAllByRole('button', { name: /^Move / })
+    const shownOrder = () => within(screen.getByRole('list', { name: 'Claude Code logins in priority order' })).getAllByRole('listitem').map((item) => item.getAttribute('aria-label'))
+
+    beforeEach(() => {
+      served = three
+      reads = []
+      vi.mocked(api.agentLoginList).mockImplementation(() => new Promise((resolve, reject) => {
+        reads.push((error) => (error ? reject(error) : resolve(served.map((login, position) => ({ ...login, position })))))
+      }))
+      vi.mocked(api.accountList).mockResolvedValue({ accounts: [], shared_with: [] })
+      onTestFinished(() => { vi.mocked(api.agentLoginList).mockResolvedValue(two) })
+    })
+
+    it('keeps the arrows off until a list read after the move lands, and builds the next move on it', async () => {
+      let ordered = () => {}
+      let switched = () => {}
+      vi.mocked(api.agentLoginOrder).mockImplementation((_agent, ids) => new Promise((resolve) => {
+        ordered = () => {
+          served = ids.map((id) => served.find((login) => login.id === id)!)
+          resolve({})
+        }
+      }))
+      vi.mocked(api.agentLoginAutomatic).mockImplementation((_agent, id, on) => new Promise((resolve) => {
+        switched = () => {
+          served = served.map((login) => (login.id === id ? { ...login, automatic: on } : login))
+          resolve({})
+        }
+      }))
+      mount()
+      await flush()
+      await answer(0)
+      fireEvent.click(within(row('default')).getByRole('button', { name: 'Move default down' }))
+      fireEvent.click(within(row('console')).getByRole('switch', { name: 'Automatic' }))
+      await act(async () => ordered())
+      await act(async () => switched())
+      expect(reads).toHaveLength(3)
+      // The move's read answers last but one, and is dropped for the switch's newer read.
+      await answer(1)
+      expect(shownOrder()).toEqual(['Login default', 'Login work', 'Login console'])
+      expect(arrows().every((arrow) => arrow.hasAttribute('disabled'))).toBe(true)
+      await answer(2)
+      expect(shownOrder()).toEqual(['Login work', 'Login default', 'Login console'])
+      expect(within(row('default')).getByRole('button', { name: 'Move default down' })).toHaveProperty('disabled', false)
+
+      fireEvent.click(within(row('default')).getByRole('button', { name: 'Move default down' }))
+      expect(api.agentLoginOrder).toHaveBeenLastCalledWith('claude', ['lgn-work0000001', 'lgn-console0001', 'default'])
+    })
+
+    it('keeps the arrows off with the read error and Retry when the read after a committed move fails', async () => {
+      vi.mocked(api.agentLoginOrder).mockImplementation(async (_agent, ids) => {
+        served = ids.map((id) => served.find((login) => login.id === id)!)
+        return {}
+      })
+      mount()
+      await flush()
+      await answer(0)
+      fireEvent.click(within(row('default')).getByRole('button', { name: 'Move default down' }))
+      await waitFor(() => expect(reads).toHaveLength(2))
+      await answer(1, new Error('agent.login.list: server unreachable: dial tcp: connection refused'))
+      const failed = within(claudeRow()).getByRole('alert')
+      expect(failed.textContent).toContain('Logins not read: agent.login.list: server unreachable: dial tcp: connection refused')
+      expect(shownOrder()).toEqual(['Login default', 'Login work', 'Login console'])
+      expect(within(row('default')).queryByRole('status')).toBeNull()
+      expect(arrows().every((arrow) => arrow.hasAttribute('disabled'))).toBe(true)
+
+      fireEvent.click(within(failed).getByRole('button', { name: 'Retry' }))
+      await answer(2)
+      expect(shownOrder()).toEqual(['Login work', 'Login default', 'Login console'])
+      expect(within(row('default')).getByRole('button', { name: 'Move default down' })).toHaveProperty('disabled', false)
+    })
   })
 })
 

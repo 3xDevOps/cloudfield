@@ -55,7 +55,8 @@ export async function quickLaunch(last: LastLaunch, saved: LaunchDefaultsResult 
       ...(last.model ? { model: last.model } : {}),
       ...(saved?.defaults.permission ? { permission: saved.defaults.permission } : {}),
       ...(account ? { account_member_id: account } : {}),
-      ...(accounts.length ? fallbackParams(fallback, accounts, account || own) : {}),
+      // A saved order naming the launch account itself is that account's own logins only.
+      ...(accounts.length ? fallbackParams(fallback, accounts, account || own, fallback.order?.includes(account || own)) : {}),
       ...(capability(capabilities).hasMethod('run.children.allow') ? { children: 'on' as const } : {}),
     })
     upsertRun(run)

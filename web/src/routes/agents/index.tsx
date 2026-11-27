@@ -121,9 +121,10 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
   const loginsServer = useLoginsServer()
   const identity = useStore((s) => s.identityKey)
   const logins = useAgentLogins(client, claudeInstalled && loginsServer)
-  const severalLogins = (logins.logins?.length ?? 0) > 1
+  // The server keeps a lone default login's row while a switch is off, and lists it so it can be turned back on.
+  const listed = (logins.logins?.length ?? 0) > 1 || (logins.logins?.some((login) => !login.automatic || !login.shared) ?? false)
   const [shared, setShared] = useState<{ identity: string | null; members: Member[] | null; error: string | null }>({ identity: null, members: null, error: null })
-  const wantShared = severalLogins || screen === loginScreen
+  const wantShared = listed || screen === loginScreen
   useEffect(() => {
     if (!wantShared) return
     let live = true
@@ -223,7 +224,7 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
                           Logins not read: <span className="font-code">{logins.error}</span>
                         </Callout>
                       )}
-                      {severalLogins && logins.logins && <LoginList key={identity} logins={logins.logins} sharedWith={sharedWith.members} sharedError={sharedWith.error} client={client} onChanged={logins.reload} />}
+                      {listed && logins.logins && <LoginList key={identity} logins={logins.logins} sharedWith={sharedWith.members} sharedError={sharedWith.error} client={client} onChanged={logins.reload} />}
                     </>
                   )}
                   returnFocusTo={returnFocusTo}

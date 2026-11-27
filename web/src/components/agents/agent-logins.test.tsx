@@ -33,7 +33,7 @@ const logins: AgentLogin[] = [
 
 function show(over: Parameters<typeof fakeApi>[0] = {}, sharedWith: Member[] | null = [bob]) {
   const client = fakeApi(over)
-  const onChanged = vi.fn(async () => {})
+  const onChanged = vi.fn(async () => true)
   render(<LoginList logins={logins} sharedWith={sharedWith} client={client} onChanged={onChanged} />)
   return { client, onChanged }
 }
@@ -62,7 +62,7 @@ describe('login list', () => {
     expect(row('work').textContent).not.toContain('your sessions')
     expect(within(row('work')).queryByText('Billed per use')).toBeNull()
     expect(within(row('console')).getByTitle('Billed per use to Alice API').textContent).toContain('Billed per use')
-    expect(row('console').textContent).toContain('No share reaches it while Automatic is off.')
+    expect(row('console').textContent).toContain('No new teammate session starts or moves onto it while Automatic is off; one already on it keeps running.')
     expect(row('console').textContent).not.toContain('Automatic sessions can move here')
     expect(screen.getByText(`Your account is shared with ${bob.display_name}: logins on for shares serve their sessions too.`, { exact: false })).toBeDefined()
     expect(client.accountUsage).toHaveBeenCalledWith({})
@@ -77,6 +77,7 @@ describe('login list', () => {
     expect(within(row('default')).getByRole('button', { name: 'Move default down' }).className).toContain('shadow-button')
     expect(within(row('console')).getByRole('button', { name: 'Move console down' })).toHaveProperty('disabled', true)
     expect(screen.getByRole('region', { name: 'Claude Code logins' }).textContent).toContain('Sessions start on the first automatic login in your order with usage left, and move to the first other one with usage left when it runs out.')
+    expect(within(screen.getByRole('region', { name: 'Claude Code logins' })).getByRole('link', { name: 'How logins work' }).getAttribute('href')).toBe('https://github.com/3xDevOps/cloudfield/blob/main/docs/agents.md#several-logins')
   })
 
   it('says when the account is shared with nobody', () => {
@@ -130,7 +131,7 @@ describe('login list', () => {
   it('keeps the arrows off until the list is read again after a move, and reads it again after a refused one', async () => {
     const user = userEvent.setup()
     let reread = () => {}
-    const onChanged = vi.fn(() => new Promise<void>((resolve) => { reread = resolve }))
+    const onChanged = vi.fn(() => new Promise<boolean>((resolve) => { reread = () => resolve(true) }))
     const client = fakeApi({
       agentLoginOrder: vi.fn<Api['agentLoginOrder']>().mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('login_ids must name each of your logins once, default included')),
     })
@@ -164,6 +165,25 @@ describe('login list', () => {
     expect(await within(row('default')).findByText('58% used · resets in 3d 18h')).toBeDefined()
     expect(row('default').textContent).not.toContain('At its limit')
     expect(row('console').textContent).not.toContain('At its limit')
+  })
+
+  it('says a login is at its limit only for the windows and the current read the server starts a session on', async () => {
+    const resets = new Date(Date.now() + 72 * 3_600_000).toISOString()
+    const usage: Record<string, { status: 'ok' | 'stale'; windows: { id: string; label: string; used_percent: number; resets_at: string }[] }> = {
+      default: { status: 'ok', windows: [{ id: 'five_hour', label: '5 hours', used_percent: 40, resets_at: resets }, { id: 'seven_day', label: '7 days', used_percent: 40, resets_at: resets }, { id: 'seven_day_opus', label: '7 days (Opus)', used_percent: 97, resets_at: resets }] },
+      'lgn-work0000001': { status: 'stale', windows: [{ id: 'five_hour', label: '5 hours', used_percent: 96, resets_at: resets }] },
+    }
+    show({
+      accountUsage: vi.fn(async (params: { login?: string } = {}) => ({
+        account_member_id: alice.id,
+        login: params.login,
+        providers: [{ provider: 'claude' as const, checked_at: resets, error: 'claude usage: 429 Too Many Requests', ...(usage[params.login ?? 'default'] ?? { status: 'ok' as const, windows: [] }) }],
+      })),
+    })
+    expect(await within(row('default')).findByRole('progressbar', { name: 'Login default 7 days (Opus) usage' })).toBeDefined()
+    expect(await within(row('work')).findByRole('progressbar', { name: 'Login work 5 hours usage' })).toBeDefined()
+    expect(row('default').textContent).not.toContain('At its limit')
+    expect(row('work').textContent).not.toContain('At its limit')
   })
 
   it('turns Use for shares through agent.login.share, and shows its refusal verbatim and reads the list again', async () => {
@@ -202,20 +222,20 @@ describe('login list', () => {
 
   it('says sessions can move onto a login billed per use and whom that charges, and whose sessions it serves', () => {
     const client = fakeApi()
-    const { unmount } = render(<LoginList logins={logins.map((login) => ({ ...login, automatic: true }))} sharedWith={[]} client={client} onChanged={async () => {}} />)
+    const { unmount } = render(<LoginList logins={logins.map((login) => ({ ...login, automatic: true }))} sharedWith={[]} client={client} onChanged={async () => true} />)
     expect(row('console').textContent).toContain('Sessions can move here when the automatic logins above it run out, charged per use to Alice API.')
     expect(row('work').textContent).not.toContain('Sessions can move here')
     unmount()
 
     const carol = { ...bob, id: 'member-carol', display_name: 'Carol' }
     const shared = logins.map((login) => ({ ...login, automatic: true }))
-    const { unmount: again } = render(<LoginList logins={shared} sharedWith={[bob, carol]} client={client} onChanged={async () => {}} />)
+    const { unmount: again } = render(<LoginList logins={shared} sharedWith={[bob, carol]} client={client} onChanged={async () => true} />)
     expect(row('console').textContent).toContain(`Sessions of ${bob.display_name} and Carol can run here too, charged per use to Alice API.`)
     expect(row('default').textContent).toContain(`Sessions of ${bob.display_name} and Carol can run here too.`)
     expect(row('default').textContent).not.toContain('charged')
     again()
 
-    render(<LoginList logins={shared.map((login) => ({ ...login, organization_name: undefined }))} sharedWith={[bob]} client={client} onChanged={async () => {}} />)
+    render(<LoginList logins={shared.map((login) => ({ ...login, organization_name: undefined }))} sharedWith={[bob]} client={client} onChanged={async () => true} />)
     expect(row('console').textContent).toContain(`Sessions of ${bob.display_name} can run here too, charged per use to login console.`)
     expect(within(row('console')).getByTitle('Billed per use to login console')).toBeDefined()
   })
@@ -224,21 +244,21 @@ describe('login list', () => {
     const client = fakeApi()
     const shared = logins.map((login) => ({ ...login, automatic: true }))
     const describedBy = (name: string) => within(row('console')).getByRole('switch', { name }).getAttribute('aria-describedby')
-    const wide = render(<LoginList logins={shared} sharedWith={[bob]} client={client} onChanged={async () => {}} />)
+    const wide = render(<LoginList logins={shared} sharedWith={[bob]} client={client} onChanged={async () => true} />)
     expect(describedBy('Automatic')).toBeNull()
     expect(describedBy('Use for shares')).toBeNull()
     expect(row('console').textContent).toContain('Sessions can move here when the automatic logins above it run out, charged per use to Alice API.')
     wide.unmount()
 
     atViewport(1023)
-    render(<LoginList logins={shared} sharedWith={[bob]} client={client} onChanged={async () => {}} />)
+    render(<LoginList logins={shared} sharedWith={[bob]} client={client} onChanged={async () => true} />)
     expect(document.getElementById(describedBy('Automatic')!)!.textContent).toBe('Sessions can move here when the automatic logins above it run out, charged per use to Alice API.')
     expect(document.getElementById(describedBy('Use for shares')!)!.textContent).toBe(`Sessions of ${bob.display_name} can run here too, charged per use to Alice API.`)
   })
 
   it('confirms a removal, says Anthropic keeps the sign-in, and shows a refusal verbatim with ways to act on it', async () => {
     const user = userEvent.setup()
-    const refusal = "login \"work\" is in use by your sessions run-7kq2m9x4ab (end them) and 1 of your teammates' sessions, which hold it until they end and their containers go (revoking the share you gave a teammate, with cloudfield account revoke <member-id>, moves their running sessions off it)"
+    const refusal = "login \"work\" is in use by your sessions run-7kq2m9x4ab (end them, or free the sandbox of one that has ended) and 1 of your teammates' sessions, which hold it until they end and their containers go (revoking the share you gave a teammate, with cloudfield account revoke <member-id>, moves their running sessions off it)"
     const navigate = vi.fn()
     const original = useStore.getState().navigate
     useStore.setState({ navigate })
@@ -266,20 +286,20 @@ describe('login list', () => {
   })
 
   it('claims nothing about shares while whom the account is shared with is unread, and shows why it is', () => {
-    const { unmount } = render(<LoginList logins={logins} sharedWith={null} client={fakeApi()} onChanged={async () => {}} />)
+    const { unmount } = render(<LoginList logins={logins} sharedWith={null} client={fakeApi()} onChanged={async () => true} />)
     const section = screen.getByRole('region', { name: 'Claude Code logins' })
     expect(section.textContent).not.toContain('not shared')
     expect(section.textContent).not.toContain('Sessions of')
     unmount()
 
-    render(<LoginList logins={logins} sharedWith={null} sharedError="account.list: server unreachable: dial tcp: connection refused" client={fakeApi()} onChanged={async () => {}} />)
+    render(<LoginList logins={logins} sharedWith={null} sharedError="account.list: server unreachable: dial tcp: connection refused" client={fakeApi()} onChanged={async () => true} />)
     expect(screen.getByRole('region', { name: 'Claude Code logins' }).textContent).toContain('Whom your account is shared with was not read: account.list: server unreachable: dial tcp: connection refused')
     expect(screen.getByRole('region', { name: 'Claude Code logins' }).textContent).not.toContain('not shared with anyone')
   })
 
   it('says a share cannot use a default login kept as an API key or a Console profile', () => {
     for (const kind of ['api_key', 'console'] as const) {
-      const { unmount } = render(<LoginList logins={[{ ...logins[0]!, kind, plan: undefined }, logins[1]!]} sharedWith={[bob]} client={fakeApi()} onChanged={async () => {}} />)
+      const { unmount } = render(<LoginList logins={[{ ...logins[0]!, kind, plan: undefined }, logins[1]!]} sharedWith={[bob]} client={fakeApi()} onChanged={async () => true} />)
       expect(row('default').textContent).toContain('A share cannot use this kind of login.')
       expect(row('default').textContent).not.toContain('Sessions of')
       unmount()
@@ -378,7 +398,7 @@ describe('login list reads', () => {
     const answers: ((list: AgentLogin[]) => void)[] = []
     const client = fakeApi({ agentLoginList: vi.fn(() => new Promise<AgentLogin[]>((resolve) => { answers.push(resolve) })) })
     const { result } = renderHook(() => useAgentLogins(client, true))
-    let newest = Promise.resolve()
+    let newest = Promise.resolve(true)
     act(() => { newest = result.current.reload() })
     await act(async () => {
       answers[1]!(logins)
@@ -412,7 +432,7 @@ describe('login list reads', () => {
     const user = userEvent.setup()
     const named = { ...logins[1]!, name: 'run-abcdefghij' }
     const client = fakeApi({ agentLoginRemove: vi.fn(async () => { throw new Error('login "run-abcdefghij" is in use by your sessions run-7kq2m9x4ab, run-8kq2m9x4ab (end them)') }) })
-    render(<LoginList logins={[logins[0]!, named]} sharedWith={[]} client={client} onChanged={async () => {}} />)
+    render(<LoginList logins={[logins[0]!, named]} sharedWith={[]} client={client} onChanged={async () => true} />)
     await user.click(screen.getByRole('button', { name: 'Remove run-abcdefghij' }))
     const dialog = screen.getByRole('alertdialog')
     await user.click(within(dialog).getByRole('button', { name: 'Remove' }))
@@ -478,7 +498,7 @@ describe('add login', () => {
       agentLoginAutomatic: vi.fn(() => new Promise<unknown>((resolve) => { answer = () => resolve({}) })),
       agentLoginShare: vi.fn(async () => { throw new Error('agent.login.share: store: not found') }),
     })
-    const onChanged = vi.fn(async () => {})
+    const onChanged = vi.fn(async () => true)
     const { rerender } = addLogin({ client, sharedWith: [bob], onChanged, ended: { id: login.id, outcome: { login } }, running: { id: login.id, name: 'api' }, resume: true })
     expect(screen.getByText(`Sessions of ${bob.display_name} can run here too, charged per use to Alice API.`)).toBeDefined()
     expect(screen.getByTitle('Billed per use to Alice API')).toBeDefined()
@@ -491,7 +511,7 @@ describe('add login', () => {
     expect(onChanged).toHaveBeenCalledTimes(1)
     rerender(<AddLogin client={client} sharedWith={[bob]} logins={[{ ...login, automatic: false }]} onChanged={onChanged} running={null} ended={{ id: login.id, outcome: { login } }} onRunning={() => {}} onOpened={() => {}} onClose={() => {}} />)
     expect(screen.getByRole('switch', { name: 'Automatic' }).getAttribute('aria-checked')).toBe('false')
-    expect(screen.getByText('No share reaches it while Automatic is off.')).toBeDefined()
+    expect(screen.getByText('No new teammate session starts or moves onto it while Automatic is off; one already on it keeps running.')).toBeDefined()
 
     await user.click(screen.getByRole('switch', { name: 'Use for shares' }))
     expect(client.agentLoginShare).toHaveBeenCalledWith('claude', login.id, false)
@@ -600,7 +620,7 @@ describe('add login', () => {
     await user.type(screen.getByRole('textbox', { name: 'Name' }), 'spare')
     await user.click(screen.getByRole('button', { name: 'Start sign-in' }))
     const panel = await screen.findByRole('region', { name: 'Sign in to Claude Code' })
-    expect(panel.textContent).toContain('You can leave this page: the sign-in keeps running until 15 minutes after its start, and Add login offers Return to the sign-in.')
+    expect(panel.textContent).toContain('You can leave this page: the sign-in keeps running until about 15 minutes after it started, and Add login offers Return to the sign-in.')
     await waitFor(() => expect(signInSockets()).toHaveLength(1))
     accept(signInSockets()[0]!)
     expect(onOpened).toHaveBeenCalledWith('lgn-new00000004')
@@ -608,7 +628,7 @@ describe('add login', () => {
 
     const opened = Date.now() - 5 * 60_000
     addLogin({ client, running: { id: 'lgn-new00000004', name: 'spare', opened }, resume: true, onOpened })
-    expect(screen.getByRole('region', { name: 'Sign in to Claude Code' }).textContent).toContain('keeps running for 10 more minutes, and')
+    expect(screen.getByRole('region', { name: 'Sign in to Claude Code' }).textContent).toContain('keeps running for about 10 more minutes, and')
     await waitFor(() => expect(signInSockets()).toHaveLength(2))
     accept(signInSockets()[1]!)
     expect(onOpened).toHaveBeenCalledTimes(1)
@@ -633,6 +653,21 @@ describe('add login', () => {
     accept(socket)
     expect(inputs(socket)).toEqual([{ type: 'input', data: '\x03' }])
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('still sends a cancel queued while the terminal starts when the panel is left before it is up', async () => {
+    const user = userEvent.setup()
+    const onClose = vi.fn()
+    const { unmount } = addLogin({ client: fakeApi(), running: { id: 'lgn-run00000007', name: 'spare' }, resume: true, onClose })
+    await waitFor(() => expect(signInSockets()).toHaveLength(1))
+    const socket = signInSockets()[0]!
+    await user.click(screen.getByRole('button', { name: 'Cancel sign-in' }))
+    unmount()
+    expect(socket.closed).toBe(false)
+    accept(socket)
+    expect(inputs(socket)).toEqual([{ type: 'input', data: '\x03' }])
+    expect(socket.closed).toBe(true)
+    expect(onClose).not.toHaveBeenCalled()
   })
 
   it('sends Ctrl-C at once to a sign-in whose terminal is up', async () => {

@@ -73,6 +73,12 @@ export function SignInTerminal({ agent, socket, onDone, back, cancel, reattaches
   const [cancelling, setCancelling] = useState(false)
   const cancelled = useRef<(() => void) | null>(null)
   const isAttached = useRef(false)
+  // Unmounted: the panel was left. A cancel still waiting for the attach keeps its socket until it is sent.
+  const left = useRef(false)
+  useEffect(() => {
+    left.current = false
+    return () => { left.current = true }
+  }, [])
   const attachedHere = useRef(onAttached)
   attachedHere.current = onAttached
   const codeText = useRef<HTMLElement>(null)
@@ -111,7 +117,8 @@ export function SignInTerminal({ agent, socket, onDone, back, cancel, reattaches
         isAttached.current = true
         if (cancelled.current) {
           attached.send('\x03')
-          cancelled.current()
+          if (!left.current) cancelled.current()
+          else attached.close()
           return
         }
         setDropped(false)
@@ -155,8 +162,8 @@ export function SignInTerminal({ agent, socket, onDone, back, cancel, reattaches
     })
     attachment.current = attached
     return () => {
-      attached.close()
       attachment.current = null
+      if (!(left.current && cancelled.current && !isAttached.current)) attached.close()
     }
   }, [agent.name, geometry, attempt, reattaches])
   useEffect(() => {

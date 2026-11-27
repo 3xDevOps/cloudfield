@@ -103,6 +103,23 @@ describe('run frame', () => {
     await waitFor(() => expect(screen.getByRole('banner').textContent).toContain("On Bob's account (fallback)"))
   })
 
+  it('keeps a fallback with no login among the parts that wrap away, and off a narrow row, as before logins', async () => {
+    const view = open({ account_member_id: bob.id, requested_account_member_id: alice.id })
+    const line = await within(screen.getByRole('banner')).findByText("On Bob's account (fallback)")
+    expect(line.closest('.flex-wrap')).not.toBeNull()
+    view.unmount()
+
+    const measure = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.dataset.slot === 'pane-header' ? DOMRect.fromRect({ width: 420, height: 32 }) : measure.call(this)
+    })
+    useStore.setState({ info: { ...serverInfo, features: ['logins'] } })
+    open({ account_member_id: bob.id, requested_account_member_id: alice.id })
+    await screen.findByRole('banner')
+    await waitFor(() => expect(screen.getByRole('banner').textContent).not.toContain('Standard'))
+    expect(screen.getByRole('banner').textContent).not.toContain('(fallback)')
+  })
+
   it('names the fallback account once a run.account event moves the run', async () => {
     open({ account_member_id: alice.id })
     await act(() => applyEvent(useStore, {
@@ -204,6 +221,18 @@ describe('run frame', () => {
     expect(line.className).not.toContain('truncate')
     expect(within(line).getByTitle('Billed per use to your account, login console').dataset.slot).toBe('badge')
     expect(screen.getByRole('banner').textContent).not.toContain('console')
+  })
+
+  it('names and badges a default login billed per use, on a wide header and on a phone', async () => {
+    const view = open({ account_member_id: alice.id, account_login_per_use: true })
+    await waitFor(() => expect(screen.getByRole('banner').textContent).toContain('On your account, login default'))
+    expect(within(screen.getByRole('banner')).getByTitle('Billed per use to your account').dataset.slot).toBe('badge')
+    view.unmount()
+
+    atViewport(360, { pointer: 'coarse' })
+    open({ account_member_id: alice.id, account_login_per_use: true })
+    const line = (await screen.findByText(/^On your account, login default/)).closest('p')!
+    expect(within(line).getByTitle('Billed per use to your account').dataset.slot).toBe('badge')
   })
 
   it('adds no phone account line for a fallback from a server without logins, as before them', async () => {
