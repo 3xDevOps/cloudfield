@@ -1411,8 +1411,9 @@ wake: put findings in the report, not in messages sent before it. Line breaks
 and indentation are kept; control characters become spaces. A longer body is
 refused with `body is <n> bytes and exceeds 12288`, and a body on another
 outcome with `body is only valid with the "success", "failure" or "blocked"
-outcome`. Whoever can read the report's summary can read its body, and nothing
-is redacted from either: write no secret into them. A report's body is not
+outcome`. The body is stored with the report and read through the parent's inbox; the
+dashboard does not show it yet. Nothing is redacted from a summary or a body:
+write no secret into either. A report's body is not
 counted in the 16 KiB of an inbox batch, so a batch with a report can be
 larger. A server older than report bodies stores the report without the
 body; the command and the `aether_report` tool then fail with `the report was
