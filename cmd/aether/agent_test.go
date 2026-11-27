@@ -22,7 +22,7 @@ func TestPrintAgents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "AGENT    SOURCE   INSTALLED  ENHANCED       LOGIN FILE\n" +
+	want := "AGENT    SOURCE   INSTALLED  ENHANCED       LOGIN\n" +
 		"claude   shipped  yes        not installed  not found\n" +
 		"codex    shipped  yes        installed      found\n" +
 		"myagent  member   no         none           -\n"
@@ -42,7 +42,7 @@ func TestPrintAgentsNamesASignedOutLoginAndTheWayBackIn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "AGENT   SOURCE   INSTALLED  ENHANCED       LOGIN FILE\n" +
+	want := "AGENT   SOURCE   INSTALLED  ENHANCED       LOGIN\n" +
 		"claude  shipped  yes        installed      signed out\n" +
 		"codex   shipped  yes        not installed  found\n" +
 		"claude is signed out: ~/.claude/.credentials.json: Claude OAuth access token is missing or invalid\n" +

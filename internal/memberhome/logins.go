@@ -9,6 +9,9 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/rootfs"
@@ -42,6 +45,24 @@ type LoginIdentity struct {
 	Email            string `json:"email,omitempty"`
 	OrganizationID   string `json:"organization_id,omitempty"`
 	OrganizationName string `json:"organization_name,omitempty"`
+}
+
+// maxIdentityField bounds each field of an identity, which comes from files
+// a sign-in container wrote and reaches the owner's terminal and dashboard.
+const maxIdentityField = 256
+
+// clean drops a field that is too long or holds a control, format or line
+// or paragraph separator character. Format characters include the zero-width
+// joiners some scripts write names with: such a name is dropped too.
+func (a LoginIdentity) clean() LoginIdentity {
+	for _, field := range []*string{&a.Kind, &a.Plan, &a.Email, &a.OrganizationID, &a.OrganizationName} {
+		if len(*field) > maxIdentityField || !utf8.ValidString(*field) || strings.ContainsFunc(*field, func(r rune) bool {
+			return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
+		}) {
+			*field = ""
+		}
+	}
+	return a
 }
 
 // PerUse reports whether the login is billed per use: a Console sign-in or
@@ -369,7 +390,7 @@ func (l *Logins) Identity(member domain.MemberID, agent string, id domain.LoginI
 			return LoginIdentity{}, fmt.Errorf("memberhome: read login %s: %w", id, notJSON(loginIdentity))
 		}
 	}
-	return identity, nil
+	return identity.clean(), nil
 }
 
 // DefaultIdentity is what Claude Code recorded about member's default login,
@@ -395,13 +416,11 @@ func (m *Manager) DefaultIdentity(member domain.MemberID, agent string) (LoginId
 
 // AnthropicProfileDir is where Claude Code keeps a keyless Console sign-in
 // in a home unless ANTHROPIC_CONFIG_DIR moves it.
-const AnthropicProfileDir = ".config/anthropic"
+const AnthropicProfileDir = anthropicProfileDir
 
-const (
-	claudeConfigPath       = ".claude.json"
-	claudeLegacyConfigPath = ".claude/.config.json"
-	maxProfileBytes        = 1 << 20
-)
+// maxIdentityConfigBytes bounds the configuration file read for the account
+// Claude Code cached; a larger one leaves the account unknown.
+const maxIdentityConfigBytes = 8 << 20
 
 // claudeIdentity reads a Claude Code login below root: the subscription
 // sign-in file oauth, the first of configs that holds anything (Claude
@@ -409,8 +428,7 @@ const (
 // the Anthropic profile directory profile. A subscription sign-in wins over
 // a Console API key, which wins over a keyless Console sign-in, as Claude
 // Code itself picks them.
-func claudeIdentity(root *os.Root, oauth string, configs []string, profile string) (LoginIdentity, error) {
-	var identity LoginIdentity
+func claudeIdentity(root *os.Root, oauth string, configs []string, profile string) (identity LoginIdentity, err error) {
 	var config struct {
 		PrimaryAPIKey string `json:"primaryApiKey"`
 		OAuthAccount  *struct {
@@ -420,7 +438,13 @@ func claudeIdentity(root *os.Root, oauth string, configs []string, profile strin
 		} `json:"oauthAccount"`
 	}
 	for _, rel := range configs {
-		data, err := readState(root, rel)
+		var data []byte
+		data, err = readStateUpTo(root, rel, maxIdentityConfigBytes)
+		if errors.As(err, new(stateTooLarge)) {
+			// Too large to read for an identity: the account it caches
+			// stays unknown, as for a login signed in before this feature.
+			break
+		}
 		if err != nil {
 			return LoginIdentity{}, fmt.Errorf("%s: %w", rel, err)
 		}
@@ -435,6 +459,7 @@ func claudeIdentity(root *os.Root, oauth string, configs []string, profile strin
 	if a := config.OAuthAccount; a != nil {
 		identity.Email, identity.OrganizationID, identity.OrganizationName = a.EmailAddress, a.OrganizationUUID, a.OrganizationName
 	}
+	defer func() { identity = identity.clean() }()
 	data, err := readLoginFile(root, oauth)
 	if err != nil {
 		return LoginIdentity{}, err
@@ -490,45 +515,8 @@ func readLoginFile(root *os.Root, rel string) ([]byte, error) {
 }
 
 // anthropicProfileSignedIn reports whether the active Anthropic profile in
-// dir, the one active_config names or "default", is an interactive sign-in
-// holding a token.
+// dir is an interactive sign-in that can sign Claude Code in.
 func anthropicProfileSignedIn(root *os.Root, dir string) (bool, error) {
-	active, err := readLoginFile(root, dir+"/active_config")
-	if err != nil {
-		return false, err
-	}
-	name := strings.TrimSpace(string(active))
-	if name == "" {
-		name = "default"
-	}
-	if name != path.Base(name) || name == "." || name == ".." {
-		return false, nil
-	}
-	config, err := readLoginFile(root, dir+"/configs/"+name+".json")
-	if err != nil || len(config) == 0 {
-		return false, err
-	}
-	var profile struct {
-		Authentication struct {
-			Type string `json:"type"`
-		} `json:"authentication"`
-	}
-	if json.Unmarshal(config, &profile) != nil {
-		return false, notJSON(dir + "/configs/" + name + ".json")
-	}
-	if profile.Authentication.Type != "user_oauth" {
-		return false, nil
-	}
-	credentials, err := readLoginFile(root, dir+"/credentials/"+name+".json")
-	if err != nil || len(credentials) == 0 {
-		return false, err
-	}
-	var tokens struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-	}
-	if json.Unmarshal(credentials, &tokens) != nil {
-		return false, notJSON(dir + "/credentials/" + name + ".json")
-	}
-	return strings.TrimSpace(tokens.AccessToken) != "" || strings.TrimSpace(tokens.RefreshToken) != "", nil
+	login, err := anthropicProfileLogin(root, dir, time.Now())
+	return login != nil, err
 }

@@ -100,8 +100,16 @@ func (f *fakeRuns) DefaultMode(context.Context, domain.MemberID, domain.MemberID
 	return domain.LaunchACP, nil
 }
 
-func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.MemberID, domain.MemberID, string, domain.LaunchMode) (bool, error) {
+func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.MemberID, domain.Account, string, domain.LaunchMode) (bool, error) {
 	return true, nil
+}
+
+func (f *fakeRuns) EnvironmentSignsIn(context.Context, domain.WorkspaceID, string, domain.LaunchMode) (bool, error) {
+	return false, nil
+}
+
+func (f *fakeRuns) ChildLogin(context.Context, domain.WorkspaceID, domain.MemberID, domain.MemberID, domain.LoginID, string, domain.LaunchMode) (domain.LoginID, error) {
+	return "", nil
 }
 
 func (f *fakeRuns) AgentModels(context.Context, domain.MemberID, domain.MemberID, string, bool) (protocol.AgentModelsResult, error) {

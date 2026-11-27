@@ -101,7 +101,20 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 			}
 		}
 	}
-	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Usage, c.OwnerID, string(c.AccountID), c.Harness, c.Fallback)
+	// The parent's login is checked again here: its owner may have turned
+	// it off for shares, or it may have stopped signing in, since the
+	// subsession was queued.
+	login, err := s.cfg.Runs.ChildLogin(ctx, c.WorkspaceID, c.OwnerID, c.AccountID, c.AccountLogin, c.Harness, c.Mode)
+	if err != nil {
+		refuse(err.Error())
+		return
+	}
+	byEnv, err := s.cfg.Runs.EnvironmentSignsIn(ctx, c.WorkspaceID, c.Harness, c.Mode)
+	if err != nil {
+		refuse(err.Error())
+		return
+	}
+	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Usage, c.OwnerID, domain.Account{Member: c.AccountID, Login: login}, c.Harness, c.Fallback)
 	if err != nil {
 		refuse(err.Error())
 		return
@@ -124,11 +137,11 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 		refuse(err.Error())
 		return
 	}
-	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, c.OwnerID, domain.AccountOf(requested), workspaces, c.Fallback, func(ctx context.Context, account domain.Account) (bool, error) {
-		if p.settings.Off.Covers(c.Harness, account.Member) {
+	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, c.OwnerID, domain.Account{Member: requested, Login: login}, c.Harness, workspaces, c.Fallback, func(ctx context.Context, account domain.Account) (bool, error) {
+		if p.settings.Off.Covers(c.Harness, account.Member) || (byEnv && account.Login.Added()) {
 			return false, nil
 		}
-		return s.cfg.Runs.FallbackLaunchable(ctx, c.OwnerID, requested, account.Member, c.Harness, c.Mode)
+		return s.cfg.Runs.FallbackLaunchable(ctx, c.OwnerID, requested, account, c.Harness, c.Mode)
 	})
 	account := chosen.Member
 	if excluded != nil {
@@ -136,7 +149,7 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 	}
 	created := false
 	_, err = s.cfg.Runs.LaunchWithOptions(ctx, c.WorkspaceID, c.OwnerID, account, c.Task, c.Harness, c.Mode, domain.LaunchOptions{
-		Model: c.Model, Permission: parent.Permission, RequestedAccount: requested, Fallback: c.Fallback, ReservedRunID: c.RunID,
+		Model: c.Model, Permission: parent.Permission, RequestedAccount: requested, AccountLogin: chosen.Login, Fallback: c.Fallback, ReservedRunID: c.RunID,
 		FromCommit: c.BaseCommit, FromBranch: c.BaseBranch, ExtraWorkspaces: workspaces[1:], Admitted: unlock,
 		LinearIssueURL: cmp.Or(linear.FindIssueURL(c.Task), parent.LinearIssueURL),
 		Created: func(domain.RunID) {

@@ -41,7 +41,7 @@ func TestOperatorCommands(t *testing.T) {
 	if _, err = s.SignIn(ctx, owner, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.RecordClaim(ctx, testServer, "workstation", edgeproto.PolicyAccount, edgeproto.AccountPrincipal(owner), time.Now()); err != nil {
+	if err = s.RecordClaim(ctx, testServer, "workstation", edgeproto.PolicyAccount, edgeproto.AccountPrincipal(owner), edgestore.Enrollment{RelayOrigin: "https://relay.example.test", AgentVersion: "v1.0.0", At: time.Now()}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Close(); err != nil {
@@ -73,7 +73,7 @@ func TestOperatorCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.RecordClaim(ctx, testServer, "workstation", edgeproto.PolicyAccount, edgeproto.AccountPrincipal(owner), time.Now()); err != nil {
+	if err = s.RecordClaim(ctx, testServer, "workstation", edgeproto.PolicyAccount, edgeproto.AccountPrincipal(owner), edgestore.Enrollment{RelayOrigin: "https://relay.example.test", AgentVersion: "v1.0.0", At: time.Now()}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Close(); err != nil {
@@ -158,7 +158,7 @@ func TestOperatorCommandsOnlyRemoveAndBlock(t *testing.T) {
 		got   []string
 		want  []string
 	}{
-		{"aether-edge", slices.Collect(maps.Keys(commands)), []string{"accounts", "backup", "healthcheck", "release-check", "restore", "reviewer", "schema", "serve", "servers", "version"}},
+		{"aether-edge", slices.Collect(maps.Keys(commands)), []string{"accounts", "backup", "healthcheck", "release-check", "restore", "retiring", "reviewer", "schema", "serve", "servers", "version"}},
 		{"aether-edge servers", slices.Collect(maps.Keys(serverCommands)), []string{"block", "list", "remove", "unblock"}},
 		{"aether-edge accounts", slices.Collect(maps.Keys(accountCommands)), []string{"block", "delete", "list", "unblock"}},
 	} {

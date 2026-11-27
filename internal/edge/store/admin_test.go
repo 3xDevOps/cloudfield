@@ -20,6 +20,13 @@ const (
 	serverB = "bbbbbbbbbbbbbbbbbbbbbbbbbb"
 )
 
+const (
+	testSignin = "https://signin.example.test"
+	testRelay  = "https://relay.example.test"
+)
+
+var testEnrollment = Enrollment{RelayOrigin: testRelay, AgentVersion: "v1.0.0", At: testNow}
+
 func openStore(t *testing.T) *Store {
 	t.Helper()
 	s, err := Open(filepath.Join(t.TempDir(), "edge.db"))
@@ -46,7 +53,7 @@ func addDevice(t *testing.T, s *Store, accountID int64, deviceID, tokenHash stri
 	if err := s.DecideDeviceAuth(ctx, auth.UserCodeHash, accountID, true, testNow); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RedeemDeviceAuth(ctx, auth.CodeHash, Device{ID: deviceID, TokenHash: tokenHash}, testNow); err != nil {
+	if _, err := s.RedeemDeviceAuth(ctx, auth.CodeHash, Device{ID: deviceID, TokenHash: tokenHash}, true, testNow); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -58,7 +65,7 @@ func claim(t *testing.T, s *Store, id, name string, a edgeproto.Account) {
 	if _, err := s.SignIn(ctx, a, testNow); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecordClaim(ctx, id, name, edgeproto.PolicyAccount, edgeproto.AccountPrincipal(a), testNow); err != nil {
+	if err := s.RecordClaim(ctx, id, name, edgeproto.PolicyAccount, edgeproto.AccountPrincipal(a), testEnrollment, testNow); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -67,7 +74,7 @@ func TestRecordClaim(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()
 	o := edgeproto.AccountPrincipal(owner())
-	if err := s.RecordClaim(ctx, serverA, "alpha", edgeproto.PolicyAccount, o, testNow); !errors.Is(err, ErrNoAccount) {
+	if err := s.RecordClaim(ctx, serverA, "alpha", edgeproto.PolicyAccount, o, testEnrollment, testNow); !errors.Is(err, ErrNoAccount) {
 		t.Fatalf("claim naming an account the edge does not hold: %v", err)
 	}
 	if _, err := s.SignIn(ctx, owner(), testNow); err != nil {
@@ -76,7 +83,7 @@ func TestRecordClaim(t *testing.T) {
 	if err := s.BlockServer(ctx, serverA, testNow); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecordClaim(ctx, serverA, "alpha", edgeproto.PolicyAccount, o, testNow); !errors.Is(err, ErrServerBlocked) {
+	if err := s.RecordClaim(ctx, serverA, "alpha", edgeproto.PolicyAccount, o, testEnrollment, testNow); !errors.Is(err, ErrServerBlocked) {
 		t.Fatalf("claim of a blocked server: %v", err)
 	}
 	if _, err := s.Server(ctx, serverA); !errors.Is(err, ErrNotFound) {
@@ -85,7 +92,7 @@ func TestRecordClaim(t *testing.T) {
 	if err := s.UnblockServer(ctx, serverA); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecordClaim(ctx, serverA, "alpha", edgeproto.PolicyAccount, o, testNow); err != nil {
+	if err := s.RecordClaim(ctx, serverA, "alpha", edgeproto.PolicyAccount, o, testEnrollment, testNow); err != nil {
 		t.Fatal(err)
 	}
 	srv, err := s.Server(ctx, serverA)
@@ -98,7 +105,7 @@ func TestRecordClaim(t *testing.T) {
 	if _, err = s.SignIn(ctx, other, testNow); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.RecordClaim(ctx, serverA, "alpha", edgeproto.PolicyAccount, edgeproto.AccountPrincipal(other), testNow); !errors.Is(err, ErrHasOwner) {
+	if err = s.RecordClaim(ctx, serverA, "alpha", edgeproto.PolicyAccount, edgeproto.AccountPrincipal(other), testEnrollment, testNow); !errors.Is(err, ErrHasOwner) {
 		t.Fatalf("second claim of an owned server: %v", err)
 	}
 	if err = s.DropOwner(ctx, serverA); err != nil {
@@ -107,7 +114,7 @@ func TestRecordClaim(t *testing.T) {
 	if owned, oerr := s.ServerOwned(ctx, serverA); oerr != nil || owned {
 		t.Fatalf("ownerless server owned = %v, %v", owned, oerr)
 	}
-	if err = s.RecordClaim(ctx, serverA, "alpha", edgeproto.PolicyApprovedDevices, edgeproto.AccountPrincipal(other), testNow); err != nil {
+	if err = s.RecordClaim(ctx, serverA, "alpha", edgeproto.PolicyApprovedDevices, edgeproto.AccountPrincipal(other), testEnrollment, testNow); err != nil {
 		t.Fatalf("claim of an ownerless server: %v", err)
 	}
 	if srv, err = s.Server(ctx, serverA); err != nil || srv.Owner.Subject != "2" || srv.AccessPolicy != edgeproto.PolicyApprovedDevices {
@@ -148,7 +155,7 @@ func TestAccountIDIsAssignedOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.CreateSession(ctx, "session-1", "hash-1", first, testNow, testNow.Add(time.Hour)); err != nil {
+	if err = s.CreateSession(ctx, "session-1", "hash-1", first, testSignin, testNow, testNow.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	renamed := owner()
@@ -156,7 +163,7 @@ func TestAccountIDIsAssignedOnce(t *testing.T) {
 	if _, err = s.SignIn(ctx, renamed, testNow.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	sess, err := s.UseSession(ctx, "hash-1", testNow, testNow.Add(time.Hour))
+	sess, err := s.UseSession(ctx, "hash-1", testSignin, testNow, testNow.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,10 +178,10 @@ func TestAccountIDIsAssignedOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.CreateSession(ctx, "session-2", "hash-2", again, testNow, testNow.Add(time.Hour)); err != nil {
+	if err = s.CreateSession(ctx, "session-2", "hash-2", again, testSignin, testNow, testNow.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if sess, err = s.UseSession(ctx, "hash-2", testNow, testNow.Add(time.Hour)); err != nil || sess.Account.ID == id {
+	if sess, err = s.UseSession(ctx, "hash-2", testSignin, testNow, testNow.Add(time.Hour)); err != nil || sess.Account.ID == id {
 		t.Fatalf("a deleted account signing in again kept its id %s: %+v, %v", id, sess.Account, err)
 	}
 }
@@ -217,7 +224,7 @@ func TestBlockAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.CreateSession(ctx, "session-1", "session-hash", id, testNow, testNow.Add(time.Hour)); err != nil {
+	if err = s.CreateSession(ctx, "session-1", "session-hash", id, testSignin, testNow, testNow.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	addDevice(t, s, id, "device-1", "token-hash")
@@ -228,10 +235,10 @@ func TestBlockAccount(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err = s.UseSession(ctx, "session-hash", testNow, testNow.Add(time.Hour)); !errors.Is(err, ErrNotFound) {
+	if _, err = s.UseSession(ctx, "session-hash", testSignin, testNow, testNow.Add(time.Hour)); !errors.Is(err, ErrNotFound) {
 		t.Errorf("session of a blocked account: %v", err)
 	}
-	if _, err = s.UseDevice(ctx, "token-hash", testNow); !errors.Is(err, ErrNotFound) {
+	if _, err = s.UseDevice(ctx, "token-hash", testSignin, testNow); !errors.Is(err, ErrNotFound) {
 		t.Errorf("device token of a blocked account: %v", err)
 	}
 	for _, b := range []edgeproto.Account{a, stranger} {
@@ -267,7 +274,7 @@ func TestDeleteAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.CreateSession(ctx, "session-1", "session-hash", id, testNow, testNow.Add(time.Hour)); err != nil {
+	if err = s.CreateSession(ctx, "session-1", "session-hash", id, testSignin, testNow, testNow.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	addDevice(t, s, id, "device-1", "token-hash")

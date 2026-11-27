@@ -442,7 +442,7 @@ function RunRowButton({ run, state, waiting, reason, next, cause, wait, since, w
         aria-describedby={exactTime}
         aria-current={selected ? 'page' : undefined}
         selected={selected}
-        className={cn(shown && !mobile && 'before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-accent')}
+        className={cn(shown && !mobile && 'rounded-l-none before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-accent')}
         onClick={() => navigate('run', { runId: run.id })}
         onPointerDown={beside ? dragFrom({ runId: run.id }) : undefined}
         onKeyDown={beside ? (event) => {

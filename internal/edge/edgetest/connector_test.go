@@ -118,7 +118,7 @@ func (launcher) SettleSleep(context.Context, domain.RunID) error              { 
 func (launcher) DefaultMode(context.Context, domain.MemberID, domain.MemberID, string) (domain.LaunchMode, error) {
 	return domain.LaunchACP, nil
 }
-func (launcher) LoginProblem(domain.MemberID, string, agentharness.Profile) (string, bool, error) {
+func (launcher) LoginProblem(domain.MemberID, domain.MemberID, string, agentharness.Profile) (string, bool, error) {
 	return "", false, nil
 }
 func (launcher) PendingInputs(domain.RunID) []domain.RunInputRequest          { return nil }

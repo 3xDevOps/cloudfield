@@ -301,7 +301,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 		if getErr == nil {
 			requested := &domain.Run{
 				ID: reservedID, WorkspaceID: workspace,
-				MemberID: member, AccountMemberID: account, Task: task,
+				MemberID: member, AccountMemberID: account, AccountLogin: opts.AccountLogin, Task: task,
 				Harness: harness, Mode: mode, Model: opts.Model, Effort: opts.Effort,
 			}
 			if !sameReservedRun(existing, requested) || (opts.CachedBase != "" && opts.CachedBase != existing.BaseCommit) {
@@ -313,7 +313,18 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 			return nil, getErr
 		}
 	}
-	if err = s.checkLogin(ctx, workspace, account, harness, profile, mode); err != nil {
+	if opts.AccountLogin.Added() {
+		err = s.checkAddedLogin(ctx, member, domain.Account{Member: account, Login: opts.AccountLogin}, harness)
+		if err == nil {
+			var byEnv bool
+			if byEnv, err = s.environmentSignsIn(ctx, workspace, harness, profile, mode); err == nil && byEnv {
+				err = fmt.Errorf("scheduler: a workspace variable signs %s in here, so login %s would not pay; launch on the default login", harness, opts.AccountLogin)
+			}
+		}
+	} else if err = s.checkDefaultLoginShared(ctx, member, account, harness); err == nil {
+		err = s.checkLogin(ctx, workspace, member, account, harness, profile, mode)
+	}
+	if err != nil {
 		return nil, err
 	}
 	release, err := s.reserveCapacity(ctx)
@@ -390,6 +401,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 		BaseSource:      source,
 		BaseCheckedAt:   base.CheckedAt,
 		Fallback:        opts.Fallback,
+		AccountLogin:    opts.AccountLogin,
 		Extras:          extras.repos,
 		LinearIssueURL:  opts.LinearIssueURL,
 	}
@@ -515,6 +527,10 @@ func (s *Scheduler) provisionSteps(ctx context.Context, entry *supervised, run *
 	entry.gitAuthorEmail = actor.GitIdentity().Email
 	entry.egress = plan.Egress
 	s.mu.Unlock()
+	billed, perUse := s.billedPerUse(ctx, run.Account(), run.Harness)
+	if perUse && run.ACP {
+		s.acp.switchNotice(run.ID, "info", "Billed per use", billed)
+	}
 	driver, err := s.startRunContainer(ctx, entry, run, actor, argv, profile, plan, unlockCaches)
 	if err != nil {
 		canRetry := func() bool {
@@ -563,6 +579,9 @@ func (s *Scheduler) provisionSteps(ctx context.Context, entry *supervised, run *
 	}
 	run.Status = domain.RunRunning
 	s.startSupervision(entry)
+	if perUse {
+		s.notePerUse(ctx, run, billed)
+	}
 	s.leaveIfRevoked(ctx, entry, run)
 	return nil
 }
@@ -598,7 +617,7 @@ func (s *Scheduler) runPlan(ctx context.Context, entry *supervised, run *domain.
 	}
 	s.mu.Lock()
 	entry.home = plan.Home
-	entry.loginMember = plan.LoginMember
+	entry.loginMember, entry.loginID, entry.account = plan.LoginMember, plan.LoginID, run.Account()
 	s.mu.Unlock()
 	if reserveErr := s.reserveRunUser(ctx, entry, plan.User, len(plan.Mounts) > 0); reserveErr != nil {
 		return nil, reserveErr
@@ -700,7 +719,7 @@ func (s *Scheduler) startRunContainer(ctx context.Context, entry *supervised, ru
 		return nil, s.failContainer(ctx, entry, cid, "start container", serr)
 	}
 	s.mu.Lock()
-	if login := domain.AccountOf(entry.loginMember); entry.loginMember != "" && !slices.Contains(entry.verifiedLogins, login) {
+	if login := (domain.Account{Member: entry.loginMember, Login: entry.loginID}); entry.loginMember != "" && !slices.Contains(entry.verifiedLogins, login) {
 		entry.verifiedLogins = append(entry.verifiedLogins, login)
 	}
 	sc := entry.sidecar()
@@ -894,7 +913,7 @@ func sameReservedRun(existing, requested *domain.Run) bool {
 		existing.ID == requested.ID &&
 		existing.WorkspaceID == requested.WorkspaceID &&
 		existing.MemberID == requested.MemberID &&
-		existing.AccountMember() == requested.AccountMember() &&
+		existing.Account() == requested.Account() &&
 		existing.Task == requested.Task &&
 		existing.Harness == requested.Harness &&
 		existing.Mode == requested.Mode &&

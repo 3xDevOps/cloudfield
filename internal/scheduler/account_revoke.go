@@ -87,6 +87,22 @@ func (s *Scheduler) RevokeAccount(owner, grantee domain.MemberID) {
 	})
 }
 
+// RevokeLogin moves teammates' live runs off an added or default login of
+// owner's that owner turned off for shares, or stops them; owner's own runs
+// stay.
+func (s *Scheduler) RevokeLogin(login domain.Account) {
+	s.goMove(func() {
+		select {
+		case <-s.recoveryReady:
+		case <-s.superCtx.Done():
+			return
+		}
+		s.leaveRevokedAccounts(s.superCtx, func(run *domain.Run) bool {
+			return run.Account() == login && (run.MemberID != login.Member || run.HomeMember() != login.Member)
+		})
+	})
+}
+
 // leaveRevokedAccounts starts a move off its account for every live run
 // match selects, nil for every one, whose owner or home member may no longer
 // use that account.
@@ -137,8 +153,15 @@ func (s *Scheduler) resolveRunAccount(ctx context.Context, run *domain.Run) erro
 	if err := s.checkRunReach(ctx, run); err != nil {
 		return err
 	}
-	_, err := fallback.ResolveLaunchAccountIn(ctx, s.cfg.Store, runLauncher(run), string(run.AccountMember()), runWorkspaces(run))
-	return err
+	if err := fallback.ResolveRunLogin(ctx, s.cfg.Store, runLauncher(run), run, runWorkspaces(run)); err != nil {
+		return err
+	}
+	// The run's owner is checked for its login's share switch too; whether
+	// the owner holds the share itself is the handoff's to decide.
+	if run.MemberID == runLauncher(run) || !run.AccountLogin.Added() {
+		return nil
+	}
+	return fallback.ResolveRunLogin(ctx, s.cfg.Store, run.MemberID, run, runWorkspaces(run))
 }
 
 // checkRunReach refuses the run when its launcher or the member whose home

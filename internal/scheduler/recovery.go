@@ -1123,7 +1123,7 @@ func (s *Scheduler) admitDestroyPendingOwner(ctx context.Context, r *domain.Run,
 		// account owner's login, so a narrowed shared run holds it until the
 		// container is gone. That never blocks the owner's own containers.
 		if fresh.HomeMemberID != "" && fresh.AccountMember() != fresh.HomeMember() {
-			current.LoginMember = string(fresh.AccountMember())
+			current.LoginMember, current.LoginID = string(fresh.AccountMember()), fresh.AccountLogin
 		}
 	}
 	if current.RunUser == "" || current.RunUser == unknownRecoveryRunUser {
@@ -1434,6 +1434,12 @@ func (s *Scheduler) recoverSupervised(ctx context.Context, r *domain.Run) {
 	// recorded the account and the run carries on where it was.
 	if swap := sc.AccountSwap; swap != nil {
 		switch {
+		case sc.ContainerID == swap.Container && swap.Sending:
+			// The agent may be working on the continuation; sending it again
+			// would repeat it, so the session only says it may be missing.
+			s.acp.switchNotice(r.ID, "warning", "The continuation prompt may not have been delivered",
+				"The session moved to "+s.accountLabel(ctx, swap.to(), r.Harness)+"; the continuation prompt may not have been delivered.")
+			s.dropAccountSwap(r.ID, &sc)
 		case sc.ContainerID == swap.Container:
 			if swap.Continuation == "" {
 				s.dropAccountSwap(r.ID, &sc)
@@ -1965,6 +1971,8 @@ func (s *Scheduler) entryFromSidecar(r *domain.Run, sc sidecar) *supervised {
 		task:           r.Task,
 		memberID:       r.HomeMember(),
 		loginMember:    domain.MemberID(sc.LoginMember),
+		loginID:        sc.LoginID,
+		account:        r.Account(),
 		verifiedLogins: sc.VerifiedLogins,
 		// Reattaching makes a full-screen agent repaint; without the saved
 		// report that repaint would read as work resuming.

@@ -18,7 +18,16 @@ const (
 	MethodAgentLoginRemove    = "agent.login.remove"
 	MethodAgentLoginOrder     = "agent.login.order"
 	MethodAgentLoginAutomatic = "agent.login.automatic"
+	// MethodAgentLoginShare sets whether the caller's account shares reach
+	// a login; turning it off moves teammates' running sessions off it.
+	MethodAgentLoginShare = "agent.login.share"
 )
+
+type AgentLoginShareParams struct {
+	Agent   string `json:"agent"`
+	LoginID string `json:"login_id"`
+	Shared  bool   `json:"shared"`
+}
 
 // AgentLoginParams names an agent, and for most methods one of the caller's
 // logins of it: "default" or an added login's "lgn-" id.

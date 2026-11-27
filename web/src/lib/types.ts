@@ -1321,7 +1321,7 @@ export interface AgentInfo {
   enhanced_installed?: boolean
   /** The command the agent runs; a member's agent may name it differently from the agent. */
   executable?: string
-  /** Whether a login file exists in the home the launch signs in with. Absent when the agent declares none. */
+  /** Whether a login exists in the home the launch signs in with: a login file, or on the member's own account a login the agent keeps elsewhere. Absent when the agent declares none. */
   login_found?: boolean
   /** Why the account's login cannot sign the agent in: its login file, or the agent's refusal of a turn. Shown verbatim. */
   login_problem?: string

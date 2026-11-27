@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -215,5 +216,147 @@ func TestAgentLoginAddNeedsTheSignInSeam(t *testing.T) {
 	}
 	if _, perr := e.call(t, e.member.ID, protocol.MethodAgentLoginAdd, protocol.AgentLoginAddParams{Agent: "claude", Name: "Default"}); perr == nil || perr.Code != protocol.CodeInvalidParams {
 		t.Fatalf("agent.login.add with a bad name: %v; want invalid params", perr)
+	}
+}
+
+// Only Claude Code keeps added logins: a method naming another agent is
+// refused rather than answered with a made-up default login.
+func TestAgentLoginMethodsNameClaudeOnly(t *testing.T) {
+	e := newLoginEnv(t)
+	for _, agent := range []string{"", "codex", "Claude"} {
+		if _, perr := e.call(t, e.member.ID, protocol.MethodAgentLoginList, protocol.AgentLoginParams{Agent: agent}); perr == nil || perr.Code != protocol.CodeInvalidParams {
+			t.Errorf("agent.login.list for %q: %v; want invalid params", agent, perr)
+		}
+	}
+}
+
+// A launch is admitted before anything of its workspace or of the
+// account's logins is read, so a member with no added login meets the
+// refusals in the order they met before logins existed: a workspace they
+// cannot reach before an account not shared with them, and no read of the
+// workspace's variables for a launch that is refused.
+func TestALaunchIsAdmittedBeforeItReadsTheWorkspaceOrTheLogins(t *testing.T) {
+	e := newAccessEnv(t, nil)
+	if err := e.db.GrantWorkspace(context.Background(), e.wsA.ID, e.u.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, account := range []domain.MemberID{e.a.ID, e.u.ID} {
+		raw, err := json.Marshal(protocol.RunLaunchParams{
+			WorkspaceID: string(e.wsA.ID), ExtraWorkspaceIDs: []string{string(e.wsB.ID)}, Task: "refused", Harness: "claude", AccountMemberID: string(account),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, perr := e.srv.dispatch(context.Background(), e.u.ID, protocol.MethodRunLaunch, raw)
+		if perr == nil || perr.Code != protocol.CodeNotFound {
+			t.Fatalf("U's launch on %s's account with a workspace U cannot reach: %v; want the workspace refusal first", account, perr)
+		}
+		e.runs.mu.Lock()
+		reads := e.runs.environmentReads
+		e.runs.mu.Unlock()
+		if len(reads) != 0 {
+			t.Fatalf("a refused launch read the variables of %v", reads)
+		}
+	}
+}
+
+// fakeLoginSignIns reports the sessions LoginInUse lists, fails to end
+// sign-ins with endErr, and records whose logins it reconciled.
+type fakeLoginSignIns struct {
+	LoginSignIns
+	inUse      map[domain.RunID]domain.MemberID
+	endErr     error
+	reconciled []domain.MemberID
+}
+
+func (f *fakeLoginSignIns) LoginInUse(context.Context, domain.Account) (map[domain.RunID]domain.MemberID, error) {
+	return f.inUse, nil
+}
+
+func (f *fakeLoginSignIns) EndLoginSignIns(context.Context, domain.MemberID) error {
+	return f.endErr
+}
+
+func (f *fakeLoginSignIns) ReconcileLogins(_ context.Context, member domain.MemberID) error {
+	f.reconciled = append(f.reconciled, member)
+	return nil
+}
+
+// A removal refused for a login in use names the owner's own sessions,
+// queued subsessions included, counts the teammates', and names the
+// command that moves those off it, which this server has.
+func TestRemovingALoginInUseNamesTheOwnersSessionsAndCountsTheRest(t *testing.T) {
+	e := newLoginEnv(t)
+	e.seed(t, e.member.ID, "lgn-work000000", "work", "ada@work.example.test")
+	_, bo := addMember(t, e.testEnv, "Bo", domain.RoleCollaborator, false)
+	e.srv.cfg.LoginSignIns = &fakeLoginSignIns{inUse: map[domain.RunID]domain.MemberID{
+		e.run.ID: e.member.ID, "run-queuedchild": e.member.ID, "run-teammate000": bo.ID,
+	}}
+	_, perr := e.call(t, e.member.ID, protocol.MethodAgentLoginRemove, protocol.AgentLoginParams{Agent: "claude", LoginID: "lgn-work000000"})
+	own := []string{string(e.run.ID), "run-queuedchild"}
+	slices.Sort(own)
+	want := `login "work" is in use by your sessions ` + strings.Join(own, ", ") + ` (end them) and 1 of your teammates' sessions`
+	if perr == nil || perr.Code != protocol.CodeConflict || !strings.Contains(perr.Message, want) || !strings.Contains(perr.Message, "cloudfield account revoke <member-id>") || strings.Contains(perr.Message, "use for shares") {
+		t.Fatalf("removal of a login in use: %v; want %q and the revoke command", perr, want)
+	}
+}
+
+// Reopening a teammate's session on an added login is refused by the
+// relaunch itself, in provisioning's words, once its owner turned the
+// login's automatic use off: the session would mount it without its owner
+// naming it.
+func TestRelaunchOnALoginTurnedAutomaticOffIsRefusedUpFront(t *testing.T) {
+	e := newLoginEnv(t)
+	ctx := context.Background()
+	_, grace := addMember(t, e.testEnv, "Grace", domain.RoleCollaborator, false)
+	e.seed(t, grace.ID, "lgn-work000000", "work", "grace@work.example.test")
+	if _, err := e.db.ShareAccount(ctx, grace.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	run := &domain.Run{WorkspaceID: e.ws.ID, MemberID: e.member.ID, AccountMemberID: grace.ID, AccountLogin: "lgn-work000000",
+		Task: "t", Harness: "claude", Mode: domain.LaunchTUI, Status: domain.RunRunning, Branch: "aether/run-login"}
+	if err := e.db.CreateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.UpdateRunStatus(ctx, run.ID, domain.RunMerged, "closed; retained container", "", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.db.SetAgentLoginAutomatic(ctx, grace.ID, "claude", "lgn-work000000", false); err != nil {
+		t.Fatal(err)
+	}
+	_, perr := e.call(t, e.member.ID, protocol.MethodRunRelaunch, protocol.RunIDParams{RunID: string(run.ID)})
+	if perr == nil || perr.Code != protocol.CodeDenied || !strings.Contains(perr.Message, "login lgn-work000000 of this account is not available to you") {
+		t.Fatalf("relaunch on a login turned automatic off: %v; want refused as provisioning refuses it", perr)
+	}
+	if calls := e.runs.Calls(); len(calls) != 0 {
+		t.Fatalf("scheduler calls after the refused relaunch = %v; want none", calls)
+	}
+	if err := e.db.SetAgentLoginAutomatic(ctx, grace.ID, "claude", "lgn-work000000", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, perr := e.call(t, e.member.ID, protocol.MethodRunRelaunch, protocol.RunIDParams{RunID: string(run.ID)}); perr != nil {
+		t.Fatalf("relaunch once the login is automatic again: %v", perr)
+	}
+}
+
+// Removing a member whose sign-in could not be ended keeps that sign-in's
+// login directory for the next start, and removes every other login of the
+// member now rather than keeping them all.
+func TestMemberRemovalThatCannotEndASignInStillRemovesTheOtherLogins(t *testing.T) {
+	e := newLoginEnv(t)
+	asSuperAdmin(t, e.testEnv)
+	_, bob := addMember(t, e.testEnv, "Bob", domain.RoleCollaborator, false)
+	e.seed(t, bob.ID, "lgn-work000000", "work", "bob@work.example.test")
+	signIns := &fakeLoginSignIns{endErr: errors.New("test: destroy unavailable")}
+	e.srv.cfg.LoginSignIns = signIns
+	if err := controlClient(t, e.testEnv).Call(protocol.MethodMemberRemove, protocol.MemberRemoveParams{MemberID: string(bob.ID)}, nil); err != nil {
+		t.Fatalf("member.remove: %v", err)
+	}
+	if len(signIns.reconciled) != 1 || signIns.reconciled[0] != bob.ID {
+		t.Fatalf("logins reconciled for %v; want Bob's, whose other logins go now", signIns.reconciled)
+	}
+	dir, _ := e.logins.Path(bob.ID, "claude", "lgn-work000000")
+	if _, err := os.Lstat(dir); err != nil {
+		t.Fatalf("Bob's login directory before reconcile: %v; want it left to reconcile, not removed whole", err)
 	}
 }

@@ -278,3 +278,16 @@ func TestASubsessionOutcomeIsForItsParentOnly(t *testing.T) {
 		t.Error("a top-level success awaits review")
 	}
 }
+
+func TestLoginNamesCannotLookLikeLoginIDs(t *testing.T) {
+	for _, name := range []string{"lgn-abc", "lgn-"} {
+		if err := ValidateLoginName(name); err == nil {
+			t.Errorf("ValidateLoginName(%q) = nil; want it refused", name)
+		}
+	}
+	for _, name := range []string{"work", "lgn", "my-lgn-2"} {
+		if err := ValidateLoginName(name); err != nil {
+			t.Errorf("ValidateLoginName(%q) = %v", name, err)
+		}
+	}
+}

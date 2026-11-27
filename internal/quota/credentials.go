@@ -36,17 +36,17 @@ func parseClaudeCredential(data []byte, readErr error, now time.Time) credential
 		return credential{status: "unavailable", err: "credential file unavailable", fingerprint: fingerprint("claude-read-error")}
 	}
 	if len(data) == 0 {
-		return credential{status: "unauthenticated", err: "Claude OAuth credential not found", fingerprint: fingerprint("claude-missing")}
+		return credential{status: "unauthenticated", err: "Claude OAuth credential not found", absent: true, fingerprint: fingerprint("claude-missing")}
 	}
 	var shape claudeCredentialFileShape
 	if err := parseJSON(data, &shape); err != nil {
-		return credential{status: "error", err: "Claude credential file is malformed", fingerprint: fingerprint("claude-malformed", string(data))}
+		return credential{status: "error", err: "Claude credential file is malformed", absent: true, fingerprint: fingerprint("claude-malformed", string(data))}
 	}
 	if shape.ClaudeAIOAuth == nil {
 		if strings.TrimSpace(shape.APIKey) != "" || strings.TrimSpace(shape.APIKeyAlt) != "" || strings.TrimSpace(shape.APIKeyEnv) != "" {
 			return credential{status: "unsupported", err: "API-key authentication does not expose Claude subscription usage", fingerprint: fingerprint("claude-api-key", string(data))}
 		}
-		return credential{status: "unauthenticated", err: "Claude OAuth credential not found", fingerprint: fingerprint("claude-missing-oauth", string(data))}
+		return credential{status: "unauthenticated", err: "Claude OAuth credential not found", absent: true, fingerprint: fingerprint("claude-missing-oauth", string(data))}
 	}
 	oauth := shape.ClaudeAIOAuth
 	token, validToken := cleanHeaderValue(oauth.AccessToken)

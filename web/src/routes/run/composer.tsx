@@ -45,7 +45,7 @@ interface ComposerProps {
   onFocusChange: (focused: boolean) => void
   /** The gate can keep the box unmounted, so focusing waits for it to mount. */
   autoFocus?: boolean
-  /** One line, for a tile the keyboard is not in; a docked one keeps a send button. The field is the same one, so a press on it keeps its focus when the box opens. */
+  /** One line with a send button, for a docked box nobody has opened. The field is the same one, so a press on it keeps its focus when the box opens. */
   collapsed?: boolean
   /** Under a view other than Chat: the frame spans its tile below a seam. */
   docked?: boolean
@@ -115,11 +115,10 @@ const pillLook: Record<Pill, { label: string; Icon: typeof ArrowUp; variant: 'pr
   resume: { label: 'Resume', Icon: Play, variant: 'primary' },
 }
 
-function ComposerBox({ textarea, autoFocus, collapsed, docked, value, onChange, onCaret, onFocusChange, onSend, onQueue, onEscape, placeholder, describedBy, menu, onKeyDown, combobox, onPaste, readOnly, images, attach, footer }: {
+function ComposerBox({ textarea, autoFocus, collapsed, value, onChange, onCaret, onFocusChange, onSend, onQueue, onEscape, placeholder, describedBy, menu, onKeyDown, combobox, onPaste, readOnly, images, attach, footer }: {
   textarea: React.RefObject<HTMLTextAreaElement | null>
   autoFocus?: boolean
   collapsed?: boolean
-  docked?: boolean
   value: string
   onChange: (value: string, caret: number) => void
   onCaret?: (caret: number) => void
@@ -244,11 +243,9 @@ function ComposerBox({ textarea, autoFocus, collapsed, docked, value, onChange, 
       {collapsed ? (
         <>
           {more > 0 && <span className="shrink-0 px-1 text-ui-sm text-muted">+{more} {more === 1 ? 'line' : 'lines'}</span>}
-          {docked && (
-            <Button variant="ghost" size="icon-sm" label="Send" disabled={!value.trim() || readOnly} onClick={onSend}>
-              <ArrowUp />
-            </Button>
-          )}
+          <Button variant="ghost" size="icon-sm" label="Send" disabled={!value.trim() || readOnly} onClick={onSend}>
+            <ArrowUp />
+          </Button>
         </>
       ) : (
         <div className={cn('wrap-from-end min-w-0 items-center gap-1 px-2 pb-2', opening && 'pointer-events-none')}>{footer}</div>
@@ -307,7 +304,7 @@ function SendActions({ pill, label, hint, description, disabled, onClick, onCanc
   )
 }
 
-function StandardComposer({ run, agent, room, textarea, autoFocus, collapsed, onFocusChange, onEscape, onDropStatus }: ComposerProps) {
+function StandardComposer({ run, agent, room, textarea, autoFocus, onFocusChange, onEscape, onDropStatus }: ComposerProps) {
   const self = useSelf(run.workspace_id)
   const cap = useCapability()
   const steerOthers = useStore((s) => s.workspaces[run.workspace_id]?.steer_others)
@@ -365,7 +362,6 @@ function StandardComposer({ run, agent, room, textarea, autoFocus, collapsed, on
       <ComposerBox
         textarea={textarea}
         autoFocus={autoFocus}
-        collapsed={collapsed}
         value={body}
         readOnly={Boolean(draft.busy)}
         onChange={(next) => saveComposerDraft(run.id, { body: next })}
@@ -631,7 +627,6 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
         textarea={textarea}
         autoFocus={autoFocus}
         collapsed={collapsed}
-        docked={docked}
         value={body}
         readOnly={busy}
         onPaste={images.onPaste}

@@ -373,11 +373,13 @@ type fakeRuns struct {
 	terminalStopErr error
 	calls           []string
 	// revokes lists each RevokeAccount as owner:grantee.
-	revokes       []string
-	launchOptions []domain.LaunchOptions
-	paused        map[domain.RunID]bool
-	retentions    map[domain.RunID]scheduler.RetentionInfo
-	retentionErr  error
+	revokes []string
+	// environmentReads lists the workspaces EnvironmentSignsIn read.
+	environmentReads []domain.WorkspaceID
+	launchOptions    []domain.LaunchOptions
+	paused           map[domain.RunID]bool
+	retentions       map[domain.RunID]scheduler.RetentionInfo
+	retentionErr     error
 	// sharedLaunches is what CheckSharedLaunch reports, keyed by
 	// "member:account:harness"; absent means launchable. sharedRefusals is
 	// the refusal it reports with the same key.
@@ -483,15 +485,26 @@ func (f *fakeRuns) CachedAgentModels(_ domain.MemberID, harness string) (protoco
 	return protocol.AgentModelsResult{Source: protocol.ModelSourceAgent, Models: []protocol.AgentModel{{ID: harness}, {ID: "opus"}}}, true
 }
 
-func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.MemberID, domain.MemberID, string, domain.LaunchMode) (bool, error) {
+func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.MemberID, domain.Account, string, domain.LaunchMode) (bool, error) {
 	return true, nil
+}
+
+func (f *fakeRuns) StartLogin(context.Context, domain.WorkspaceID, domain.MemberID, domain.MemberID, string, domain.LaunchMode) (domain.LoginID, error) {
+	return "", nil
+}
+
+func (f *fakeRuns) EnvironmentSignsIn(_ context.Context, workspace domain.WorkspaceID, _ string, _ domain.LaunchMode) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.environmentReads = append(f.environmentReads, workspace)
+	return false, nil
 }
 
 func (f *fakeRuns) DefaultMode(context.Context, domain.MemberID, domain.MemberID, string) (domain.LaunchMode, error) {
 	return domain.LaunchACP, nil
 }
 
-func (f *fakeRuns) LoginProblem(domain.MemberID, string, harness.Profile) (string, bool, error) {
+func (f *fakeRuns) LoginProblem(domain.MemberID, domain.MemberID, string, harness.Profile) (string, bool, error) {
 	return f.loginProblem, f.loginProblem != "", nil
 }
 
