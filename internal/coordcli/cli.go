@@ -240,8 +240,8 @@ Answer only what was asked; never include secrets or credentials.
 `,
 	"report": `usage: aether-internal report [--outcome] <success|failure|blocked|needs-input|waiting|answered> [--for <agents|ci|process>] [--until <condition>]... (--summary <text> | --summary-file <path>) [--evidence-ref <ref>] [--idempotency-key <key>]
 
-Record your state: end every turn with exactly one report, as your last
-action. aether-internal skill lists which outcome your role reports when.
+Record your state: report once every turn, when its work is done, then
+write your reply. aether-internal skill lists which outcome your role reports when.
 Subagents and spawned workflows never report; they return their results to
 the agent that started them.
 Success and failure: verify the changed behavior and collect required evidence

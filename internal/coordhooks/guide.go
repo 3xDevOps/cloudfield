@@ -159,7 +159,7 @@ func Brief(g Guide) string {
 	if g.cli() == NewCLI {
 		command, never = NewCLI+" report", "Never report mid-work."
 	}
-	return "Cloudfield hosts this session. End every turn with exactly one aether_report (or " + command + ") as your last action, new idempotency_key each turn: " +
+	return "Cloudfield hosts this session. Report once a turn with aether_report (or " + command + ") when done, then reply; new idempotency_key each turn: " +
 		answered + waiting + needsInput + "blocked = a human must act; success|failure = the work you own is verified done or cannot be done. " +
 		never + " Subagents and spawned workflows never report."
 }
@@ -232,8 +232,8 @@ func ReportGuide(g Guide) string {
 		// NewCLI's guide goes without the quotes, to fit its cap.
 		command = "`" + command + "`"
 	}
-	fmt.Fprintf(&b, "REPORT ONCE EVERY TURN, when its work is done: aether_report (a new idempotency_key each turn), else %s.\n", command)
-	b.WriteString("Then give the result as message text and stop; thinking and the summary are not a reply. Report again only if one is refused or says to act.\n")
+	fmt.Fprintf(&b, "REPORT ONCE A TURN, when its work is done: aether_report (a new idempotency_key each turn), else %s.\n", command)
+	b.WriteString("Then give the result as text and stop; thinking and the summary are not a reply. Report again only to retry a refused one or after acting on `resolved`.\n")
 	for _, o := range Outcomes(g) {
 		fmt.Fprintf(&b, "- %s: %s\n", o.Name, o.Use)
 	}
