@@ -80,12 +80,12 @@ func (s *Server) serveControlFrame(ctx context.Context, member domain.MemberID, 
 			input.releaseSlot()
 		}
 	})
-	resp := s.handleRequest(context.WithValue(ctx, afterResponseKey{}, slot), member, line)
+	resp, compress := s.handleRequest(context.WithValue(ctx, afterResponseKey{}, slot), member, line)
 	// Do not answer or restart for an update after channel/server teardown.
 	if ctx.Err() != nil {
 		return false
 	}
-	return respond(ch, resp, slot) == nil
+	return respond(ch, resp, compress, slot) == nil
 }
 
 var errControlFrameBusy = errors.New("sshd: too many expanded control frames")
@@ -234,8 +234,8 @@ func (r *controlFrameReader) finish() {
 // server running the old image, reporting the update as applied, and
 // holding its one update slot for the rest of the process's life. The
 // client can reconnect; a swap with no restart cannot fix itself.
-func respond(w io.Writer, resp protocol.Response, slot *afterResponse) error {
-	err := writeJSONLine(w, resp)
+func respond(w io.Writer, resp protocol.Response, compress bool, slot *afterResponse) error {
+	err := protocol.WriteResponse(w, resp, compress)
 	if slot.fn != nil {
 		slot.fn()
 	}
@@ -273,18 +273,39 @@ func writeJSONLine(w io.Writer, v any) error {
 	return err
 }
 
-func (s *Server) handleRequest(ctx context.Context, member domain.MemberID, line []byte) protocol.Response {
+type gzipKey struct{}
+
+// gzipAsked reports whether this request may still get a gzip frame: it
+// asked for one, for a listed method, and no handler has ruled it out.
+func gzipAsked(ctx context.Context) bool {
+	gzip, ok := ctx.Value(gzipKey{}).(*bool)
+	return ok && *gzip
+}
+
+// sendPlain keeps this request's response a JSON line even when the
+// caller asked for gzip: a handler calls it when the result mixes access
+// domains, which one compression context must not hold.
+func sendPlain(ctx context.Context) {
+	if gzip, ok := ctx.Value(gzipKey{}).(*bool); ok {
+		*gzip = false
+	}
+}
+
+// handleRequest also reports whether the response may be compressed.
+func (s *Server) handleRequest(ctx context.Context, member domain.MemberID, line []byte) (protocol.Response, bool) {
 	req, resp, valid := protocol.ParseRequest(line)
 	if !valid {
-		return resp
+		return resp, false
 	}
+	gzip := req.AcceptEncoding == protocol.EncodingGzip && protocol.GzipMethods[req.Method]
+	ctx = context.WithValue(ctx, gzipKey{}, &gzip)
 	result, rpcErr := s.dispatch(ctx, member, req.Method, req.Params)
 	if rpcErr != nil {
 		resp.Error = rpcErr
-		return resp
+		return resp, false
 	}
 	resp.Result = result
-	return resp
+	return resp, gzip
 }
 
 // dispatch runs one control-channel method for member: the SSH control

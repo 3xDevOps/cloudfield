@@ -337,6 +337,122 @@ The server gateway performs the equivalent identity lookup on each request.
 WhoIs failures are refused before dispatch; a tagged node is denied and an
 unavailable identity service is reported as `-32004`.
 
+### Compressed responses
+
+Nothing between the server and `cloudfield gui` compresses: SSH runs
+without compression and the edge relay's WebSockets have it off. A 1,000-event
+`workspace.timeline` page, of which Lanes reads up to five per workspace
+(`historyBudget` in `web/src/store/lanes.ts`), is about 370 KB of JSON, so
+the gateway asks the server to gzip it.
+
+The control channel (`aether-control`) carries one JSON request line and
+gets one response frame back. A caller asks for compression per request with
+one more member on the request object:
+
+```json
+{"jsonrpc":"2.0","id":7,"method":"workspace.timeline","params":{"workspace_id":"..."},"accept_encoding":"gzip"}
+```
+
+The server may then answer with a gzip frame instead of a JSON line: the
+16-byte ASCII header `gzip <n>\n`, with `n` as exactly ten decimal digits,
+zero-padded, followed by `n` bytes holding one gzip member (RFC 1952) whose
+content is the response object, without its newline, and nothing after it:
+
+```text
+gzip 0000029977\n<29977 bytes of gzip>
+```
+
+A JSON response always starts with `{`, so a caller that asked tells the two
+apart by the first bytes. A caller that does not send `accept_encoding` gets
+the JSON line, byte for byte as before, and a server that predates the field
+ignores it and answers with the JSON line, so either side may be older with
+no error and no extra round trip. Only `cloudfield gui` asks
+(`Client.AcceptGzip` in `internal/protocol/client.go`, called in
+`internal/localgw/backend.go`), and only on requests for a method in
+`GzipMethods` (`internal/protocol/compress.go`), the one list the client and
+the server share; every other request, and every request from any other
+caller of the channel, the CLI among them, is byte for byte as before.
+
+The server compresses a response only when all of these hold
+(`WriteResponse` in `internal/protocol/compress.go`):
+
+- the request asked for it;
+- the call succeeded: errors are always JSON lines;
+- the method is `workspace.timeline`, the only entry of `GzipMethods`;
+- the JSON line is at least 8 KiB and shorter than 96 MiB (`MaxLineBytes`),
+  so a line the gateway would refuse is refused before anything is inflated;
+- for `workspace.timeline`, every reader of the workspace sees every event
+  on the page whole (below);
+- the gzip frame is smaller than the line.
+
+It uses `compress/gzip` at the default level 6 and reserves a quarter of the
+line's size for the frame, beside the encoded line it already holds. Measured
+on one CPU of a Ryzen 7600X (`BenchmarkGzipLevels` in
+`internal/protocol/compress_test.go`), a 365 KB timeline page costs 1.0 to
+1.5 ms to compress, depending on the run, and 0.5 ms to decompress, and goes
+out as 41 KB; level 1 takes 0.4 ms and sends 45 KB, which wins only on links
+faster than about 35 to 55 Mbit/s. Under 8 KiB compressing costs several times what encoding the
+response does, and the response fits in the first TCP round trip either way.
+
+The gateway reads a frame only in answer to a request that asked for one;
+for any other method, `files.read`, `run.patch` and the other blob methods
+among them, a frame is refused as a malformed line. A header
+that is not exactly the documented 16 bytes, or names more than 96 MiB, is
+refused before the body is read; the body is read as it arrives, not
+allocated at its declared size; decompression stops one byte past the limit
+with `protocol: line exceeds <limit> bytes`, so a small frame cannot expand
+without bound; and bytes after the gzip member are refused.
+
+The method list is one compression context per access domain. Compressing a
+response that holds both text an attacker can write and a secret lets someone
+who sees the encrypted stream's sizes, a network observer or the edge relay,
+recover the secret by changing the text and watching the size. The log query
+behind a `workspace.timeline` page matches one workspace, but the server
+filters each event per reader (`events.Reachable` in
+`internal/events/stream.go`), so a page can hold what only some of that
+workspace's readers see: anything addressed to one member (an assistant
+notice); every event of a session with a repository in another workspace;
+the events of a deleted session other than a single-repository session's own
+`run.deleted`, which every reader sees; agent mail to either kind of session; another workspace's
+repository (a branch, pull request or diff of an extra repository); member
+changes, shown only to readers who see that member; and overlap peers. The
+server sends a page holding any of them as a JSON line: `events.OneWorkspace`
+asks `Reachable` itself whether the event passes a scope that reaches only
+the page's workspace, only sessions wholly inside it, and no member by name
+(`pageScope` in `internal/sshd/workspace_scope.go`, called from
+`internal/sshd/timeline.go`). A Lanes page (`run.status`, `coord.message`,
+`coord.message.acked`) compresses unless the page holds an event of a
+multi-repository or deleted session or mail to one. The server runs this
+check only for a request that asked for gzip, stops at the first event that
+fails, and reads each session's workspaces once per request, shared with the
+filter that built the page. That a page asked for gzip came back plain tells
+a size observer the page holds such an event, a private notice, an overlap or
+a member change; plaintext sizes and the live event stream already show most
+of that.
+`run.list` and `changes.list` are not compressed: without a
+workspace they append every workspace the caller reaches into one response,
+so a member of one workspace could place text beside another workspace's
+sessions. A method whose response can span workspaces must not be added.
+`run.acp.history` stays a JSON line because a transcript holds tool output,
+which can include files and environment values, beside text an agent fetched
+from anywhere. File reads, patches, configuration and home files stay JSON
+lines for the same reason, and because base64 and diffs gain little.
+
+A compressed page still holds text that can carry a secret. Agents write a
+status change's reason and its wait's detail and error, which every Lanes
+page holds, and session titles, reports (summary, next action, outcome,
+waiting for, evidence), usage-limit messages and activity details (command
+lines, URLs, file paths). People write steering messages. The server writes
+notes into the same timeline entries: environment variable names, egress
+hosts, `--allow-secret` names, and `workspace origin set to <origin>`, where
+an https origin may carry `user:TOKEN@`, so a credential can sit behind a
+known prefix. Branch names, conflicting file names, cleanup errors and
+snapshot errors come from the repository and the host. Someone who sees the
+stream's sizes and can make an agent in the same workspace write chosen
+text could, over many page reads, probe that text. Removing
+`workspace.timeline` from `GzipMethods` in `internal/protocol/compress.go`
+turns compression off entirely.
+
 ## Routes
 
 | Method | Path | Purpose |

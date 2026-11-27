@@ -245,7 +245,7 @@ func TestRespondRestartsEvenWhenTheWriteFails(t *testing.T) {
 	slot := &afterResponse{fn: func() { ran = true }}
 	want := errors.New("channel closed")
 
-	err := respond(failingWriter{err: want}, protocol.Response{JSONRPC: "2.0"}, slot)
+	err := respond(failingWriter{err: want}, protocol.Response{JSONRPC: "2.0"}, false, slot)
 	if !errors.Is(err, want) {
 		t.Fatalf("respond error = %v, want the write error", err)
 	}
@@ -261,7 +261,7 @@ func TestRespondWritesBeforeTheDeferredWork(t *testing.T) {
 	var order []string
 	slot := &afterResponse{fn: func() { order = append(order, "deferred") }}
 
-	if err := respond(&out, protocol.Response{JSONRPC: "2.0", ID: json.RawMessage(`1`)}, slot); err != nil {
+	if err := respond(&out, protocol.Response{JSONRPC: "2.0", ID: json.RawMessage(`1`)}, false, slot); err != nil {
 		t.Fatalf("respond: %v", err)
 	}
 	order = append(order, "checked")
@@ -277,7 +277,7 @@ func TestRespondWritesBeforeTheDeferredWork(t *testing.T) {
 func TestRespondWithNothingDeferred(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	if err := respond(&out, protocol.Response{JSONRPC: "2.0"}, &afterResponse{}); err != nil {
+	if err := respond(&out, protocol.Response{JSONRPC: "2.0"}, false, &afterResponse{}); err != nil {
 		t.Fatalf("respond: %v", err)
 	}
 }

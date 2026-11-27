@@ -99,8 +99,9 @@ func reachesAll(actor permissions.Actor, workspaces []domain.WorkspaceID) bool {
 	return true
 }
 
-// runScopes caches the workspaces of the runs one reader's events name. A
-// run's extra repositories are stored with the run and never change.
+// runScopes caches the workspaces of the runs one read of the event log
+// names. A run's extra repositories are stored with the run and never
+// change.
 type runScopes struct {
 	st   store.Store
 	runs map[domain.RunID][]domain.WorkspaceID
@@ -110,6 +111,19 @@ func newRunScopes(st store.Store) *runScopes {
 	return &runScopes{st: st, runs: map[domain.RunID][]domain.WorkspaceID{}}
 }
 
+// workspaces are run id's workspaces, nil for a run that no longer exists
+// or cannot be read.
+func (c *runScopes) workspaces(ctx context.Context, id domain.RunID) []domain.WorkspaceID {
+	workspaces, ok := c.runs[id]
+	if !ok {
+		if run, err := c.st.GetRun(ctx, id); err == nil {
+			workspaces = runWorkspaces(run)
+		}
+		c.runs[id] = workspaces
+	}
+	return workspaces
+}
+
 // reaches reports whether actor reaches every workspace of run id. A run
 // that no longer exists, or cannot be read, is reached by super admins
 // alone: the extra repositories it had are no longer known.
@@ -117,21 +131,12 @@ func (c *runScopes) reaches(ctx context.Context, actor permissions.Actor, id dom
 	if actor.Role == domain.RoleSuperAdmin {
 		return true
 	}
-	workspaces, ok := c.runs[id]
-	if !ok {
-		run, err := c.st.GetRun(ctx, id)
-		if err != nil {
-			return false
-		}
-		workspaces = runWorkspaces(run)
-		c.runs[id] = workspaces
-	}
-	return reachesAll(actor, workspaces)
+	workspaces := c.workspaces(ctx, id)
+	return workspaces != nil && reachesAll(actor, workspaces)
 }
 
 // eventScope is what one read of the event log may show actor.
-func (s *Server) eventScope(ctx context.Context, actor permissions.Actor) events.Scope {
-	runs := newRunScopes(s.cfg.Store)
+func (s *Server) eventScope(ctx context.Context, actor permissions.Actor, runs *runScopes) events.Scope {
 	var sees func(domain.MemberID) bool
 	return events.Scope{
 		Workspace: actor.Reaches,
@@ -142,6 +147,25 @@ func (s *Server) eventScope(ctx context.Context, actor permissions.Actor) events
 			}
 			return sees(id)
 		},
+	}
+}
+
+// pageScope is what every reader of workspace ws may see in its history:
+// that workspace, the runs that exist and have no repository elsewhere,
+// and no member by name.
+func pageScope(ctx context.Context, ws domain.WorkspaceID, runs *runScopes) events.Scope {
+	return events.Scope{
+		Workspace: func(id domain.WorkspaceID) bool { return id == ws },
+		Run: func(id domain.RunID) bool {
+			workspaces := runs.workspaces(ctx, id)
+			for _, w := range workspaces {
+				if w != ws {
+					return false
+				}
+			}
+			return workspaces != nil
+		},
+		Sees: func(domain.MemberID) bool { return false },
 	}
 }
 

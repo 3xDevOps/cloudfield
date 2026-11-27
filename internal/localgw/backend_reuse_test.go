@@ -25,7 +25,7 @@ func TestSSHBackendReusesAnAnsweredControlChannel(t *testing.T) {
 			<-unanswered
 		}
 		return json.RawMessage(`{}`)
-	}, false)
+	}, false, nil)
 	b := NewSSHBackend(cli.Config{Addr: server.Addr().String(), KnownHosts: filepath.Join(home, "known_hosts")})
 	t.Cleanup(func() { _ = b.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -89,7 +89,7 @@ func TestSSHBackendGivesConcurrentCallsTheirOwnChannels(t *testing.T) {
 		arrived <- struct{}{}
 		<-release
 		return json.RawMessage(`{}`)
-	}, false)
+	}, false, nil)
 	b := NewSSHBackend(cli.Config{Addr: server.Addr().String(), KnownHosts: filepath.Join(home, "known_hosts")})
 	t.Cleanup(func() { _ = b.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -132,7 +132,7 @@ func TestSSHBackendGivesConcurrentCallsTheirOwnChannels(t *testing.T) {
 func TestSSHBackendSurvivesAnIdleControlChannelEnding(t *testing.T) {
 	home := testhome.Isolate(t)
 	server := listen(t)
-	connections, channels := serveControlChannels(t, server, nil, true)
+	connections, channels := serveControlChannels(t, server, nil, true, nil)
 	b := NewSSHBackend(cli.Config{Addr: server.Addr().String(), KnownHosts: filepath.Join(home, "known_hosts")})
 	t.Cleanup(func() { _ = b.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -164,7 +164,7 @@ func TestSSHBackendOpensAChannelOnAQuietConnection(t *testing.T) {
 	shortenKeptFresh(t, 200*time.Millisecond)
 	home := testhome.Isolate(t)
 	server := listen(t)
-	_, channels := serveControlChannels(t, server, nil, false)
+	_, channels := serveControlChannels(t, server, nil, false, nil)
 	b := NewSSHBackend(cli.Config{Addr: server.Addr().String(), KnownHosts: filepath.Join(home, "known_hosts")})
 	t.Cleanup(func() { _ = b.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -230,7 +230,7 @@ func TestSSHBackendSendsACallAtMostTwice(t *testing.T) {
 			return nil
 		}
 		return json.RawMessage(`{}`)
-	}, false)
+	}, false, nil)
 	b := NewSSHBackend(cli.Config{Addr: server.Addr().String(), KnownHosts: filepath.Join(home, "known_hosts")})
 	t.Cleanup(func() { _ = b.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -253,7 +253,7 @@ func TestSSHBackendSendsACallAtMostTwice(t *testing.T) {
 func TestSSHBackendReplayTakesNoKeptChannel(t *testing.T) {
 	home := testhome.Isolate(t)
 	server := listen(t)
-	_, channels := serveControlChannels(t, server, nil, false)
+	_, channels := serveControlChannels(t, server, nil, false, nil)
 	b := NewSSHBackend(cli.Config{Addr: server.Addr().String(), KnownHosts: filepath.Join(home, "known_hosts")}).(*sshBackend)
 	t.Cleanup(func() { _ = b.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -275,7 +275,7 @@ func TestSSHBackendReplayTakesNoKeptChannel(t *testing.T) {
 func TestSSHBackendCancelledCallOnAKeptChannelIsNotSentAgain(t *testing.T) {
 	home := testhome.Isolate(t)
 	server := listen(t)
-	_, channels := serveControlChannels(t, server, nil, true)
+	_, channels := serveControlChannels(t, server, nil, true, nil)
 	b := NewSSHBackend(cli.Config{Addr: server.Addr().String(), KnownHosts: filepath.Join(home, "known_hosts")})
 	t.Cleanup(func() { _ = b.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -380,5 +380,94 @@ func TestSSHBackendKeepsAtMostMaxIdleControls(t *testing.T) {
 	b.mu.Unlock()
 	if kept != maxIdleControls {
 		t.Fatalf("%d control channels kept after %d calls at once, want %d", kept, calls, maxIdleControls)
+	}
+}
+
+// The gateway asks for compressed timeline pages; a server that does not
+// know the field answers with plain JSON lines, which the gateway reads as
+// before, on a new channel and on a kept one.
+func TestSSHBackendReadsPlainAnswersFromAServerWithoutCompression(t *testing.T) {
+	home := testhome.Isolate(t)
+	server := listen(t)
+	big, err := json.Marshal(map[string]string{"text": strings.Repeat("plain answer ", 64<<10)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveControlChannels(t, server, func(string) json.RawMessage { return big }, false, nil)
+	b := NewSSHBackend(cli.Config{Addr: server.Addr().String(), KnownHosts: filepath.Join(home, "known_hosts")})
+	t.Cleanup(func() { _ = b.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for range 2 {
+		got, perr := b.Call(ctx, protocol.MethodWorkspaceTimeline, nil)
+		if perr != nil {
+			t.Fatal(perr)
+		}
+		if string(got) != string(big) {
+			t.Fatalf("workspace.timeline returned %d bytes, want the server's %d", len(got), len(big))
+		}
+	}
+}
+
+// The gateway asks for compression only on the methods the server may
+// compress, and reads the frames a compressing server sends, on a new
+// channel and on a kept one, and a plain answer on the same kept channel
+// after them. Every other request is byte for byte what it was before.
+func TestSSHBackendReadsCompressedAnswers(t *testing.T) {
+	home := testhome.Isolate(t)
+	server := listen(t)
+	big, err := json.Marshal(map[string]string{"text": strings.Repeat("compressed answer ", 64<<10)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	small := json.RawMessage(`{"small":true}`)
+	gz := new(compressingServer)
+	_, channels := serveControlChannels(t, server, func(method string) json.RawMessage {
+		if method == protocol.MethodWorkspaceTimeline {
+			return big
+		}
+		return small
+	}, false, gz)
+	b := NewSSHBackend(cli.Config{Addr: server.Addr().String(), KnownHosts: filepath.Join(home, "known_hosts")})
+	t.Cleanup(func() { _ = b.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for i, call := range []struct {
+		method string
+		want   json.RawMessage
+	}{
+		{protocol.MethodWorkspaceTimeline, big},
+		{protocol.MethodWorkspaceTimeline, big},
+		{protocol.MethodServerInfo, small},
+	} {
+		got, perr := b.Call(ctx, call.method, nil)
+		if perr != nil {
+			t.Fatalf("call %d, %s: %v", i, call.method, perr)
+		}
+		if string(got) != string(call.want) {
+			t.Fatalf("call %d, %s: %d bytes, want the server's %d", i, call.method, len(got), len(call.want))
+		}
+	}
+	if got := gz.frames.Load(); got != 2 {
+		t.Fatalf("server sent %d gzip frames, want one per timeline call", got)
+	}
+	if got := channels.Load(); got != 1 {
+		t.Fatalf("3 calls opened %d control channels, want 1 kept channel", got)
+	}
+
+	launch := json.RawMessage(`{"workspace_id":"ws-1","task":"fix the build"}`)
+	if _, perr := b.Call(ctx, protocol.MethodRunLaunch, launch); perr != nil {
+		t.Fatal(perr)
+	}
+	lines := gz.requestLines()
+	if len(lines) != 4 || !strings.Contains(lines[0], `"accept_encoding":"gzip"`) || strings.Contains(lines[2], "accept_encoding") {
+		t.Fatalf("requests = %q, want accept_encoding on the timeline calls only", lines)
+	}
+	today, err := json.Marshal(protocol.Request{JSONRPC: "2.0", ID: json.RawMessage("1"), Method: protocol.MethodRunLaunch, Params: launch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines[3] != string(today) {
+		t.Fatalf("run.launch request line = %s, want today's %s", lines[3], today)
 	}
 }

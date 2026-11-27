@@ -17,11 +17,21 @@ type Client struct {
 	rwc    io.ReadWriteCloser
 	r      *bufio.Reader
 	nextID uint64
+	gzip   bool
 }
 
 // NewClient wraps rwc in a control-channel client.
 func NewClient(rwc io.ReadWriteCloser) *Client {
 	return &Client{rwc: rwc, r: bufio.NewReaderSize(rwc, 64<<10)}
+}
+
+// AcceptGzip asks the server to compress large responses on every later
+// call to a method in GzipMethods; other requests stay byte for byte as
+// before. A server that does not know the request field answers as before.
+func (c *Client) AcceptGzip() {
+	c.mu.Lock()
+	c.gzip = true
+	c.mu.Unlock()
 }
 
 // Call performs one JSON-RPC request. params may be nil; result, when
@@ -36,6 +46,10 @@ func (c *Client) Call(method string, params, result any) error {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(strconv.FormatUint(c.nextID, 10)),
 		Method:  method,
+	}
+	gzipOK := c.gzip && GzipMethods[method]
+	if gzipOK {
+		req.AcceptEncoding = EncodingGzip
 	}
 	if params != nil {
 		raw, err := json.Marshal(params)
@@ -52,7 +66,7 @@ func (c *Client) Call(method string, params, result any) error {
 		return fmt.Errorf("protocol: write request: %w", werr)
 	}
 
-	respLine, err := readLine(c.r, responseLineLimit(method))
+	respLine, err := readResponse(c.r, responseLineLimit(method), gzipOK)
 	if err != nil {
 		return fmt.Errorf("protocol: read response: %w", err)
 	}
