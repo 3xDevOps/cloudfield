@@ -13,7 +13,7 @@ import (
 // over, and takes a disk over the member's newest cache when it starts
 // again. A saved VM, whose memory holds the disk's filesystem, keeps its
 // own. A server start removes the cache disks an earlier server left with
-// stopped VMs.
+// stopped VMs, and promotes none of them.
 func TestAStoppedVMKeepsNoCacheDisk(t *testing.T) {
 	h := newHarness(t)
 	cache := runtime.Mount{HostPath: "/data/cache/m1/runs", ContainerPath: "/aether-cache", Kind: runtime.MountCache}
@@ -72,8 +72,8 @@ func TestAStoppedVMKeepsNoCacheDisk(t *testing.T) {
 	}
 
 	// What an earlier server left: run-old stopped with its cache disk,
-	// run-cut stopped with the removal recorded but not done, run-saved
-	// saved.
+	// still to promote after a promotion that failed, run-cut stopped with
+	// the removal recorded but not done, run-saved saved.
 	for _, key := range []string{"run-old", "run-cut"} {
 		session(key)
 		rec, err := h.engine.load(key)
@@ -93,7 +93,10 @@ func TestAStoppedVMKeepsNoCacheDisk(t *testing.T) {
 		if rec, err = h.engine.load(key); err != nil {
 			t.Fatal(err)
 		}
-		rec.Cache = disk
+		rec.Cache, rec.CacheRan = disk, true
+		if !rec.CacheSynced {
+			t.Fatal("a clean stop left the cache unsynced")
+		}
 		if err = h.engine.store(rec); err != nil {
 			t.Fatal(err)
 		}
@@ -102,8 +105,18 @@ func TestAStoppedVMKeepsNoCacheDisk(t *testing.T) {
 	if err := h.engine.save(t.Context(), "run-saved"); err != nil {
 		t.Fatal(err)
 	}
+	h.engine.promotions.Wait()
+	h.images.mu.Lock()
+	h.images.promoted = make(chan string, 1)
+	h.images.mu.Unlock()
 	next := h.newEngine(filepath.Dir(h.engine.root))
 	next.settle(t.Context())
+	next.promotions.Wait()
+	select {
+	case got := <-h.images.promoted:
+		t.Errorf("a server start promoted %q", got)
+	default:
+	}
 	for _, key := range []string{"run-old", "run-cut"} {
 		if rec, err := next.load(key); err != nil || rec.Cache.Path != "" || len(held(key)) != 0 {
 			t.Errorf("after a server start, stopped %s has cache disk %+v, %v and holds %v", key, rec.Cache, err, held(key))

@@ -59,15 +59,9 @@ func cachePool(m runtime.Mount) string {
 // becomes that newest first, so the member's next session starts from it:
 // it is linked under the key's lock, then copied and published in the
 // background. A save alone never retires, and an Isolated session's cache,
-// an overlay in a container, never goes back. The record lets go of the
-// disk before the files do, so a server that stops in between leaves files
-// the next one removes.
+// an overlay in a container, never goes back.
 func (e *engine) retireCache(rec *record) {
-	m, ok := cacheMount(rec.Mounts)
-	if !ok {
-		return
-	}
-	if rec.CacheRan && rec.CacheSynced && m.Overlay == "" {
+	if m, ok := cacheMount(rec.Mounts); ok && rec.CacheRan && rec.CacheSynced && m.Overlay == "" {
 		snapshot, err := e.cfg.Images.SnapshotCache(rec.Cache)
 		if err != nil {
 			slog.Warn("vm runtime: link the cache of a stopped VM", "vm", rec.Key, "error", err)
@@ -78,6 +72,16 @@ func (e *engine) retireCache(rec *record) {
 				}
 			})
 		}
+	}
+	e.dropCache(rec)
+}
+
+// dropCache removes a stopped VM's cache disk. The record lets go of the
+// disk before the files do, so a server that stops in between leaves files
+// the next one removes.
+func (e *engine) dropCache(rec *record) {
+	if _, ok := cacheMount(rec.Mounts); !ok {
+		return
 	}
 	if rec.Cache.Path != "" {
 		rec.Cache, rec.CacheRan = vmimage.Disk{}, false

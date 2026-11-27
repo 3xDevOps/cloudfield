@@ -730,7 +730,7 @@ launch retried on an older image, is on the line twice.
 | `image_ms` | VM: finding the image's base disk, or pulling and converting it on first use. |
 | `disks_ms` | VM: creating the root, data and cache disks. |
 | `checkout_disk_ms` | VM: the checkout's disk, built from the base commit when no session has used it. |
-| `prepare_ms` | VM: the state disk, the VM's record and attaching the agent program disks. |
+| `prepare_ms` | VM: the state disk, the VM's record and attaching the agent program disks, and on a start after a stop a new cache disk. |
 | `helper_disk_ms` | VM: the helper disk ([vm-guest.md](vm-guest.md)): hashing a server binary not seen before, and building its disk when it has none. |
 | `network_ms` | VM: the host side of the VM network and its firewall. |
 | `unit_ms` | VM: `systemd-run` of the VM's unit. |
@@ -969,7 +969,7 @@ sooner:
   `0`. A pause that fails leaves the session running; Cloudfield tries again
   after another `--run-sleep-after`.
 - A closed session's VM is stopped as soon as the close finishes, whatever
-  `--run-sleep-after` is, and keeps its disks without its memory
+  `--run-sleep-after` is, and keeps its disks, except the cache disk, without its memory
   ([Relaunching a closed session](#relaunching-a-closed-session)). Closing
   or killing a sleeping session wakes it first, so its work is committed as
   for a running one.
@@ -1074,7 +1074,7 @@ next wake starts the agent and restores its conversation.
 
 | Action | Container | Checkout | Reopen |
 | --- | --- | --- | --- |
-| **Close** (`cloudfield close <session-id> --outcome merged` or `abandoned`) | Paused for the close's commit, then stopped with only its disks kept, for `--run-container-ttl` (30 days). A Standard or mode-switched session's container on a Docker host stays paused with its memory instead, kept 7 days by default ([Relaunching a closed session](#relaunching-a-closed-session)). | Kept while the container is kept. Removed after that, but no sooner than `--checkout-ttl` (72 hours) after the session ended: at 30 days with the defaults. | Yes, until the deadline: **Relaunch** or `cloudfield reopen <session-id>` ([Relaunching a closed session](#relaunching-a-closed-session)). The deadline is cleared while the session is live; the next close sets a new one. |
+| **Close** (`cloudfield close <session-id> --outcome merged` or `abandoned`) | Paused for the close's commit, then stopped with only its disks kept, a VM's cache disk excepted ([environments.md](environments.md#sessions-in-virtual-machines)), for `--run-container-ttl` (30 days). A Standard or mode-switched session's container on a Docker host stays paused with its memory instead, kept 7 days by default ([Relaunching a closed session](#relaunching-a-closed-session)). | Kept while the container is kept. Removed after that, but no sooner than `--checkout-ttl` (72 hours) after the session ended: at 30 days with the defaults. | Yes, until the deadline: **Relaunch** or `cloudfield reopen <session-id>` ([Relaunching a closed session](#relaunching-a-closed-session)). The deadline is cleared while the session is live; the next close sets a new one. |
 | No activity for 7 days in a live session, `needs-attention` included | As **Close**, with the outcome `completed`. Its timeline notes `Closed after 7 days without activity`. Only activity counts: a question waiting for an answer, a pause or a turn that made no progress does not keep it open, while an open exec or port forward, a change of mode or account, and a session the memory guard saved while it worked do. A sleeping session's 7 days run from its sleep; an awake one's restart with the server. A sleeping session VM is woken first to commit; while admission refuses the wake, it stays open until the next hourly check. | As **Close**. | As **Close**. Once its container is gone, launch a new session on its branch. |
 | A Background session finishes | Removed at once. | Kept for `--checkout-ttl` (72 hours) after the session ends. | No. |
 | **Kill run** (`cloudfield kill <session-id>`) | Stopped and removed. | Kept for `--checkout-ttl` after the session ends. | No. |
@@ -1171,7 +1171,7 @@ session's container or VM disks are deleted: its work is on its branch, and
 its transcript stays readable.
 
 A session VM, or the container of a session launched and closed as Enhanced,
-is stopped when its session closes. It keeps its disks and no memory; a VM
+is stopped when its session closes. It keeps its disks, except a VM's cache disk, and no memory; a VM
 with a checkout stays up with only its helper for the 10-minute linger
 first, which the memory guard leaves to end. Relaunch starts it from those
 disks:

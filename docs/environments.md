@@ -402,12 +402,15 @@ What changes:
   member's new caches in the background. A stopped VM keeps no cache disk,
   so a session that starts again finds the member's newest caches, not
   always its own: they did not go back if the stop had to kill the VM, if
-  another session's went back later, or if the start came before the write
-  finished. Its tools then download and build again. A sleeping session
-  keeps its cache disk and does not promote it. Caches over 20 GiB are
-  dropped, and so are a member's newest caches once no VM has used them for
-  7 days; the next session then starts empty. An Isolated session's caches
-  never go back.
+  another session's went back later, or if the start or a server restart
+  came before the write finished. Its tools then download and build again. A
+  sleeping session's VM keeps its cache disk and promotes nothing until it
+  is stopped: when the session is closed, or when its saved memory is
+  deleted because disk space was low
+  ([failure-handling.md](failure-handling.md#recover-from-disk-pressure)).
+  Caches over 20 GiB are dropped, and so are a member's newest caches once
+  no VM has used them for 7 days; the next session then starts empty. An
+  Isolated session's caches never go back.
 - The agent's program loads from a read-only disk the server builds for
   each version the home holds ([vm-guest.md](vm-guest.md#agent-programs)).
   omp (296 MB), Claude Code (377 MB) and its ACP adapter (299 MB) take
@@ -524,7 +527,7 @@ What changes:
 - An idle session's VM is paused in memory, and saved to disk when the
   host needs that memory or after an hour, with every process
   ([Sessions in VMs](failure-handling.md#sessions-in-vms)), and closing a
-  session stops its VM, which keeps its disks
+  session stops its VM, which keeps its disks except the cache disk
   ([Relaunching a closed session](failure-handling.md#relaunching-a-closed-session)). Closing a
   session while it is asleep wakes it first, so its final commit has its
   uncommitted changes.

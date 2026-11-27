@@ -207,8 +207,9 @@ func (e *engine) endLinger(key string, boot int, d time.Duration) {
 }
 
 // settle schedules the end of every VM that was lingering when the server
-// stopped, and takes the cache disk an earlier server left with a stopped
-// one.
+// stopped, and removes the cache disk an earlier server left with a stopped
+// one. It promotes none: a server start must not copy every such disk at
+// once, nor put one that stopped long ago over its pool's newest cache.
 func (e *engine) settle(ctx context.Context) {
 	keys, err := e.keys()
 	if err != nil {
@@ -232,7 +233,7 @@ func (e *engine) settleVM(ctx context.Context, key string) {
 	case up:
 		e.endLinger(key, rec.Boots, max(0, lingerTimeout-time.Since(rec.ExitedAt)))
 	default:
-		e.retireCache(rec)
+		e.dropCache(rec)
 	}
 }
 

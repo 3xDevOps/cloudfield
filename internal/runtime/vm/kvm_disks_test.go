@@ -87,8 +87,8 @@ func rootSession(t *testing.T, e *engine, key, image string, mounts ...runtime.M
 // that the member's next session, whose cache is a qcow2 disk over that
 // session-written base, gets those bytes back as data. The next session
 // writes another header through its own qcow2 cache, and the session after
-// it reads that back from the base promotion flattened. Deleting the last VM
-// over the older base frees it at once, and a stopped VM holds no cache disk
+// it reads that back from the base promotion flattened. The older base goes
+// once the last VM over it has stopped, and a stopped VM holds no cache disk
 // until it starts again over the pool's newest. It then saves an
 // environment from a root disk over an image and again from one over a saved
 // image, timing both.
@@ -180,7 +180,7 @@ func TestKVMGuestWrittenQcow2HeadersStayData(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(first); !os.IsNotExist(err) {
-		t.Errorf("the older cache only a removed VM read through is still on disk: %v", err)
+		t.Errorf("the older cache only a stopped VM read through is still on disk: %v", err)
 	}
 	// A stopped VM holds no cache disk. Started again, it mounts one over
 	// the pool's newest cache, which its own became, and reads what it wrote.

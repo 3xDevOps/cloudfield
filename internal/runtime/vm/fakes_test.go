@@ -103,9 +103,8 @@ func sessionSpec(key string) runtime.Spec {
 }
 
 type fakeImages struct {
-	mu        sync.Mutex
-	rootDisks int
-	// cacheDisks counts the cache disks made.
+	mu         sync.Mutex
+	rootDisks  int
 	cacheDisks int
 	promoted   chan string
 	tags       map[string]vmimage.Base
