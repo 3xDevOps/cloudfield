@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { api } from '@/lib/api'
 import { TypingIndicator, useTypingSignal, useWakeOnTyping } from '@/routes/run/typing'
 import { useStore } from '@/store'
@@ -138,40 +138,41 @@ describe('useWakeOnTyping', () => {
   const asleep = (fields: Parameters<typeof run>[0] = {}) =>
     runRecords(run({ id: runID, status: 'needs-attention', asleep_since: '2026-11-11T09:00:00Z', ...fields }))[runID]!
 
-  function Wake({ record, body, maySteer = true }: { record: ReturnType<typeof asleep>; body: string; maySteer?: boolean }) {
-    useWakeOnTyping(record, body, maySteer)
-    return null
+  function Field({ record, maySteer = true }: { record: ReturnType<typeof asleep>; maySteer?: boolean }) {
+    const wake = useWakeOnTyping(record, maySteer)
+    return <input aria-label="Message" onChange={(event) => wake(event.target.value)} />
   }
+  const type = (value: string) => fireEvent.change(screen.getByLabelText('Message'), { target: { value } })
 
   beforeEach(() => void vi.mocked(api.runWake).mockClear())
 
   it('wakes a sleeping session once, at the first keystroke', () => {
-    const view = render(<Wake record={asleep()} body="" />)
+    render(<Field record={asleep()} />)
     expect(api.runWake).not.toHaveBeenCalled()
-    view.rerender(<Wake record={asleep()} body="h" />)
-    view.rerender(<Wake record={asleep()} body="he" />)
+    type('h')
+    type('he')
     expect(api.runWake).toHaveBeenCalledTimes(1)
     expect(api.runWake).toHaveBeenCalledWith(runID)
   })
 
   it('wakes the session again on its next sleep, and not while it wakes', () => {
-    const view = render(<Wake record={asleep()} body="" />)
-    view.rerender(<Wake record={asleep()} body="h" />)
-    view.rerender(<Wake record={asleep({ waking: true })} body="he" />)
-    view.rerender(<Wake record={asleep({ asleep_since: '2026-11-11T10:00:00Z', waking: true })} body="hel" />)
+    const view = render(<Field record={asleep()} />)
+    type('h')
+    view.rerender(<Field record={asleep({ asleep_since: '2026-11-11T10:00:00Z', waking: true })} />)
+    type('he')
     expect(api.runWake).toHaveBeenCalledTimes(1)
-    view.rerender(<Wake record={asleep({ asleep_since: '2026-11-11T10:00:00Z' })} body="hell" />)
+    view.rerender(<Field record={asleep({ asleep_since: '2026-11-11T10:00:00Z' })} />)
+    type('hel')
     expect(api.runWake).toHaveBeenCalledTimes(2)
   })
 
-  it('leaves alone a saved draft, an awake or closed session, and one the member cannot steer', () => {
-    render(<Wake record={asleep()} body="a draft from before" />)
-    const awake = render(<Wake record={asleep({ asleep_since: undefined })} body="" />)
-    awake.rerender(<Wake record={asleep({ asleep_since: undefined })} body="h" />)
-    const closed = render(<Wake record={asleep({ status: 'merged' })} body="" />)
-    closed.rerender(<Wake record={asleep({ status: 'merged' })} body="h" />)
-    const viewer = render(<Wake record={asleep()} body="" maySteer={false} />)
-    viewer.rerender(<Wake record={asleep()} body="h" maySteer={false} />)
+  it.each([
+    ['an awake session', asleep({ asleep_since: undefined }), true],
+    ['a closed session', asleep({ status: 'merged' }), true],
+    ['a member who cannot steer', asleep(), false],
+  ])('leaves %s alone', (_, record, maySteer) => {
+    render(<Field record={record} maySteer={maySteer} />)
+    type('h')
     expect(api.runWake).not.toHaveBeenCalled()
   })
 })

@@ -798,7 +798,8 @@ disk reads **Asleep since &lt;time&gt;** alone, because its processes are
 saved. While the session wakes, the row reads **Waking…**.
 
 The session wakes when you start typing a message in the Chat view's
-composer or send one, change its model, mail reaches it, you type in its terminal, open a shell tab, use its Browser tab,
+composer or send one, change its model, mail reaches it, you type in its
+terminal, open a shell tab, use its Browser tab,
 start `cloudfield ssh` or a port forward to it, run `cloudfield resume <session-id>`,
 or choose **Wake** in the Chat view. Opening the session or its Browser tab
 without acting does not wake it. A port forward wakes the session, but a server

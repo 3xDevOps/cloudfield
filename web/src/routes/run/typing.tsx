@@ -38,21 +38,16 @@ export function useTypingSignal(runID: string, body: string): void {
   }, [runID])
 }
 
-/** Starts a sleeping session's wake at the first keystroke of a member who may steer it, so it runs while they write: once per sleep, and never for a draft that was already there. */
-export function useWakeOnTyping(run: RunRecord, body: string, maySteer: boolean): void {
-  const since = run.asleep_since
-  const asleep = maySteer && since !== undefined && !run.waking && !isTerminal(run.status)
-  const previous = useRef(body)
+/** What a composer calls when its own field changes: starts a sleeping session's wake for a member who may steer it, once per sleep, so it runs while they write. */
+export function useWakeOnTyping(run: RunRecord, maySteer: boolean): (body: string) => void {
   const woke = useRef<string | undefined>(undefined)
-
-  useEffect(() => {
-    const changed = previous.current !== body
-    previous.current = body
-    if (!changed || !asleep || !body.trim() || woke.current === since) return
+  return (body) => {
+    const since = run.asleep_since
+    if (!maySteer || since === undefined || run.waking || isTerminal(run.status) || !body.trim() || woke.current === since) return
     woke.current = since
     // The server puts a failed wake on the run, where the sleep notice shows it.
     void api.runWake(run.id).catch(() => {})
-  }, [asleep, body, run.id, since])
+  }
 }
 
 /** Who else is typing in this run, dropping each name when its entry expires. */

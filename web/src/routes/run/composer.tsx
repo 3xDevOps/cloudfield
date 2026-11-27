@@ -317,7 +317,7 @@ function StandardComposer({ run, agent, room, textarea, autoFocus, onFocusChange
   const dictating = useDictationState(textarea).active
   const hintID = useId()
   const maySteer = allowed('steer', self, { owner: run.member_id, protected: run.protected, steerOthers })
-  useWakeOnTyping(run, body, maySteer)
+  const wakeOnTyping = useWakeOnTyping(run, maySteer)
   const block = composerBlock(run, maySteer, maySteer && cap.hasMethod('run.relaunch') && canReopenRun(run))
   const images = useComposerImages(run.id, !block && cap.hasMethod('terminal.file'))
   const attachOff = busy || !cap.hasMethod('terminal.file')
@@ -365,7 +365,10 @@ function StandardComposer({ run, agent, room, textarea, autoFocus, onFocusChange
         autoFocus={autoFocus}
         value={body}
         readOnly={Boolean(draft.busy)}
-        onChange={(next) => saveComposerDraft(run.id, { body: next })}
+        onChange={(next) => {
+          saveComposerDraft(run.id, { body: next })
+          wakeOnTyping(next)
+        }}
         onFocusChange={onFocusChange}
         onSend={send}
         onEscape={onEscape}
@@ -444,7 +447,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
 
   const maySteer = allowed('steer', self, { owner: run.member_id, protected: run.protected, steerOthers })
   // A docked composer unmounts while a wake resubscribes the agent stream, which would take the field from under the member.
-  useWakeOnTyping(run, body, maySteer && !docked)
+  const wakeOnTyping = useWakeOnTyping(run, maySteer && !docked)
   const state = session?.state
   const stream = session?.stream
   const connecting = stream === 'live' || stream === 'refused' ? undefined : stream === 'reconnecting' || stream === 'offline' ? 'Reconnecting to the agent…' : 'Connecting to the agent…'
@@ -452,16 +455,17 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
   const lastLive = useRef<{ canAct: boolean; waiting: boolean }>(undefined)
   if (stream === 'live') lastLive.current = { canAct: control.canAct, waiting: backgroundWait(run, session) !== null }
   const shape = lastLive.current
-  // A sleeping session's ack says its agent is gone, and a wake's event can reach this client before its stream resubscribes.
-  const sleepAck = useRef(false)
-  if (run.asleep_since) sleepAck.current = true
-  else if (stream !== 'live') sleepAck.current = false
+  // A sleeping session's ack says its agent is gone, and holds until the wake's resubscribed stream is live, whichever side of the wake's event that falls.
+  const sleepAck = useRef<'held' | 'resubscribing'>(undefined)
+  if (run.asleep_since) sleepAck.current = 'held'
+  else if (sleepAck.current && stream !== 'live') sleepAck.current = 'resubscribing'
+  else if (sleepAck.current === 'resubscribing') sleepAck.current = undefined
   const gate = enhancedBlock({
     run,
     maySteer,
     canReopen: maySteer && cap.hasMethod('run.relaunch') && canReopenRun(run),
     refused: stream === 'refused' ? session?.streamError ?? 'The agent stream was refused.' : undefined,
-    sessionLive: shape && stream === 'live' && !sleepAck.current ? session?.live ?? false : true,
+    sessionLive: shape && !sleepAck.current ? session?.live ?? false : true,
     pending: session?.pending.length ?? 0,
     hasLease: shape?.canAct ?? true,
   })
@@ -674,6 +678,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
         )}
         onChange={(value, at) => {
           setBody(value)
+          wakeOnTyping(value)
           setCaret(at)
           setActive(0)
           setDismissed(false)
