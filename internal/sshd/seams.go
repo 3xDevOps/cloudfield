@@ -81,11 +81,11 @@ type RunController interface {
 	// which never borrows the owner's installation.
 	// StartLogin is the login a launch by member on account starts from
 	// when it names none.
-	StartLogin(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, harness string, mode domain.LaunchMode) (domain.LoginID, error)
+	StartLogin(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, harness string, mode domain.LaunchMode, permission domain.Permission) (domain.LoginID, error)
 	// EnvironmentSignsIn reports whether a workspace variable signs the
 	// agent in, so that no login pays and a launch chooses between none.
 	EnvironmentSignsIn(ctx context.Context, workspace domain.WorkspaceID, harness string, mode domain.LaunchMode) (bool, error)
-	FallbackLaunchable(ctx context.Context, member, requested domain.MemberID, account domain.Account, harness string, mode domain.LaunchMode) (bool, error)
+	FallbackLaunchable(ctx context.Context, member, requested domain.MemberID, account domain.Account, harness string, mode domain.LaunchMode, permission domain.Permission) (bool, error)
 	// LoginProblem is why agent's login in account's home cannot sign it
 	// in for a launch by member, empty when the server knows of none, and
 	// whether a launch is refused over it.

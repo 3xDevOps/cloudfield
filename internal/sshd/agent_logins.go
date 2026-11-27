@@ -320,7 +320,7 @@ func (s *Server) agentLoginAutomatic(ctx context.Context, member domain.MemberID
 // may name it. An account none of whose logins member may use is not shared
 // with them; on their own account the launch is refused, naming each login
 // and why it does not serve.
-func (s *Server) launchLogin(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, harness, named string, mode domain.LaunchMode) (domain.LoginID, *protocol.Error) {
+func (s *Server) launchLogin(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, harness, named string, mode domain.LaunchMode, permission domain.Permission) (domain.LoginID, *protocol.Error) {
 	if account == "" {
 		account = member
 	}
@@ -344,7 +344,7 @@ func (s *Server) launchLogin(ctx context.Context, workspace domain.WorkspaceID, 
 	if len(logins) == 0 {
 		return "", nil
 	}
-	login, err := s.cfg.Runs.StartLogin(ctx, workspace, member, account, harness, mode)
+	login, err := s.cfg.Runs.StartLogin(ctx, workspace, member, account, harness, mode, permission)
 	if errors.Is(err, permissions.ErrDenied) {
 		return "", &protocol.Error{Code: protocol.CodeDenied, Message: protocol.MethodRunLaunch + ": " + err.Error()}
 	}

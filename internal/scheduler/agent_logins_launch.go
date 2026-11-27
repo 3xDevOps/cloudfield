@@ -188,14 +188,15 @@ func (s *Scheduler) addedLoginProblem(account domain.Account, agent string) (str
 // login was signed out.
 const noSignInNow = "it holds no sign-in right now; a session on it may be refreshing it, so launch again; a login that stays so was signed out"
 
-// loginRefusal is why a session in member's home may not run on login
-// unless its owner names it, its automatic switch apart: it is not open to
-// member, cannot sign in, or cannot be mounted. It is empty when the login
-// is eligible. It reads member homes, login directories and the store only,
-// and leaves where the agent's installation comes from to the caller.
-func (s *Scheduler) loginRefusal(ctx context.Context, member domain.MemberID, login domain.Account, harnessName string) (string, error) {
+// loginRefusal is why a session in member's home, Isolated or not, may not
+// run on login unless its owner names it, its automatic switch apart: it is
+// not open to member, cannot sign in, or cannot be mounted. It is empty
+// when the login is eligible. It reads member homes, login directories and
+// the store only, and leaves where the agent's installation comes from to
+// the caller.
+func (s *Scheduler) loginRefusal(ctx context.Context, member domain.MemberID, login domain.Account, harnessName string, isolated bool) (string, error) {
 	if login.Login.Added() {
-		return s.addedLoginRefusal(ctx, member, login, harnessName)
+		return s.addedLoginRefusal(ctx, member, login, harnessName, isolated)
 	}
 	if shareErr := s.checkDefaultLoginShared(ctx, member, login.Member, harnessName); shareErr != nil {
 		return "it is not open to you", nil
@@ -221,8 +222,8 @@ func (s *Scheduler) loginRefusal(ctx context.Context, member domain.MemberID, lo
 
 // addedLoginRefusal is loginRefusal for an added login: it must still
 // exist, be member's own or on for shares and automatic, have mounts the
-// runtime can verify, and sign in.
-func (s *Scheduler) addedLoginRefusal(ctx context.Context, member domain.MemberID, account domain.Account, agent string) (string, error) {
+// session can take and the runtime can verify, and sign in.
+func (s *Scheduler) addedLoginRefusal(ctx context.Context, member domain.MemberID, account domain.Account, agent string, isolated bool) (string, error) {
 	if _, err := s.addedLoginProfile(ctx, member, account.Member, agent); err != nil {
 		return err.Error(), nil
 	}
@@ -237,12 +238,38 @@ func (s *Scheduler) addedLoginRefusal(ctx context.Context, member domain.MemberI
 	if i < 0 || (member != account.Member && (!logins[i].Shared || !logins[i].Automatic)) {
 		return "it is not open to you", nil
 	}
+	if refusal, err := s.addedLoginUnmountable(account, agent, isolated); err != nil || refusal != "" {
+		return refusal, err
+	}
 	return s.addedLoginProblem(account, agent)
 }
 
-// checkAddedLogin refuses a launch in member's home on an added login that
-// member may not use or that cannot sign its agent in.
-func (s *Scheduler) checkAddedLogin(ctx context.Context, member domain.MemberID, account domain.Account, agent string) error {
+// addedLoginUnmountable is why a session, Isolated or not, cannot mount
+// account's added login: its files no longer hold the kind of sign-in it
+// was added with, or it is a Console login's directory an Isolated session
+// could change for later sessions. Empty when it can.
+func (s *Scheduler) addedLoginUnmountable(account domain.Account, agent string, isolated bool) (string, error) {
+	shape, err := s.cfg.Logins.Inspect(account.Member, agent, account.Login)
+	if err != nil {
+		return "", err
+	}
+	recorded, err := s.cfg.Logins.Identity(account.Member, agent, account.Login)
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case shape.Kind != "" && shape.Kind != recorded.Kind:
+		return fmt.Sprintf("it no longer holds the %s sign-in it was added with; its owner removes it and adds it again", recorded.Kind), nil
+	case isolated && shape.Kind == memberhome.LoginConsole:
+		return "an Isolated session cannot use a Console login: it is a whole directory the session could change for later sessions; launch it at Default, or on another login", nil
+	}
+	return "", nil
+}
+
+// checkAddedLogin refuses a launch in member's home, Isolated or not, on an
+// added login that member may not use, that the session cannot mount or
+// that cannot sign its agent in.
+func (s *Scheduler) checkAddedLogin(ctx context.Context, member domain.MemberID, account domain.Account, agent string, isolated bool) error {
 	if _, err := s.addedLoginProfile(ctx, member, account.Member, agent); err != nil {
 		return fmt.Errorf("scheduler: %w", err)
 	}
@@ -256,6 +283,13 @@ func (s *Scheduler) checkAddedLogin(ctx context.Context, member domain.MemberID,
 	i := slices.IndexFunc(logins, func(l domain.AgentLogin) bool { return l.ID == account.Login })
 	if i < 0 || (member != account.Member && (!logins[i].Shared || !logins[i].Automatic)) {
 		return fmt.Errorf("%w: login %s of this account is not available to you", permissions.ErrDenied, account.Login)
+	}
+	refusal, err := s.addedLoginUnmountable(account, agent, isolated)
+	if err != nil {
+		return err
+	}
+	if refusal != "" {
+		return fmt.Errorf("scheduler: login %s: %s", account.Login, refusal)
 	}
 	problem, err := s.addedLoginProblem(account, agent)
 	if err != nil {
@@ -300,7 +334,7 @@ func (s *Scheduler) checkDefaultLoginShared(ctx context.Context, member, account
 // An account none of whose logins member may use is not shared with them;
 // on their own account the launch is refused, naming each login and why it
 // does not serve, since one that is automatic off serves only when named.
-func (s *Scheduler) StartLogin(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, harness string, mode domain.LaunchMode) (domain.LoginID, error) {
+func (s *Scheduler) StartLogin(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, harness string, mode domain.LaunchMode, permission domain.Permission) (domain.LoginID, error) {
 	logins, err := s.cfg.Store.ListAgentLogins(ctx, account, harness)
 	if err != nil || len(logins) == 0 {
 		return "", err
@@ -320,7 +354,7 @@ func (s *Scheduler) StartLogin(ctx context.Context, workspace domain.WorkspaceID
 			continue
 		}
 		login := domain.Account{Member: account, Login: loginOf(l.ID)}
-		refusal, refusalErr := s.loginRefusal(ctx, member, login, harness)
+		refusal, refusalErr := s.loginRefusal(ctx, member, login, harness, permission == domain.PermissionIsolated)
 		if refusalErr != nil {
 			refusal = refusalErr.Error()
 		}
@@ -344,13 +378,13 @@ func (s *Scheduler) StartLogin(ctx context.Context, workspace domain.WorkspaceID
 // then, as for a launch that names none, the account's first eligible login
 // serves. The parent's login is inherited when owner owns it, or it is on
 // for shares and automatic, it can still run, and it is not billed per use.
-func (s *Scheduler) ChildLogin(ctx context.Context, workspace domain.WorkspaceID, owner, account domain.MemberID, inherited domain.LoginID, harness string, mode domain.LaunchMode) (domain.LoginID, error) {
+func (s *Scheduler) ChildLogin(ctx context.Context, workspace domain.WorkspaceID, owner, account domain.MemberID, inherited domain.LoginID, harness string, mode domain.LaunchMode, permission domain.Permission) (domain.LoginID, error) {
 	logins, err := s.cfg.Store.ListAgentLogins(ctx, account, harness)
 	if err != nil || len(logins) == 0 || inherited == "" {
 		if err != nil || len(logins) == 0 {
 			return "", err
 		}
-		return s.StartLogin(ctx, workspace, owner, account, harness, mode)
+		return s.StartLogin(ctx, workspace, owner, account, harness, mode, permission)
 	}
 	i := slices.IndexFunc(logins, func(l domain.AgentLogin) bool { return l.ID == inherited })
 	inherits := i >= 0 && (owner == account || (logins[i].Shared && logins[i].Automatic))
@@ -363,11 +397,11 @@ func (s *Scheduler) ChildLogin(ctx context.Context, workspace domain.WorkspaceID
 		return "", envErr
 	}
 	if inherits {
-		if refusal, refusalErr := s.loginRefusal(ctx, owner, login, harness); refusalErr == nil && refusal == "" {
+		if refusal, refusalErr := s.loginRefusal(ctx, owner, login, harness, permission == domain.PermissionIsolated); refusalErr == nil && refusal == "" {
 			return login.Login, nil
 		}
 	}
-	return s.StartLogin(ctx, workspace, owner, account, harness, mode)
+	return s.StartLogin(ctx, workspace, owner, account, harness, mode, permission)
 }
 
 func loginOf(id domain.LoginID) domain.LoginID {

@@ -489,11 +489,11 @@ func (f *fakeRuns) CachedAgentModels(_ domain.MemberID, harness string) (protoco
 	return protocol.AgentModelsResult{Source: protocol.ModelSourceAgent, Models: []protocol.AgentModel{{ID: harness}, {ID: "opus"}}}, true
 }
 
-func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.MemberID, domain.Account, string, domain.LaunchMode) (bool, error) {
+func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.MemberID, domain.Account, string, domain.LaunchMode, domain.Permission) (bool, error) {
 	return true, nil
 }
 
-func (f *fakeRuns) StartLogin(context.Context, domain.WorkspaceID, domain.MemberID, domain.MemberID, string, domain.LaunchMode) (domain.LoginID, error) {
+func (f *fakeRuns) StartLogin(context.Context, domain.WorkspaceID, domain.MemberID, domain.MemberID, string, domain.LaunchMode, domain.Permission) (domain.LoginID, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.startLogins) == 0 {

@@ -930,9 +930,9 @@ func (s *Scheduler) DefaultMode(ctx context.Context, member, account domain.Memb
 // its own file, never its owner's default login. It reads member homes,
 // login directories and the scheduler's own state only, never the runtime or
 // the vendor.
-func (s *Scheduler) FallbackLaunchable(ctx context.Context, member, requested domain.MemberID, login domain.Account, harnessName string, mode domain.LaunchMode) (bool, error) {
+func (s *Scheduler) FallbackLaunchable(ctx context.Context, member, requested domain.MemberID, login domain.Account, harnessName string, mode domain.LaunchMode, permission domain.Permission) (bool, error) {
 	account := login.Member
-	if refusal, err := s.loginRefusal(ctx, member, login, harnessName); err != nil || refusal != "" || s.cfg.Homes == nil {
+	if refusal, err := s.loginRefusal(ctx, member, login, harnessName, permission == domain.PermissionIsolated); err != nil || refusal != "" || s.cfg.Homes == nil {
 		return err == nil && refusal == "", err
 	}
 	profile, argvs, err := s.launchProfile(ctx, member, account, harnessName)

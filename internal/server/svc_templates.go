@@ -43,7 +43,7 @@ func (g guardedRuns) LaunchWithOptions(ctx context.Context, workspace domain.Wor
 	// A template names no login: like any launch that names none, it
 	// starts from the account's first eligible login.
 	if opts.AccountLogin == "" {
-		login, err := g.ssh.Runs.StartLogin(ctx, workspace, member, account, harness, mode)
+		login, err := g.ssh.Runs.StartLogin(ctx, workspace, member, account, harness, mode, opts.Permission)
 		if err != nil {
 			return nil, err
 		}

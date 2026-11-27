@@ -300,7 +300,8 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 	if _, perr := authorize(); perr != nil {
 		return nil, perr
 	}
-	login, perr := s.launchLogin(ctx, domain.WorkspaceID(p.WorkspaceID), member, domain.MemberID(p.AccountMemberID), p.Harness, p.Login, mode)
+	permission := cmp.Or(domain.Permission(p.Permission), domain.PermissionDefault)
+	login, perr := s.launchLogin(ctx, domain.WorkspaceID(p.WorkspaceID), member, domain.MemberID(p.AccountMemberID), p.Harness, p.Login, mode, permission)
 	if perr != nil {
 		return nil, perr
 	}
@@ -328,7 +329,7 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 	// An unnamed start is chosen again under the mutex: the login chosen
 	// before the usage read may have been turned off or removed meanwhile.
 	if p.Login == "" {
-		if login, perr = s.launchLogin(ctx, domain.WorkspaceID(p.WorkspaceID), member, domain.MemberID(p.AccountMemberID), p.Harness, p.Login, mode); perr != nil {
+		if login, perr = s.launchLogin(ctx, domain.WorkspaceID(p.WorkspaceID), member, domain.MemberID(p.AccountMemberID), p.Harness, p.Login, mode, permission); perr != nil {
 			return nil, perr
 		}
 	}
@@ -344,7 +345,7 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 				return false, envErr
 			}
 		}
-		return s.cfg.Runs.FallbackLaunchable(ctx, member, requested, account, p.Harness, mode)
+		return s.cfg.Runs.FallbackLaunchable(ctx, member, requested, account, p.Harness, mode, permission)
 	})
 	account := chosen.Member
 	if excluded != nil {
@@ -355,7 +356,6 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 	if p.Limits != nil {
 		limits = domain.RunLimits{CPUs: p.Limits.CPUs, MemoryBytes: p.Limits.MemoryBytes, Pids: p.Limits.Pids}
 	}
-	permission := cmp.Or(domain.Permission(p.Permission), domain.PermissionDefault)
 	run, err := launchWithOptions(ctx, s.cfg.Runs, domain.WorkspaceID(p.WorkspaceID), member, account, p.Task, p.Harness, mode, domain.LaunchOptions{
 		Limits:     limits,
 		CachedBase: p.CachedBase, Model: p.Model, Effort: p.Effort, Permission: permission, RequestedAccount: requested, AccountLogin: chosen.Login, Fallback: policy,

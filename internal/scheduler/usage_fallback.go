@@ -789,7 +789,7 @@ func (s *Scheduler) chooseMove(ctx context.Context, entry *supervised, f *UsageF
 				}
 			}
 		}
-		return s.FallbackLaunchable(ctx, home, from.Member, account, run.Harness, mode)
+		return s.FallbackLaunchable(ctx, home, from.Member, account, run.Harness, mode, run.Permission)
 	})
 	if to == from {
 		return run, none, excluded, nil

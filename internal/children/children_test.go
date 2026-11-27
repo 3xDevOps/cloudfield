@@ -100,7 +100,7 @@ func (f *fakeRuns) DefaultMode(context.Context, domain.MemberID, domain.MemberID
 	return domain.LaunchACP, nil
 }
 
-func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.MemberID, domain.Account, string, domain.LaunchMode) (bool, error) {
+func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.MemberID, domain.Account, string, domain.LaunchMode, domain.Permission) (bool, error) {
 	return true, nil
 }
 
@@ -108,7 +108,7 @@ func (f *fakeRuns) EnvironmentSignsIn(context.Context, domain.WorkspaceID, strin
 	return false, nil
 }
 
-func (f *fakeRuns) ChildLogin(context.Context, domain.WorkspaceID, domain.MemberID, domain.MemberID, domain.LoginID, string, domain.LaunchMode) (domain.LoginID, error) {
+func (f *fakeRuns) ChildLogin(context.Context, domain.WorkspaceID, domain.MemberID, domain.MemberID, domain.LoginID, string, domain.LaunchMode, domain.Permission) (domain.LoginID, error) {
 	return "", nil
 }
 
