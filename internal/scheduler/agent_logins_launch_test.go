@@ -542,3 +542,21 @@ func TestChoosingALoginSkipsOneTheSessionCannotMount(t *testing.T) {
 		t.Fatalf("Ada's Isolated start with work planted with a Console sign-in = %q, %v; want the default login", got, err)
 	}
 }
+
+// Beside added logins, a default login that holds no sign-in at all does
+// not start a launch that names none: the next login does.
+func TestADefaultLoginWithNoSignInIsPassedOver(t *testing.T) {
+	e := newLoginShareEnv(t)
+	ctx := t.Context()
+	if err := os.Remove(filepath.Join(e.adaHome, ".claude.json")); err != nil {
+		t.Fatal(err)
+	}
+	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI, ""); err != nil || got != work.Login {
+		t.Fatalf("Ada's start with a default login that never signed in = %q, %v; want work", got, err)
+	}
+	writeHomeFile(t, e.adaHome, ".claude/.credentials.json", workLogin)
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI, ""); err != nil || got != "" {
+		t.Fatalf("Ada's start once her default login signed in = %q, %v; want the default login, her first", got, err)
+	}
+}

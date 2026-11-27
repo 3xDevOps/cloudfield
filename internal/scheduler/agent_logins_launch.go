@@ -217,6 +217,16 @@ func (s *Scheduler) loginRefusal(ctx context.Context, member domain.MemberID, lo
 	if problem, blocks, loginErr := s.LoginProblem(member, login.Member, harnessName, profile); loginErr == nil && blocks {
 		return problem, nil
 	}
+	// Beside added logins, a default login that holds no sign-in at all
+	// would start the agent signed out while another login could serve.
+	logins, err := s.cfg.Store.ListAgentLogins(ctx, login.Member, harnessName)
+	if err != nil || !slices.ContainsFunc(logins, func(l domain.AgentLogin) bool { return l.ID.Added() }) {
+		return "", err
+	}
+	// One whose files cannot be read is left to the checks above, as before.
+	if identity, idErr := s.cfg.Homes.DefaultIdentity(login.Member, harnessName); idErr == nil && identity.Kind == "" {
+		return "it holds no sign-in", nil
+	}
 	return "", nil
 }
 
