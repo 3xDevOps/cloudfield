@@ -454,7 +454,9 @@ answer, which a frozen guest never gives.
 
 ## Limits, stats and the clock
 
-The session cgroup's `pids.max` is the session's process limit from `Boot`.
+The session's process limit from `Boot` is the `pids.max` of
+`/sys/fs/cgroup/session/procs`; the session cgroup's own is 256 above it,
+which only the agent's cgroup can use (see below).
 Its `memory.max` is the session's memory limit from `aether.memory`, as a
 container's: the server boots the guest with that limit plus a 32nd of it
 plus 432 MiB, so what the kernel and the helper hold, the free memory the
@@ -476,35 +478,48 @@ Every process the helper starts begins in its leaf `/sys/fs/cgroup/session/procs
 and dockerd puts nested containers beside it, so they count too. The helper
 itself stays outside.
 
+The helper also creates `/sys/fs/cgroup/session/agent`, a leaf beside
+`procs` with a `memory.min` of 512 MiB: reclaim at the session's memory limit
+leaves that much of the agent's memory alone, so a command that fills the
+session pushes the session's other processes to swap, not the agent.
+`memory.min` protects only memory the agent uses, so a small agent takes
+nothing from the session. The 256 processes the session cgroup allows above
+the limit of `procs` are the agent's: commands that fork until `procs`
+refuses leave the agent able to start one. Nested containers and the
+browser sit beside `procs` and count against the session cgroup only, so a
+fork bomb inside a nested container can still use the agent's 256.
+
 At the session's memory limit the kernel kills the process with the highest
 OOM score in the session, which is the largest one unless scores are
-adjusted. An Enhanced Claude Code agent would often be that process, so its
-keeper, which runs as root, writes `-500` to its own `oom_score_adj` before
-it starts the agent, and to that of the exec that started it; the bridge the
-server attaches through does the same. The agent's adapter and CLI inherit
-the score. The keeper also sets `CLAUDE_CODE_SHELL_PREFIX` to
-`/run/aether-acp-command`, a three-line script it writes, through which
-Claude Code runs every Bash tool call, shell-form hook, status line command
-and stdio MCP server: the script writes `0` to its own `oom_score_adj` and
-runs the command with `bash -c`. So the kernel kills one of the agent's
-commands before the agent, unless the agent holds half the session's memory
-and swap more than that command. It adds about 0.2 ms to a command. What
-Claude Code starts without its prefix keeps the agent's score: exec-form
-hooks, the language servers of its plugins, and the `rg` and `git` it runs
-for itself. A language server that grows large is then killed after the
-agent's commands.
-A command can lower its own score back to `-500`, so this orders accidents,
-not a hostile command. The keeper leaves everything as it was when the
+adjusted. An Enhanced Claude Code agent would often be that process. So its
+keeper, which runs as root, before it starts the agent moves itself and the
+exec that started it to the agent's cgroup and writes `-500` to the
+`oom_score_adj` of both; the bridge the server attaches through does the
+same. The agent's adapter and CLI inherit both. The keeper also sets
+`CLAUDE_CODE_SHELL_PREFIX` to `/run/aether-acp-command`, a four-line script
+it writes, through which Claude Code runs every Bash tool call, shell-form
+hook, status line command and stdio MCP server: the script writes `0` to its
+own `oom_score_adj`, moves itself to `procs`, whose `cgroup.procs` and the
+session cgroup's any session process may write, and runs the command with
+`bash -c`. So the kernel kills one of the agent's commands before the agent,
+unless the agent holds half the session's memory and swap more than that
+command, and the commands run under the limits of `procs`. It adds well
+under a millisecond to a command. What Claude Code starts without its prefix
+stays with the agent, in its cgroup and at its score: exec-form hooks, the
+language servers of its plugins, and the `rg` and `git` it runs for itself.
+A language server that grows large is then killed after the agent's
+commands. A command can lower its own score back to `-500`, and any session
+process can move another one to `procs`, so this orders accidents, not a
+hostile command. The keeper leaves everything as it was when the
 session's environment already sets `CLAUDE_CODE_SHELL_PREFIX`, when `bash`
 is not on the `PATH` or `zsh` is, since Claude Code may then build its
-commands for zsh, or when it may not lower its score, as in a Docker
+commands for zsh, or when it may not protect itself, as in a Docker
 session. A prefix set in Claude Code's own `settings.json` replaces the
-keeper's inside Claude Code: the agent's commands then keep the agent's
-score, and the kernel kills other session processes, such as a terminal's,
-before them. No other
-agent has a way to tell its commands apart, so no other agent's score
-changes: its commands would inherit the lower score with it. A Standard
-session has no keeper and is unchanged.
+keeper's inside Claude Code: the agent's commands then stay with the agent,
+and the kernel kills other session processes, such as a terminal's, before
+them. No other agent has a way to tell its commands apart, so every other
+agent stays in `procs` at the default score: its commands would inherit the
+agent's place with it. A Standard session has no keeper and is unchanged.
 
 `Stats` reports CPU time outside idle and I/O wait from `/proc/stat`, and
 from the session cgroup its OOM kills less the development browser's, its

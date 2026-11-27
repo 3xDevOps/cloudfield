@@ -68,7 +68,7 @@ func kvmEnhancedSession(t *testing.T) (*testEnv, *domain.Run, runtime.ID) {
 		cfg.WorktreeMount = "/workspace"
 		cfg.ServerBinary = server
 		cfg.StandardImage = "docker.io/library/ubuntu:24.04"
-		cfg.RunCPULimit, cfg.RunMemoryBytes = 1, kvmSessionMemory
+		cfg.RunCPULimit, cfg.RunMemoryBytes, cfg.RunPidsLimit = 1, kvmSessionMemory, 512
 		// Claude Code's profile, so the session is set up as one of its
 		// sessions is, with the mock as its adapter.
 		cfg.Harnesses = map[string]HarnessSpec{
@@ -92,6 +92,7 @@ func kvmEnhancedSession(t *testing.T) (*testEnv, *domain.Run, runtime.ID) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer cancel()
+	launch := time.Now()
 	run, err := e.sched.Launch(ctx, e.ws.ID, e.member.ID, e.member.ID, "say pong", "claude", domain.LaunchACP)
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
@@ -107,6 +108,12 @@ func kvmEnhancedSession(t *testing.T) (*testEnv, *domain.Run, runtime.ID) {
 		_ = vms.Destroy(cctx, cid)
 	})
 	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	launched := time.Since(launch)
+	_, memory, _, err := vms.Exec(t.Context(), cid, []string{"cat", "/sys/fs/cgroup/session/memory.current"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("launch to the end of the task's turn: %s; the session then holds %s bytes", launched.Round(time.Millisecond), strings.TrimSpace(memory))
 	return e, run, cid
 }
 
@@ -148,7 +155,8 @@ func TestKVMEnhancedAgentKilledMidSessionRestarts(t *testing.T) {
 
 // kvmTurn sends prompt and returns what the agent said in the turn it
 // starts, the nth of the session, with whether that turn ended: it does not
-// when the agent died under it.
+// when the agent died under it or failed the prompt, whose error is then
+// what is returned.
 func kvmTurn(t *testing.T, e *testEnv, run domain.RunID, n int, prompt string) (said string, ended bool) {
 	t.Helper()
 	sess := e.sched.acp.session(run)
@@ -165,11 +173,15 @@ func kvmTurn(t *testing.T, e *testEnv, run domain.RunID, n int, prompt string) (
 			t.Fatal(err)
 		}
 		ended = turnEnded("end_turn", n)(page.Items)
-		if ended || e.sched.acp.session(run) != sess {
+		fresh := page.Items[len(before.Items):]
+		if ended || e.sched.acp.session(run) != sess || hasNotice("Prompt failed")(fresh) {
 			var text strings.Builder
-			for _, it := range page.Items[len(before.Items):] {
-				if it.Kind == acphost.KindMessage && it.Message.Role == "assistant" {
+			for _, it := range fresh {
+				switch {
+				case it.Kind == acphost.KindMessage && it.Message.Role == "assistant":
 					text.WriteString(it.Message.Text)
+				case it.Kind == acphost.KindNotice && it.Notice.Title == "Prompt failed":
+					text.WriteString(it.Notice.Description)
 				}
 			}
 			return text.String(), ended
@@ -208,9 +220,65 @@ func TestKVMEnhancedAgentOutlivesCommandsThatFillTheSessionsMemory(t *testing.T)
 		t.Fatalf("the agent did not answer the prompt after the kills: %q", said)
 	}
 
-	const probe = `cat /proc/self/oom_score_adj /proc/$PPID/oom_score_adj; printf '%s|' "a b" 'c"d' "$((1+2))"; exit 7`
+	const probe = `cat /proc/self/oom_score_adj /proc/$PPID/oom_score_adj /proc/self/cgroup /proc/$PPID/cgroup; printf '%s|' "a b" 'c"d' "$((1+2))"; exit 7`
 	said, _ = kvmTurn(t, e, run.ID, 4, acpmock.PromptRun+probe)
-	if want := "0\n-500\na b|c\"d|3|\nexit status 7"; said != want {
-		t.Fatalf("a command through the wrapper printed %q, want %q: its own OOM score, the agent's, its arguments and its exit status", said, want)
+	if want := "0\n-500\n0::/session/procs\n0::/session/agent\na b|c\"d|3|\nexit status 7"; said != want {
+		t.Errorf("a command through the wrapper printed %q, want %q: its own OOM score and the agent's, its own cgroup and the agent's, its arguments and its exit status", said, want)
 	}
+
+	const cost = `t() { s=$(date +%s%N); for i in $(seq 200); do "$@"; done; echo "$(( ($(date +%s%N) - s) / 200000 )) us"; }; t bash -c true; t /run/aether-acp-command true; cat /sys/fs/cgroup/session/memory.current`
+	start := time.Now()
+	said, _ = kvmTurn(t, e, run.ID, 5, acpmock.PromptRun+cost)
+	t.Logf("a command turn of 400 commands took %s; bash -c true, the same through the wrapper, and the session's memory in bytes:\n%s", time.Since(start).Round(time.Millisecond), said)
+}
+
+// TestKVMEnhancedAgentStartsAProcessDuringAForkBomb has one of the agent's
+// commands fork until the session's process limit refuses, then has the
+// agent start a process of its own, as it must to run a shell.
+func TestKVMEnhancedAgentStartsAProcessDuringAForkBomb(t *testing.T) {
+	e, run, _ := kvmEnhancedSession(t)
+	kvmTurn(t, e, run.ID, 2, acpmock.PromptRun+`exec bash -c 'b() { b | b & }; b' >/dev/null 2>&1 &`)
+	time.Sleep(5 * time.Second)
+	start := time.Now()
+	said, ended := kvmTurn(t, e, run.ID, 3, acpmock.PromptSpawn)
+	t.Logf("during the fork bomb the agent answered in %s: %q", time.Since(start).Round(time.Millisecond), said)
+	if !ended || !strings.HasPrefix(said, "spawned ") {
+		t.Fatalf("the agent could not start a process while its command's fork bomb held the session's process limit: %q", said)
+	}
+}
+
+// TestKVMEnhancedAgentAnswersAfterAMemoryBomb has one of the agent's
+// commands grow past the session's memory and swap, and reports how much of
+// the agent the session's reclaim pushed to swap on the way to the kill.
+func TestKVMEnhancedAgentAnswersAfterAMemoryBomb(t *testing.T) {
+	e, run, cid := kvmEnhancedSession(t)
+	sess := e.sched.acp.session(run.ID)
+	start := time.Now()
+	_, ended := kvmTurn(t, e, run.ID, 2, acpmock.PromptRun+`exec bash -c 'x=$(head -c 2000000000 /dev/zero | tr "\0" x)'`)
+	bombed := time.Since(start)
+	const swapped = `for p in /proc/[0-9]*; do if [ "$(cat "$p/comm" 2>/dev/null)" = acp-mock ]; then grep VmSwap "$p/status"; fi; done`
+	_, swap, _, err := e.cfg.Runtime.Exec(t.Context(), cid, []string{"/bin/sh", "-c", swapped}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, _, err := e.cfg.Runtime.(runtime.MemoryEventsRuntime).MemoryEvents(t.Context(), cid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("a 2 GB command in a %d MiB session: %d OOM kills after %s, the agent's turn ended: %t, the %d MiB agent's %s", kvmSessionMemory>>20, events.OOMKills, bombed.Round(time.Millisecond), ended, kvmAgentMiB, strings.TrimSpace(swap))
+	if !ended || e.sched.acp.session(run.ID) != sess || events.OOMKills == 0 {
+		t.Fatal("the memory bomb was not killed in place of the agent")
+	}
+	fields := strings.Fields(swap)
+	if len(fields) < 2 {
+		t.Fatalf("the agent's VmSwap reads %q", swap)
+	}
+	if kb, err := strconv.Atoi(fields[1]); err != nil || kb > 16<<10 {
+		t.Fatalf("the session's reclaim pushed %s kB of the agent to swap (%v), more than the 16 MiB allowed under its memory.min", fields[1], err)
+	}
+	start = time.Now()
+	if said, answered := kvmTurn(t, e, run.ID, 3, "after the bomb"); !answered {
+		t.Fatalf("the agent did not answer the prompt after the memory bomb: %q", said)
+	}
+	t.Logf("the agent answered the next prompt in %s", time.Since(start).Round(time.Millisecond))
 }
