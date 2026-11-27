@@ -39,6 +39,8 @@ type fakeRuns struct {
 	paused   map[domain.RunID]bool
 	// childRefusal is what ChildLogin refuses with, when set.
 	childRefusal error
+	// payerReads counts LoginPayer's calls.
+	payerReads atomic.Int32
 }
 
 func (f *fakeRuns) LaunchWithOptions(ctx context.Context, ws domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode, opts domain.LaunchOptions) (*domain.Run, error) {
@@ -108,6 +110,7 @@ func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.M
 }
 
 func (f *fakeRuns) LoginPayer(context.Context, domain.WorkspaceID, domain.MemberID, string, domain.LaunchMode) (string, error) {
+	f.payerReads.Add(1)
 	return "", nil
 }
 
@@ -1233,5 +1236,21 @@ func TestSubsessionOptionsJudgeTheLoginDispatchUses(t *testing.T) {
 	h.svc.cfg.Usage = usageByLogin{domain.AccountOf(h.ada.ID): 100, work: 100}
 	if got := h.options(parent.ID)["claude"]; got.Status != choiceExhausted {
 		t.Fatalf("claude with both logins spent = %s (%s); want exhausted", got.Status, got.Detail)
+	}
+}
+
+// Dispatching a subsession for an owner who keeps no logins reads nothing
+// of who would pay instead of an added login: there is none to choose.
+func TestDispatchWithoutLoginsReadsNoPayer(t *testing.T) {
+	h := newHarness(t)
+	h.enable(h.ada.ID, protocol.ChildSettingsParams{Enabled: on()})
+	parent := h.run(h.ada.ID, domain.LaunchACP, "parent")
+	h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "claude"})
+	h.settle()
+	if len(h.runs.launched) != 1 {
+		t.Fatalf("%d subsessions launched; want 1", len(h.runs.launched))
+	}
+	if n := h.runs.payerReads.Load(); n != 0 {
+		t.Fatalf("LoginPayer read %d times; want none", n)
 	}
 }

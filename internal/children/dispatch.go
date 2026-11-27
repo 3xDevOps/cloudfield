@@ -109,11 +109,9 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 		refuse(err.Error())
 		return
 	}
-	payer, err := s.cfg.Runs.LoginPayer(ctx, c.WorkspaceID, c.OwnerID, c.Harness, c.Mode)
-	if err != nil {
-		refuse(err.Error())
-		return
-	}
+	payer := sync.OnceValues(func() (string, error) {
+		return s.cfg.Runs.LoginPayer(ctx, c.WorkspaceID, c.OwnerID, c.Harness, c.Mode)
+	})
 	// A subsession names no login, so one billed per use serves it only
 	// when no login with readable usage left can.
 	perUse, err := s.cfg.Runs.LoginPerUse(ctx, c.OwnerID, domain.Account{Member: c.AccountID, Login: login}, c.Harness)
@@ -145,8 +143,13 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 		return
 	}
 	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, c.OwnerID, domain.Account{Member: requested, Login: login}, c.Harness, workspaces, c.Fallback, func(ctx context.Context, account domain.Account) (bool, error) {
-		if p.settings.Off.Covers(c.Harness, account.Member) || (payer != "" && account.Login.Added()) {
+		if p.settings.Off.Covers(c.Harness, account.Member) {
 			return false, nil
+		}
+		if account.Login.Added() {
+			if paidBy, payerErr := payer(); payerErr != nil || paidBy != "" {
+				return false, payerErr
+			}
 		}
 		return s.cfg.Runs.FallbackLaunchable(ctx, c.OwnerID, requested, account, c.Harness, c.Mode, parent.Permission)
 	})
