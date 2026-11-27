@@ -20,6 +20,8 @@ const movingGuide = "https://github.com/3xDevOps/cloudfield/blob/main/docs/edge-
 // own, unauthenticated word, so it prints a command only to sign in at a
 // replacement this machine already knows, and changes nothing.
 func printRetiring(w io.Writer, notices map[string]edgeclient.Retiring) {
+	notices = maps.Clone(notices)
+	maps.DeleteFunc(notices, func(origin string, r edgeclient.Retiring) bool { return cli.SameEdge(origin, r.Replacement) })
 	if len(notices) == 0 {
 		return
 	}
@@ -47,7 +49,7 @@ func printRetiring(w io.Writer, notices map[string]edgeclient.Retiring) {
 // installed sync daemon's unit, empty without one.
 func retiringNotice(origin string, r edgeclient.Retiring, holdings cli.EdgeHoldings, daemonEdge string, read bool) string {
 	old, err := edgeclient.Canonical(origin)
-	if err != nil || cli.SameEdge(old, r.Replacement) {
+	if err != nil {
 		return ""
 	}
 	when := ""

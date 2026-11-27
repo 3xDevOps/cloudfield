@@ -68,13 +68,33 @@ func TestRetiringNotice(t *testing.T) {
 			"cloudfield: https://old.example.test says it is retiring and that its new address is " + edgeclient.DefaultURL + ".\n" + confirm + guide},
 		{"daemon unit at another address", edgeclient.Retiring{Replacement: newEdge}, cli.EdgeHoldings{SignedIn: []string{newEdge}}, "https://other.example.test", true,
 			noDate + guide},
-		{"replacement is the old address", edgeclient.Retiring{Replacement: oldEdge}, cli.EdgeHoldings{SignedIn: []string{oldEdge}}, "", true, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := retiringNotice(oldEdge, tc.notice, tc.holdings, tc.daemon, tc.read); got != tc.want {
 				t.Errorf("notice:\n%s\nwant:\n%s", got, tc.want)
 			}
 		})
+	}
+}
+
+// A notice whose replacement is the edge itself prints nothing at all,
+// not even the line about holdings that cannot be read.
+func TestRetiringNoticeForTheSameEdge(t *testing.T) {
+	testhome.Isolate(t)
+	dir, err := cli.Dir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, edgeclient.TokensFile), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	printRetiring(&stderr, map[string]edgeclient.Retiring{oldEdge: {Replacement: oldEdge + ":443"}})
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want nothing", stderr.String())
 	}
 }
 
