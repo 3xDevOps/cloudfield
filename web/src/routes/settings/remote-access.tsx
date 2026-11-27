@@ -30,11 +30,10 @@ function connection(edge: ServerEdge): string {
 
 /** What a member who is not a super admin reads of the edge's notices. */
 function memberAddress(need: EdgeNeed): string {
-  const parts = need.notice ? [`${need.noticeReason}; the edge recommends ${need.notice.replacement}.`] : []
-  if (need.pending) parts.push(`A change of the server's edge address is configured and waits for a restart, and that address is itself ${need.pending.state}.`)
-  else if (need.notice?.restart_pending) parts.push("A change of the server's edge address is configured and waits for a restart.")
-  else parts.push('A super admin moves the server.')
-  return parts.join(' ')
+  const running = need.notice ? `${need.noticeReason}; the edge recommends ${need.notice.replacement}.` : ''
+  if (need.pending) return [`${need.reason}. A super admin moves the server.`, running].filter(Boolean).join(' ')
+  const next = need.notice?.restart_pending ? "A change of the server's edge address is configured and waits for a restart." : 'A super admin moves the server.'
+  return `${running} ${next}`
 }
 
 export function RemoteAccessSection({ client }: { client: Api }) {

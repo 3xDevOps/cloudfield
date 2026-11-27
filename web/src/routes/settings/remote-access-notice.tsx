@@ -32,9 +32,9 @@ export function EdgeMoveSteps({ need }: { need: EdgeNeed }) {
     return (
       <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">
         {need.noticeReason && <p className="break-words">{need.noticeReason}; the server still runs there.</p>}
+        {pending.first_use && <FirstUse />}
         {need.moveOn ? (
           <>
-            {pending.first_use && <FirstUse />}
             <p className="break-words">The server's options file names {pending.edge_url}, which is itself {pending.state}, so a restart would move the server to a leaving address. Move it to {pending.replacement} first. Run on the server's host, adding the service's --config &lt;file&gt; if it has one.</p>
             <p>1. Move the server:</p>
             <CopyableCommand command={need.moveOn} wrap />

