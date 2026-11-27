@@ -171,6 +171,33 @@ comes back from disk without one. After 1280 MiB written and read once in a
 4 GiB guest, three quarters of it was back on the host in 76 seconds, and
 16% after 3 minutes without the trim (`TestKVMBuildCacheReturnsToTheHost`).
 
+The host fills a booted guest's memory in 2 MiB huge pages: Cloud Hypervisor
+asks for them, and the server lets shared memory that asks have them
+([install.md](install.md#hosts-for-vm-sessions)). The guest then takes one
+fault for each 2 MiB it first touches instead of one for each 4 KiB: an
+8 GiB VM booted with 219 ms of CPU instead of 999 ms, holding 368 MiB of the
+host instead of 360 MiB (`TestKVMGuestMemoryUsesHugePages`). A page the guest
+frees still goes back alone: the host splits the huge page it is in, and
+memory the guest touches again in a split range comes back in 4 KiB pages.
+The server also sets the host's `khugepaged/max_ptes_none` to 0, so the
+kernel's khugepaged merges 4 KiB pages back into a huge page only where all
+512 are in use. At the kernel's 511 it merges any 2 MiB range that holds one
+page and fills the rest with zero pages: a guest that had filled 1 GiB and
+freed all but one page in each 2 MiB went from 421 MiB on the host back to
+1322 MiB, and stayed at 421 MiB with 0
+(`TestKVMReturnedGuestMemoryStaysWithTheHost`). With
+`page_reporting_order=9` the huge pages stay whole, but the host then held
+twice as much of the same guest.
+
+A guest that booted on huge pages can hold more of the host later. After 14
+minutes of filling, building and freeing memory, two such guests held 1257
+and 1295 MiB against 1012 and 1060 MiB for two on 4 KiB pages, and their
+first saves wrote 1340 and 1391 MiB against 1072 and 1102 MiB. They had
+swapped out almost none of an idle 600 MiB tmpfs file, where the guests on
+4 KiB pages swapped out about 250 MiB of it; why is not known. Once woken,
+on 4 KiB pages, they saved no more than the others (983 and 986 MiB against
+1057 and 1084 MiB).
+
 The trim frees no program memory, so the helper also turns on the kernel's
 DAMON_RECLAIM at boot: it pages out memory left untouched for `min_age`, 60
 seconds, while pages in use stay. It samples memory by region, so a cold
@@ -543,6 +570,17 @@ configuration, its device state and a sparse file of the memory the host
 holds for it. A restore starts Cloud Hypervisor with `--restore` in its
 default mode, which writes every saved page into the guest's memory before
 the VM can be resumed.
+
+Before it does, the engine sets `memory.thp` to `false` in the saved
+`config.json`, so under the host policy `advise` the woken guest's memory is
+in 4 KiB pages. Under `always`, `within_size` or `force` the kernel gives
+shared memory huge pages unasked, a woken guest's too. Loaded into huge
+pages, every saved range takes whole 2 MiB pages: a guest that had filled
+and freed memory for 7 minutes woke 2.2 times faster that way (514 ms
+instead of 1153 ms), then read 600 MiB back in 79 ms instead of 1343 ms and
+touched 1.5 GiB of new memory in 0.8 s instead of 4.9 s, but held 1580 MiB
+of the host instead of the 1012 MiB it had saved, and its next save wrote
+1500 MiB instead of 990 MiB.
 
 Cloud Hypervisor v54.1 can load that memory on demand instead
 (`memory_restore_mode=ondemand`): it resumes at once and copies each page in

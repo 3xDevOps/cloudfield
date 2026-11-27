@@ -473,7 +473,7 @@ func startVMM(socket string, args []string, exit func()) (*fakeVMM, error) {
 			_ = os.WriteFile(filepath.Join(dir, "state.json"), []byte("{}"), 0o600)
 			disk := filepath.Join(filepath.Dir(dir), "fake-root.img")
 			_ = os.WriteFile(disk, nil, 0o600)
-			_ = os.WriteFile(filepath.Join(dir, "config.json"), fmt.Appendf(nil, `{"disks":[{"path":%q}]}`, disk), 0o600)
+			_ = os.WriteFile(filepath.Join(dir, "config.json"), fmt.Appendf(nil, `{"disks":[{"path":%q}],"memory":{"size":2667577344,"shared":true,"thp":true}}`, disk), 0o600)
 		case "vm.counters":
 			_ = json.NewEncoder(w).Encode(map[string]map[string]uint64{
 				"net0": {"rx_bytes": 10, "tx_bytes": 20}, "root": {"read_bytes": 1, "write_bytes": 2}, "data": {"read_bytes": 3, "write_bytes": 4},

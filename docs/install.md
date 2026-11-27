@@ -112,6 +112,28 @@ path, or a development build, keeps the kernel already there. With
 `/usr/local/libexec/aether/omp`: replace either, and the next start puts the
 pinned one back, the omp in the background after the server is up. The server
 also adds the system user `aether-omp` that omp's auth brokers run as.
+Every start with `session-runtime vm` also sets
+`/sys/kernel/mm/transparent_hugepage/shmem_enabled` to `advise` when it reads
+`never`, and logs the change, so the host backs a booting guest's memory with
+2 MiB pages ([vm-guest.md](vm-guest.md#memory-the-guest-returns)). Under
+`advise` only shared memory that asks for huge pages gets them. Any other
+value is left as it is, so write `deny` there to keep guest memory on 4 KiB
+pages. `deny` is the kernel's emergency setting: it also turns huge pages off
+on every tmpfs mount of the host, those mounted with `huge=` included. Unless
+it reads `deny`, the start also writes `0` to `khugepaged/max_ptes_none` in
+that directory, for every process on the host, and logs the value it
+replaced, one set by hand included: the kernel then merges 4 KiB pages into a
+huge page only where all 512 are in use, so it does not refill memory a guest
+returned. Both settings last
+until the host reboots, as does a `deny` written by hand: write it again
+before the server starts after each boot. Read the two values, the first
+between brackets, with:
+
+```sh
+cat /sys/kernel/mm/transparent_hugepage/shmem_enabled
+cat /sys/kernel/mm/transparent_hugepage/khugepaged/max_ptes_none
+```
+
 `install` leaves
 Sysbox out: sessions and environment terminals run their own Docker daemon in
 their VM.

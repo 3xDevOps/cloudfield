@@ -73,6 +73,9 @@ func New(cfg Config) (*Runtime, error) {
 		return nil, errors.New("vm runtime: Docker, the image store, the monitor command and the helper binary are required")
 	}
 	e := newEngine(cfg, SystemdUnits{}, dialHelper)
+	if _, err := adviseHugePages(hugePages); err != nil {
+		slog.Warn("vm runtime: the host's huge page settings for guest memory", "error", err)
+	}
 	go e.lingering(context.Background())
 	e.warmBrowser()
 	return &Runtime{Docker: cfg.Docker, vms: e}, nil

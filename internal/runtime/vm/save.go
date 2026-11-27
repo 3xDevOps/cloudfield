@@ -325,6 +325,9 @@ func (e *engine) restore(ctx context.Context, key string) error {
 			}
 		}
 		runtime.Step(ctx, "network")
+		if err = plainPages(dir); err != nil {
+			return err
+		}
 		if err = e.launch(ctx, rec, l); err != nil {
 			return err
 		}
@@ -407,6 +410,35 @@ func (e *engine) restore(ctx context.Context, key string) error {
 		}
 	}()
 	return err
+}
+
+// plainPages has Cloud Hypervisor load the saved VM in dir without asking
+// for huge pages. On them every saved range takes whole 2 MiB pages, so a
+// guest whose memory is scattered would hold half as much again as it saved.
+func plainPages(dir string) error {
+	path := filepath.Join(dir, "config.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("vm runtime: saved VM configuration: %w", err)
+	}
+	var cfg, memory map[string]json.RawMessage
+	if err = json.Unmarshal(data, &cfg); err == nil {
+		err = json.Unmarshal(cfg["memory"], &memory)
+	}
+	if err == nil && memory == nil {
+		err = errors.New("no memory section")
+	}
+	if err != nil {
+		return fmt.Errorf("vm runtime: saved VM configuration: %w", err)
+	}
+	memory["thp"] = json.RawMessage("false")
+	if cfg["memory"], err = json.Marshal(memory); err == nil {
+		data, err = json.Marshal(cfg)
+	}
+	if err != nil {
+		return fmt.Errorf("vm runtime: saved VM configuration: %w", err)
+	}
+	return writeFileAtomic(path, data)
 }
 
 // diskTimes is when each disk the saved guest in dir may write was last
