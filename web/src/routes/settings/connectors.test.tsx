@@ -522,7 +522,7 @@ it('shows where to add a connector at a retiring address again, and leaves the r
   const old: Connector = { ...claude, resource: oldUniversal, notice: notice(`{"state":"retiring","url":"${newUniversal}","date":"2027-03-01"}`) }
   const client = show({ connectorList: vi.fn().mockResolvedValue({ connectors: [old], ...movedEdge }) })
   const callout = (await screen.findByText('This address is retiring on 2027-03-01')).closest('[data-slot=callout]')
-  expect(callout?.textContent).toContain('Add it again in Claude at this URL and check that it works, then remove the old connector there and select Revoke here.')
+  expect(callout?.textContent).toContain('Add it again in Claude at this URL and check that it works, then remove the old connector in Claude and select Revoke on this row.')
   expect(callout?.textContent).not.toContain('asks for a code')
   expect(within(callout as HTMLElement).getByText(newUniversal)).toBeTruthy()
   expect(screen.getByText(oldUniversal).closest('span')?.textContent).toBe(`Added at ${oldUniversal}`)
@@ -535,7 +535,7 @@ it('says the new own URL asks for a code while the universal URL takes the sign-
   const old: Connector = { ...chatgpt, resource: oldOwn, notice: notice(`{"state":"retiring","url":"${newOwn}"}`) }
   show({ connectorList: vi.fn().mockResolvedValue({ connectors: [old], ...movedEdge }) })
   const callout = (await screen.findByText('This address is retiring')).closest('[data-slot=callout]')
-  expect(callout?.textContent).toContain('select Revoke here. Its page asks for a code: aether mcp code.')
+  expect(callout?.textContent).toContain('select Revoke on this row. Its page asks for a code; run aether mcp code to get one.')
   expect(within(callout as HTMLElement).getByText(newOwn)).toBeTruthy()
 })
 
@@ -543,7 +543,7 @@ it('tells the member to add a connector at a retired address again and revoke it
   const old: Connector = { ...claude, resource: oldUniversal, notice: notice(`{"state":"retired","url":"${newUniversal}"}`) }
   show({ connectorList: vi.fn().mockResolvedValue({ connectors: [old], ...movedEdge, universal_urls: [newUniversal] }) })
   const callout = (await screen.findByText('This address is retired')).closest('[data-slot=callout]')
-  expect(callout?.textContent).toContain('This connector no longer works. Add it again in Claude at this URL, then remove the old connector there and select Revoke here.')
+  expect(callout?.textContent).toContain('This connector no longer works. Add it again in Claude at this URL, then remove the old connector in Claude and select Revoke on this row.')
   expect(within(callout as HTMLElement).getByText(newUniversal)).toBeTruthy()
   expect(screen.queryByRole('button', { name: /^(Move|Reconnect) Claude/ })).toBeNull()
   expect(screen.getByRole('button', { name: 'Revoke Claude (claude.ai)' })).toBeTruthy()

@@ -548,7 +548,7 @@ function Connectors({ client }: { client: Api }) {
                 {c.notice.url
                   ? (
                       <div className="flex min-w-0 flex-col gap-1.5">
-                        <p>Add it again in {c.client_name} at this URL and check that it works, then remove the old connector there and select <strong>Revoke</strong> here.{asksCode && <> Its page asks for a code: <Code>aether mcp code</Code>.</>}</p>
+                        <p>Add it again in {c.client_name} at this URL and check that it works, then remove the old connector in {c.client_name} and select <strong>Revoke</strong> on this row.{asksCode && <> Its page asks for a code; run <Code className="whitespace-nowrap">aether mcp code</Code> to get one.</>}</p>
                         <CopyableCommand command={c.notice.url} />
                       </div>
                     )
@@ -560,7 +560,7 @@ function Connectors({ client }: { client: Api }) {
                 {c.notice.url
                   ? (
                       <div className="flex min-w-0 flex-col gap-1.5">
-                        <p>This connector no longer works. Add it again in {c.client_name} at this URL, then remove the old connector there and select <strong>Revoke</strong> here.{asksCode && <> Its page asks for a code: <Code>aether mcp code</Code>.</>}</p>
+                        <p>This connector no longer works. Add it again in {c.client_name} at this URL, then remove the old connector in {c.client_name} and select <strong>Revoke</strong> on this row.{asksCode && <> Its page asks for a code; run <Code className="whitespace-nowrap">aether mcp code</Code> to get one.</>}</p>
                         <CopyableCommand command={c.notice.url} />
                       </div>
                     )
