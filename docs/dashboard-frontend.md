@@ -3373,21 +3373,23 @@ agent's last terminal or Enhanced session title,
 line, else the task's first line cut at 120 characters, with a lock for a
 protected session. The row holds, from the left:
 
-- The view switch. Below 800px of row width its views are icons and it
-  keeps its width, so no view leaves the row; wider, as words, it scrolls
-  when the row is too narrow for it.
+- The view switch. Below 800px of row width its views are icons; beside a
+  login or a per-use badge it then keeps its width, so no view leaves the
+  row. Otherwise it scrolls when the row is too narrow for it.
 - The state's dot and label. On the tile that carries the session's
   controls, from 560px of row width, they are the
-  [Session tree panel](#session-tree-panel)'s chip. When the row is still
-  full the label folds to its dot, first of anything, and stays the
-  accessible state; it returns once the reason's room holds it.
+  [Session tree panel](#session-tree-panel)'s chip. Beside a login or a
+  per-use badge, when the row is still full the label folds to its dot,
+  first of anything, and stays the accessible state; it returns once the
+  reason's room holds it.
 - From 560px of row width, the reason, then `repo +N` on a
   [multi-repo session](#multi-repo-sessions), the mode ("Standard"; the
   tooltip adds the `agent.list` display name, `run.model` and `run.effort`,
   "Claude Code · Standard · opus · high"), "Launched via `<name>`". Each
   part that does not fit drops whole, last first; the reason truncates
   last, and with under 96px left for it drops whole too, leaving the room
-  to the parts after it.
+  to the parts after it beside a login or a per-use badge; a session with
+  neither then drops every part, as before logins.
 - "On `<name>`'s account (fallback)" when the session carries
   `requested_account_member_id` and no login to name ([usage
   fallback](teams.md#usage-fallback); a `run.account` event updates it live

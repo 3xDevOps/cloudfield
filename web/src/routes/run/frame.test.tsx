@@ -193,6 +193,38 @@ describe('run frame', () => {
     expect(within(within(banner).getByRole('tablist', { name: 'Session views' })).getAllByRole('tab')).toHaveLength(5)
   })
 
+  it('squeezes a run with no login and no per-use badge as before logins, in a narrow tile and with little room for the reason', async () => {
+    let width = 420
+    const measure = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.dataset.slot === 'pane-header') return DOMRect.fromRect({ width, height: 32 })
+      // The reason's room, under its 96px floor.
+      if (this.className.includes('basis-0 flex-wrap')) return DOMRect.fromRect({ width: 80, height: 32 })
+      return measure.call(this)
+    })
+    vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.parentElement?.title.startsWith('Working') && this.previousElementSibling ? 54 : 0
+    })
+    let view = open()
+    const banner = await screen.findByRole('banner')
+    const label = within(banner).getByText('Working')
+    await act(async () => {})
+    expect(label.className).toBe('font-medium')
+    expect(label.parentElement!.className).toContain('shrink-0')
+    expect(within(banner).getByRole('tablist', { name: 'Session views' }).className).not.toContain('shrink-0')
+    view.unmount()
+
+    width = 700
+    view = open()
+    await act(async () => {})
+    expect(screen.getByRole('banner').textContent).not.toContain('Standard')
+    view.unmount()
+
+    open({ account_member_id: alice.id, account_login: 'lgn-work0000001', account_login_name: 'work' })
+    await waitFor(() => expect(screen.getByRole('banner').textContent).toContain('On your account, login work'))
+    expect(screen.getByRole('banner').textContent).toContain('Standard')
+  })
+
   it("keeps a teammate's account and login in a narrow tile when the login is not billed per use", async () => {
     const measure = HTMLElement.prototype.getBoundingClientRect
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
