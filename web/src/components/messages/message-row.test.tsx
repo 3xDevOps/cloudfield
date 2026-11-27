@@ -37,7 +37,9 @@ describe('MessageRow', () => {
     const coordMessagesList = vi.fn().mockRejectedValue(new Error('coord.messages.list: permission denied'))
     render(<MessageRow message={report} client={{ coordMessagesList } as unknown as Api} />)
     await userEvent.click(screen.getByRole('button', { name: 'Full report (2.0 KB)' }))
-    expect((await screen.findByRole('alert')).textContent).toBe('coord.messages.list: permission denied')
+    expect((await screen.findByRole('alert')).textContent).toContain('Reading the full report failed: coord.messages.list: permission denied')
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(coordMessagesList).toHaveBeenCalledTimes(2)
   })
 
   it('offers nothing for a report without a body', () => {

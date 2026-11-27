@@ -107,7 +107,7 @@ test('an agent starts a child run that its owner sees, follows and stops', async
   await expect(open).toBeVisible({ timeout: 60_000 })
   if (shots) await page.screenshot({ path: `${shots}/report-body-closed.png`, fullPage: true })
   await open.click()
-  await expect(page.getByLabel('Full report').first()).toContainText('internal/auth/redirect.go:41')
+  await expect(page.getByLabel('Full report', { exact: true }).first()).toContainText('internal/auth/redirect.go:41')
   if (shots) await page.screenshot({ path: `${shots}/report-body-open.png`, fullPage: true })
   if (shots) {
     for (const width of [360, 430]) {
@@ -118,7 +118,7 @@ test('an agent starts a child run that its owner sees, follows and stops', async
       const body = phone.getByRole('button', { name: /^Full report \(/ }).first()
       await expect(body).toBeVisible({ timeout: 60_000 })
       await body.click()
-      await expect(phone.getByLabel('Full report').first()).toContainText('internal/auth/redirect.go:41')
+      await expect(phone.getByLabel('Full report', { exact: true }).first()).toContainText('internal/auth/redirect.go:41')
       await phone.screenshot({ path: `${shots}/report-body-open-${width}.png`, fullPage: true })
       await phone.close()
     }
