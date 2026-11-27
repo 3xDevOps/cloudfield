@@ -47,7 +47,7 @@ type CoordMessagesListResult struct {
 	NextBefore string       `json:"next_before,omitempty"`
 }
 
-func CoordMessagesPageFromStore(page *store.RunMessagePage, reportBodies bool) CoordMessagesListResult {
+func CoordMessagesPageFromStore(page *store.RunMessagePage) CoordMessagesListResult {
 	out := CoordMessagesListResult{Messages: make([]RunMessage, 0, len(page.Items)), NextBefore: page.NextBefore}
 	for _, m := range page.Items {
 		row := RunMessage{
@@ -60,10 +60,7 @@ func CoordMessagesPageFromStore(page *store.RunMessagePage, reportBodies bool) C
 		if m.Report != nil {
 			row.Kind = CoordMessageKindReport
 			row.Outcome, row.Summary, row.NextAction = string(m.Report.Outcome), m.Report.Summary, m.Report.NextAction
-			row.ReportBodyBytes = len(m.Report.Body)
-			if reportBodies {
-				row.ReportBody = m.Report.Body
-			}
+			row.ReportBodyBytes, row.ReportBody = m.ReportBodyBytes, m.Report.Body
 		}
 		out.Messages = append(out.Messages, row)
 	}

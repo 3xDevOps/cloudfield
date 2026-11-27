@@ -51,6 +51,7 @@ func (s *Server) coordMessagesList(ctx context.Context, member domain.MemberID, 
 		WorkspaceID:   domain.WorkspaceID(p.WorkspaceID),
 		RunID:         domain.RunID(p.RunID),
 		CorrelationID: p.CorrelationID,
+		ReportBodies:  p.ReportBodies,
 		Before:        p.Before,
 		Limit:         p.Limit,
 		Shows: func(m *store.ListedRunMessage) bool {
@@ -111,7 +112,7 @@ func (s *Server) coordMessagesList(ctx context.Context, member domain.MemberID, 
 	if err := s.redactWaitWakes(ctx, member, page.Items); err != nil {
 		return nil, rpcError(err)
 	}
-	return protocol.CoordMessagesPageFromStore(page, p.ReportBodies), nil
+	return protocol.CoordMessagesPageFromStore(page), nil
 }
 
 // waitWake reports whether m is a wait's wake: a session's message to

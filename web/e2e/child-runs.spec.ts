@@ -93,8 +93,8 @@ test('an agent starts a child run that its owner sees, follows and stops', async
   if (shots) await page.screenshot({ path: `${shots}/parent.png`, fullPage: true })
 
   await waitForCoordCLI(receipt.run_id, aether.server.dataDir)
-  const findings = '1. internal/auth/redirect.go:41 accepts a scheme-relative URL (//evil.example): a sign-in link can leave the site.\n' +
-    '2. internal/auth/redirect_test.go has no case for a backslash after the host.\n\nNo other open redirect found in the three callers of safeRedirect.'
+  const findings = '1. internal/auth/redirect.go:41 refuses a scheme-relative URL (//evil.example), so a sign-in link cannot leave the site.\n' +
+    '2. internal/auth/redirect_test.go has no case for a backslash after the host: the one missing test.\n\nNo open redirect found in the three callers of safeRedirect.'
   runCoordCLI(receipt.run_id, ['report', '--outcome', 'success', '--summary', 'No open redirect; one test missing.', '--body', findings, '--idempotency-key', 'verdict'])
   await expect.poll(() => {
     const inbox = runCoordCLI<{ messages: { from_run_id: string; body: string }[] }>(parent.id, ['inbox'])
@@ -114,7 +114,7 @@ test('an agent starts a child run that its owner sees, follows and stops', async
       const phone = await browser.newPage({ viewport: { width, height: 800 }, isMobile: true, hasTouch: true })
       await phone.goto(parentURL.toString())
       await phone.getByRole('button', { name: 'More' }).click()
-      await phone.getByText('Session details').click()
+      await phone.getByRole('menuitem', { name: 'Session details' }).click()
       const body = phone.getByRole('button', { name: /^Full report \(/ }).first()
       await expect(body).toBeVisible({ timeout: 60_000 })
       await body.click()
@@ -134,7 +134,7 @@ test('an agent starts a child run that its owner sees, follows and stops', async
     const phone = await browser.newPage({ viewport: { width: 393, height: 851 }, isMobile: true, hasTouch: true })
     await phone.goto(parentURL.toString())
     await phone.getByRole('button', { name: 'More' }).click()
-    await phone.getByText('Session details').click()
+    await phone.getByRole('menuitem', { name: 'Session details' }).click()
     await expect(phone.getByText('Adversarial review of the redirect fix').first()).toBeVisible({ timeout: 60_000 })
     await phone.screenshot({ path: `${shots}/parent-mobile.png`, fullPage: true })
     await phone.close()

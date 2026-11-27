@@ -42,6 +42,22 @@ describe('MessageRow', () => {
     expect(coordMessagesList).toHaveBeenCalledTimes(2)
   })
 
+  it('stays hidden when the read returns after Hide, and reads once', async () => {
+    let settle: (page: unknown) => void = () => {}
+    const coordMessagesList = vi.fn().mockReturnValue(new Promise((resolve) => { settle = resolve }))
+    render(<MessageRow message={report} client={{ coordMessagesList } as unknown as Api} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Full report (2.0 KB)' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Hide full report' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Full report (2.0 KB)' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Hide full report' }))
+    settle({ messages: [{ ...report, report_body: 'findings' }] })
+    await waitFor(() => expect(coordMessagesList).toHaveBeenCalledTimes(1))
+    expect(screen.queryByLabelText('Full report')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Full report (2.0 KB)' }))
+    expect(screen.getByLabelText('Full report').textContent).toBe('findings')
+    expect(coordMessagesList).toHaveBeenCalledTimes(1)
+  })
+
   it('offers nothing for a report without a body', () => {
     render(<MessageRow message={{ ...report, report_body_bytes: undefined }} />)
     expect(screen.queryByRole('button', { name: /Full report/ })).toBeNull()
