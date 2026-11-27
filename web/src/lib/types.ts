@@ -1676,6 +1676,15 @@ export interface MergeMember {
   runs: number
   schedules: number
   settings: MergeSettings
+  /** The member's added logins; absent from a server without them. */
+  logins?: MergeLogin[]
+}
+
+/** An added login a merge moves: the absorbed member's go to the survivor. */
+export interface MergeLogin {
+  agent: string
+  id: string
+  name: string
 }
 
 /** Keeping `keep_settings_of`'s settings absorbs `absorbed_id` and

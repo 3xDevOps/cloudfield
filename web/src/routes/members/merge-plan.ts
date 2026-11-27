@@ -1,4 +1,4 @@
-import type { Member, MergeChoice, MergeMember, MergePlan, MergeProposal, MergeSettings } from '@/lib/types'
+import type { Member, MergeChoice, MergeLogin, MergeMember, MergePlan, MergeProposal, MergeSettings } from '@/lib/types'
 
 export interface ProposeForm {
   keep: string | null
@@ -72,4 +72,33 @@ export function settingsLines(settings: MergeSettings, names: { member: (id: str
     settings.mirror_workspaces.length > 0 && `GitHub connection used by the mirror of ${settings.mirror_workspaces.map(names.workspace).join(', ')}`,
     settings.home && 'Home on the server (agent logins, files) and git signing key, archived on the server',
   ].filter((line): line is string => Boolean(line))
+}
+
+/** A login the merge moves to the survivor, with the name it arrives under. */
+export interface MovedLogin extends MergeLogin {
+  /** The survivor's name for it, when the survivor already has a login of this one's name. */
+  renamed?: string
+}
+
+const maxLoginName = 32
+
+/** The absorbed member's added logins as the server moves them: in order, each renamed to the first free `<name>-2`, `<name>-3`, … of the agent's names the survivor has. */
+export function movedLogins(survivor: MergeMember, absorbed: MergeMember): MovedLogin[] {
+  const taken = new Map<string, Set<string>>()
+  const names = (agent: string) => {
+    let used = taken.get(agent)
+    if (!used) taken.set(agent, (used = new Set(['default'])))
+    return used
+  }
+  for (const login of survivor.logins ?? []) names(login.agent).add(login.name)
+  return (absorbed.logins ?? []).map((login) => {
+    const used = names(login.agent)
+    let name = login.name
+    for (let n = 2; used.has(name); n++) {
+      const suffix = `-${n}`
+      name = login.name.slice(0, maxLoginName - suffix.length) + suffix
+    }
+    used.add(name)
+    return name === login.name ? login : { ...login, renamed: name }
+  })
 }

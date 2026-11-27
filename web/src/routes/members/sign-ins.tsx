@@ -21,11 +21,12 @@ import { toastFailure } from '@/components/failure'
 import { message, providerName } from '@/lib/format'
 import type { InvitationResult, Member, MemberIdentities, MemberMerge, MergeCode, MergeMember, MergePlan, MergeProposal } from '@/lib/types'
 import { deviceStatus } from '@/routes/devices'
-import { acceptOutcome, proposeOutcome, settingsLines, type MergeOutcome, type ProposeForm } from '@/routes/members/merge-plan'
+import { acceptOutcome, movedLogins, proposeOutcome, settingsLines, type MergeOutcome, type ProposeForm } from '@/routes/members/merge-plan'
 import { roleLabel } from '@/routes/members/roster'
 import { sameIdentity, useStore } from '@/store'
 import { useCapability } from '@/store/hooks'
 import { memberName } from '@/lib/member-name'
+import { cn } from '@/lib/utils'
 import { addMergeProposal, dropMergeProposal, loadMergeProposals } from '@/store/members'
 
 type Planned = MergeProposal & { plan: MergePlan }
@@ -579,8 +580,32 @@ function Consequences({ plan, shown }: { plan: MergePlan; shown: MergeOutcome })
           <ul aria-label="Discarded settings" className="list-disc pl-5 text-ui text-text">
             {settingsLines(shown.choice.discarded, names).map((line) => <li key={line} className="break-words">{line}</li>)}
           </ul>
+          <MovedLogins survivor={shown.survivor} absorbed={shown.absorbed} className="text-ui text-text" />
         </div>
       )}
+    </div>
+  )
+}
+
+function MovedLogins({ survivor, absorbed, className }: { survivor: MergeMember; absorbed: MergeMember; className?: string }) {
+  const agents = useStore((s) => s.agentList?.agents)
+  const moved = movedLogins(survivor, absorbed)
+  if (moved.length === 0) return null
+  const agentName = (name: string) => agents?.find((agent) => agent.name === name)?.display_name ?? name
+  return (
+    <div className={cn('flex min-w-0 flex-col gap-1', className)}>
+      <p>
+        {absorbed.display_name}&apos;s added logins move to {survivor.display_name}, each off for shares until {survivor.display_name} turns Use for shares
+        on:
+      </p>
+      <ul aria-label="Logins that move" className="list-disc pl-5">
+        {moved.map((login) => (
+          <li key={login.id} className="break-words">
+            {agentName(login.agent)} login {login.name}
+            {login.renamed && <>, renamed {login.renamed}: {survivor.display_name} has a login named {login.name}</>}
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
@@ -606,6 +631,7 @@ function Side({ title, member }: { title: string; member: MergeMember }) {
     ['Devices', member.devices.length ? member.devices.map((d) => `${d.label} (${deviceStatus[d.status].label.toLowerCase()})`).join(', ') : 'none'],
     ['Sessions', String(member.runs)],
     ['Schedules', String(member.schedules)],
+    ...(member.logins?.length ? [['Added logins', member.logins.map((login) => login.name).join(', ')] as [string, string]] : []),
     ['Settings', settingsLines(settings, names).join('; ')],
   ]
   return (
@@ -681,6 +707,7 @@ function ProposalToAccept({ client, proposal, onMerged, onFailed }: {
             <ul aria-label="Discarded settings" className="list-disc pl-5">
               {settingsLines(shown.choice.discarded, names).map((line) => <li key={line} className="break-words">{line}</li>)}
             </ul>
+            <MovedLogins survivor={shown.survivor} absorbed={shown.absorbed} />
           </>
         )}
         <p>The merged member will be <strong>{roleLabel[shown.role]}</strong>.</p>
