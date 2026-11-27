@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -15,8 +16,10 @@ import (
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/events"
 	"github.com/3xDevOps/cloudfield/internal/memberhome"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/quota"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
 	"github.com/3xDevOps/cloudfield/internal/store"
 )
@@ -89,6 +92,56 @@ func (a *cuedClaude) cue(t *testing.T) {
 	writeFile(t, filepath.Join(checkout, runOutCue), "")
 }
 
+// countedRuntime counts the containers created for each run, which the
+// e2e runtime forgets once they are destroyed.
+type countedRuntime struct {
+	*loginsRuntime
+	createMu sync.Mutex
+	created  map[string]int
+}
+
+func newCountedRuntime() *countedRuntime {
+	return &countedRuntime{loginsRuntime: &loginsRuntime{e2eRuntime: newE2ERuntime()}, created: map[string]int{}}
+}
+
+func (r *countedRuntime) Create(ctx context.Context, spec runtime.Spec) (runtime.ID, error) {
+	id, err := r.loginsRuntime.Create(ctx, spec)
+	if err == nil {
+		r.createMu.Lock()
+		r.created[spec.CreationKey]++
+		r.createMu.Unlock()
+	}
+	return id, err
+}
+
+// runStarts counts the containers created for run, whatever they run.
+func (r *countedRuntime) runStarts(run string) int {
+	r.createMu.Lock()
+	defer r.createMu.Unlock()
+	return r.created[run]
+}
+
+// resetLoginUsage is stubLoginUsage whose default login and added logins
+// reset at times of their own.
+type resetLoginUsage struct {
+	*stubLoginUsage
+	defaultReset, addedReset time.Time
+}
+
+func (u *resetLoginUsage) Read(ctx context.Context, account domain.MemberID, refresh bool) ([]quota.Provider, error) {
+	return u.ReadLogin(ctx, domain.AccountOf(account), refresh)
+}
+
+func (u *resetLoginUsage) ReadLogin(ctx context.Context, account domain.Account, refresh bool) ([]quota.Provider, error) {
+	providers, err := u.stubLoginUsage.ReadLogin(ctx, account, refresh)
+	reset := u.defaultReset
+	if account.Login.Added() {
+		reset = u.addedReset
+	}
+	providers[0].Windows[0].ResetsAt = &reset
+	return providers, err
+}
+
 // sessionRow is the line cloudfield sessions prints for id.
 func sessionRow(t *testing.T, table, id string) string {
 	t.Helper()
@@ -115,8 +168,9 @@ type sessionSnapshot struct {
 func TestIntegrationSeveralLoginsEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	rt := &loginsRuntime{e2eRuntime: newE2ERuntime()}
-	usage := &stubLoginUsage{used: map[domain.Account]float64{}}
+	rt := newCountedRuntime()
+	now := time.Now().Truncate(time.Second)
+	usage := &resetLoginUsage{stubLoginUsage: &stubLoginUsage{used: map[domain.Account]float64{}}, defaultReset: now.Add(2 * time.Hour), addedReset: now.Add(time.Hour)}
 	e := &coordEnv{rt: rt, image: "e2e/fake", usage: usage}
 	srv := e.seed(ctx, t, false)
 	sub := srv.subscribe(ctx, t)
@@ -182,16 +236,16 @@ func TestIntegrationSeveralLoginsEndToEnd(t *testing.T) {
 		t.Fatalf("agent_logins after the add = %+v, %v; want default then second", rows, err)
 	}
 	second := domain.Account{Member: e.ada.id, Login: rows[1].ID}
-	usage.set(domain.AccountOf(e.ada.id), 10)
+	usage.set(domain.AccountOf(e.ada.id), 30)
 	usage.set(second, 20)
 	if out := cli("agent", "logins"); out != "#  LOGIN    KIND          PLAN  EMAIL                    ORGANISATION  USAGE  AUTOMATIC  SHARES  BILLED  YOUR SESSIONS\n"+
-		"1  default  subscription  -     -                        -              10%   on         on      -       0\n"+
+		"1  default  subscription  -     -                        -              30%   on         on      -       0\n"+
 		"2  second   subscription  max   ada@second.example.test  Second Org     20%   on         on      -       0\n" {
 		t.Fatalf("agent logins after the add:\n%s", out)
 	}
 
 	// 2. Launch: both logins have usage left, so the session starts on the
-	// first in the order, the default login.
+	// first in the order, the default login, though it has used more.
 	const task = "work until a login runs out"
 	agent := newCuedClaude(t)
 	rt.script(task, agent.run)
@@ -202,6 +256,9 @@ func TestIntegrationSeveralLoginsEndToEnd(t *testing.T) {
 		t.Fatalf("session printed %q; want the session id", out)
 	}
 	id := strings.Fields(out)[1]
+	ctrl, client := srv.control(t, e.ada.key)
+	defer func() { _ = client.Close() }()
+	waitLoginRun(t, ctrl, id, func(r protocol.Run) bool { return r.Status == string(domain.RunRunning) })
 	starts := agent.started(t, 1)
 	if row := sessionRow(t, cli("sessions"), id); len(strings.Fields(row)) < 5 || strings.Fields(row)[4] != "Ada" || strings.Contains(row, "Ada, login") {
 		t.Fatalf("the launched session lists %q; want Ada's default login", row)
@@ -221,8 +278,6 @@ func TestIntegrationSeveralLoginsEndToEnd(t *testing.T) {
 
 	// 4. Move: a new start on login second resumes the conversation with one
 	// continuation that names both logins, and never sends the task again.
-	ctrl, client := srv.control(t, e.ada.key)
-	defer func() { _ = client.Close() }()
 	waitLoginRun(t, ctrl, id, func(r protocol.Run) bool { return r.AccountLogin == string(second.Login) })
 	starts = agent.started(t, 2)
 	argv := starts[1].Command
@@ -237,10 +292,15 @@ func TestIntegrationSeveralLoginsEndToEnd(t *testing.T) {
 		t.Fatalf("the start after the move: argv %q; want --resume s1 and the continuation once, without the task", argv)
 	}
 	secondDir := filepath.Join(loginsDir, string(e.ada.id), "claude", string(second.Login))
-	if !slices.ContainsFunc(starts[1].Mounts, func(m runtime.Mount) bool {
-		return m.HostPath == secondDir && m.Subpath == memberhome.LoginCredentials
+	home := starts[1].Env["HOME"]
+	if home == "" || !slices.ContainsFunc(starts[1].Mounts, func(m runtime.Mount) bool {
+		return m.HostPath == secondDir && m.Subpath == memberhome.LoginCredentials && m.ContainerPath == path.Join(home, ".claude", ".credentials.json")
 	}) {
-		t.Fatalf("the start after the move does not mount login second's credentials; mounts %+v", starts[1].Mounts)
+		t.Fatalf("the start after the move does not mount login second's credentials at $HOME/.claude/.credentials.json; HOME %q, mounts %+v", home, starts[1].Mounts)
+	}
+	if profile, set := starts[1].Env["ANTHROPIC_PROFILE"]; starts[1].Env["CLAUDE_CONFIG_DIR"] != path.Join(home, ".claude") ||
+		starts[1].Env["ANTHROPIC_CONFIG_DIR"] != path.Join(home, ".config", "anthropic") || !set || profile != "" {
+		t.Fatalf("the start after the move: env %q; want CLAUDE_CONFIG_DIR=$HOME/.claude, ANTHROPIC_CONFIG_DIR=$HOME/.config/anthropic and ANTHROPIC_PROFILE empty", starts[1].Env)
 	}
 	if row := sessionRow(t, cli("sessions"), id); !strings.Contains(row, " Ada, login second ") {
 		t.Fatalf("the moved session lists %q; want login second", row)
@@ -272,12 +332,19 @@ func TestIntegrationSeveralLoginsEndToEnd(t *testing.T) {
 			t.Fatalf("the room's notes %q do not include %q", room(), note)
 		}
 	}
+	moved := events.RunAccountPayload{Account: e.ada.id, Previous: e.ada.id, Login: second.Login, LoginName: "second"}
 	movedEvent := func() bool {
 		eventsMu.Lock()
 		defer eventsMu.Unlock()
 		return slices.ContainsFunc(published, func(ev string) bool {
-			return strings.Contains(ev, `"login":"`+string(second.Login)+`"`) && strings.Contains(ev, `"login_name":"second"`) &&
-				strings.Contains(ev, `"previous_account_member_id":"`+string(e.ada.id)+`"`) && !strings.Contains(ev, `"previous_login"`)
+			var event struct {
+				Type    events.Type
+				RunID   domain.RunID
+				Payload json.RawMessage
+			}
+			var payload events.RunAccountPayload
+			return json.Unmarshal([]byte(ev), &event) == nil && event.Type == events.TypeRunAccount && event.RunID == domain.RunID(id) &&
+				json.Unmarshal(event.Payload, &payload) == nil && payload == moved
 		})
 	}
 	for deadline := time.Now().Add(time.Minute); !movedEvent(); time.Sleep(50 * time.Millisecond) {
@@ -289,17 +356,11 @@ func TestIntegrationSeveralLoginsEndToEnd(t *testing.T) {
 	// 5. All spent: login second runs out too, and no login or account is
 	// left, so the session ends with the logins it tried.
 	usage.set(second, 100)
-	cued := time.Now()
 	agent.cue(t)
 	ended := waitLoginRun(t, ctrl, id, func(r protocol.Run) bool { return r.Status == string(domain.RunFailed) })
-	finished := time.Now()
-	reason := regexp.MustCompile(`^Usage limit reached on Ada \(second\)'s account; no fallback has usage left; logins tried: Ada, Ada \(second\); the first is usable again at (\S+)$`).FindStringSubmatch(ended.Reason)
-	if reason == nil || ended.AccountLogin != string(second.Login) {
-		t.Fatalf("the session ended on login %q with %q; want login second and the logins tried", ended.AccountLogin, ended.Reason)
-	}
-	usable, err := time.Parse(time.RFC3339, reason[1])
-	if err != nil || usable.Before(cued.Add(time.Hour).Truncate(time.Second)) || usable.After(finished.Add(time.Hour)) {
-		t.Fatalf("usable again at %q (%v); want the stub's reset an hour after the reads", reason[1], err)
+	want := "Usage limit reached on Ada (second)'s account; no fallback has usage left; logins tried: Ada, Ada (second); the first is usable again at " + usage.addedReset.UTC().Format(time.RFC3339)
+	if ended.Reason != want || ended.AccountLogin != string(second.Login) {
+		t.Fatalf("the session ended on login %q with %q; want login second and %q, the earliest of the logins' resets", ended.AccountLogin, ended.Reason, want)
 	}
 	if s := snapshot(id); s.State != string(domain.RunFailed) || s.Reason != ended.Reason {
 		t.Fatalf("cloudfield sessions %s --json = %+v; want failed with %q", id, s, ended.Reason)
@@ -309,9 +370,16 @@ func TestIntegrationSeveralLoginsEndToEnd(t *testing.T) {
 	if moves := slices.DeleteFunc(slices.Clone(notes), func(n string) bool { return !strings.HasPrefix(n, "Continued on") }); !slices.Equal(moves, []string{note}) {
 		t.Fatalf("the room's notes %q; want the one move", notes)
 	}
-	if starts = agent.started(t, 2); len(starts) != 2 {
-		t.Fatalf("the stand-in started %d times; want 2, nothing replayed after the last limit", len(starts))
+	settled := func() {
+		t.Helper()
+		if n, starts := rt.runStarts(id), agent.started(t, 2); n != 2 || len(starts) != 2 {
+			t.Fatalf("the runtime created %d containers for the session and the stand-in started %d times; want 2, nothing replayed after the last limit", n, len(starts))
+		}
 	}
+	settled()
+
+	time.Sleep(2 * time.Second)
+	settled()
 
 	eventsMu.Lock()
 	collected := said.String() + strings.Join(published, "\n") + strings.Join(notes, "\n") + ended.Reason
@@ -329,7 +397,7 @@ func TestIntegrationSeveralLoginsEndToEnd(t *testing.T) {
 func TestIntegrationSeveralLoginsOneLoginControl(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	rt := newE2ERuntime()
+	rt := newCountedRuntime()
 	usage := &stubLoginUsage{used: map[domain.Account]float64{}}
 	e := &coordEnv{rt: rt, image: "e2e/fake", usage: usage}
 	srv := e.seed(ctx, t, false)
@@ -341,10 +409,11 @@ func TestIntegrationSeveralLoginsOneLoginControl(t *testing.T) {
 	rt.script(task, agent.run)
 
 	out, stderr, code := ada.cli("session", task, "--agent", "claude", "--mode", "background")
-	if code != 0 || !strings.HasPrefix(out, "session run-") {
-		t.Fatalf("session = %d %q %q", code, out, stderr)
+	id, _, _ := strings.Cut(strings.TrimPrefix(out, "session "), " ")
+	if code != 0 || !strings.HasPrefix(id, "run-") || out != "session "+id+" running\n" ||
+		!regexp.MustCompile(`^aether: trusting new host [^\n]+\n$`).MatchString(stderr) {
+		t.Fatalf("session = %d %q %q; want the session id and its status, and only the new host noted", code, out, stderr)
 	}
-	id := strings.Fields(out)[1]
 	agent.started(t, 1)
 	usage.set(domain.AccountOf(e.ada.id), 100)
 	agent.cue(t)
@@ -361,8 +430,23 @@ func TestIntegrationSeveralLoginsOneLoginControl(t *testing.T) {
 	if row := sessionRow(t, table, id); len(strings.Fields(row)) < 5 || strings.Fields(row)[4] != "Ada" || strings.Contains(row, "Ada, login") {
 		t.Fatalf("the session lists %q; want Ada's account as before", row)
 	}
-	if starts := agent.started(t, 1); len(starts) != 1 {
-		t.Fatalf("the stand-in started %d times; want once", len(starts))
+	shown, stderr, code := ada.cli("sessions", id)
+	if code != 0 || !regexp.MustCompile(`(?m)^state +failed$`).MatchString(shown) || regexp.MustCompile(`(?m)^login\b`).MatchString(shown) {
+		t.Fatalf("sessions %s = %d %q:\n%s; want the failed session without a login row", id, code, stderr, shown)
+	}
+	shown, stderr, code = ada.cli("sessions", id, "--json")
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(shown), &fields); code != 0 || err != nil || string(fields["state"]) != `"failed"` {
+		t.Fatalf("sessions %s --json = %d %q %v:\n%s", id, code, stderr, err, shown)
+	}
+	for field := range fields {
+		if strings.HasPrefix(field, "account_login") {
+			t.Fatalf("sessions %s --json carries %s; want no login field:\n%s", id, field, shown)
+		}
+	}
+	time.Sleep(2 * time.Second)
+	if n, starts := rt.runStarts(id), agent.started(t, 1); n != 1 || len(starts) != 1 {
+		t.Fatalf("the runtime created %d containers for the session and the stand-in started %d times; want once", n, len(starts))
 	}
 	if rows, err := srv.srv.Store().ListAgentLogins(ctx, e.ada.id, "claude"); err != nil || len(rows) != 0 {
 		t.Fatalf("agent_logins = %+v, %v; want no row", rows, err)
