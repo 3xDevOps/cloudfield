@@ -45,6 +45,15 @@ function AccountOf({ id }: { id: unknown }) {
   return text(id) === self ? 'your account' : `${name ?? 'another member'}'s account`
 }
 
+/** The badge of a move onto a login billed per use, naming the account it charges as a session's header does. */
+function PerUseOf({ id, login }: { id: unknown; login: string }) {
+  const self = useStore((s) => s.info?.member.id)
+  const name = useStore((s) => (resolveMember(s, text(id)).member ? memberName(s, text(id)) : undefined))
+  const own = text(id) === self
+  const whose = `${name ?? 'another member'}'s`
+  return <PerUseBadge className="ml-1.5 align-middle" payer={own ? 'yours' : whose} title={`Billed per use to ${own ? 'your' : whose} account, ${login}`} />
+}
+
 const statusWords: Record<Exclude<RunStatus, 'running' | 'needs-attention'>, string> = {
   queued: 'Session queued',
   provisioning: 'Session starting',
@@ -277,7 +286,7 @@ const describers: Record<EventType, (p: Payload, event: Event) => ReactNode> = {
     const added = (id: unknown) => text(id) !== '' && text(id) !== 'default'
     const logins = added(p.login) || added(p.previous_login)
     const login = (id: unknown, name: unknown) => `login ${text(name) || (added(id) ? text(id) : 'default')}`
-    const perUse = p.per_use === true && <PerUseBadge className="ml-1.5 align-middle" title={`Billed per use to ${login(p.login, p.login_name)}`} />
+    const perUse = p.per_use === true && <PerUseOf id={p.account_member_id} login={login(p.login, p.login_name)} />
     if (logins && text(p.account_member_id) === text(p.previous_account_member_id)) {
       return <>Moved from {login(p.previous_login, p.previous_login_name)} to {login(p.login, p.login_name)}{perUse}</>
     }

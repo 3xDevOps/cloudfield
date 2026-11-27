@@ -5984,8 +5984,8 @@ in **Needs you**.
   [usage fallback](teams.md#usage-fallback) move reads "Moved from Alice's
   account to your account" (`run.account`, filter **Account changed**); a
   move to or from an added login names both logins, "Moved from login work
-  to login console" and the **Billed per use** badge, titled "Billed per use
-  to login console", when the login that now pays is billed per use, with each account only when the two
+  to login console" and the badge "Per use · yours" (or "Per use · <name>'s"),
+  titled "Billed per use to your account, login console", when the login that now pays is billed per use, with each account only when the two
   differ, and
   the headless Claude output that triggered it "Usage limit reached: You've
   hit your session limit · resets 3pm (UTC)", the agent's message cut at 160
