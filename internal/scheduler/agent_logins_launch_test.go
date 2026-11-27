@@ -907,3 +907,39 @@ func TestAnUnreadableDefaultLoginFailsNoLaunch(t *testing.T) {
 		t.Fatalf("Ada's start with work signed out = %q, %v; want the default login", got, err)
 	}
 }
+
+// A default login that ~/.claude/settings.json signs in, by an apiKeyHelper
+// or a key under env, is billed per use beside added logins: Claude Code
+// prefers either to the login file.
+func TestADefaultLoginSignedInBySettingsIsBilledPerUse(t *testing.T) {
+	for _, settings := range []string{`{"apiKeyHelper":"echo test-helper-key"}`, `{"env":{"ANTHROPIC_API_KEY":"test-settings-key"}}`} {
+		e := newLoginShareEnv(t)
+		writeHomeFile(t, e.adaHome, ".claude.json", `{"numStartups":2}`)
+		writeHomeFile(t, e.adaHome, ".claude/.credentials.json", workLogin)
+		e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+		writeHomeFile(t, e.adaHome, ".claude/settings.json", settings)
+		run, err := e.launchOn(t, domain.Account{Member: e.member.ID}, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !run.AccountLoginPerUse {
+			t.Errorf("Ada's default login with %s is not marked billed per use", settings)
+		}
+	}
+}
+
+// Claude Code sends a subscription sign-in that expired with no refresh
+// token ahead of a Console sign-in beside it, and fails. Beside added
+// logins such a default login is passed over by a launch that names none.
+func TestADefaultLoginWithADeadSubscriptionIsPassedOver(t *testing.T) {
+	e := newLoginShareEnv(t)
+	ctx := t.Context()
+	writeHomeFile(t, e.adaHome, ".claude.json", `{"numStartups":2}`)
+	writeHomeFile(t, e.adaHome, ".claude/.credentials.json", `{"claudeAiOauth":{"accessToken":"test-access-old","expiresAt":1}}`)
+	writeHomeFile(t, e.adaHome, ".config/anthropic/configs/default.json", `{"authentication":{"type":"user_oauth"}}`)
+	writeHomeFile(t, e.adaHome, ".config/anthropic/credentials/default.json", `{"access_token":"test-console-ada","refresh_token":"test-console-refresh-ada","expires_at":4102444800}`)
+	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI, ""); err != nil || got != work.Login {
+		t.Fatalf("Ada's start = %q, %v; want work, past her dead subscription", got, err)
+	}
+}

@@ -222,16 +222,12 @@ func (s *Scheduler) loginRefusal(ctx context.Context, member domain.MemberID, lo
 	if problem, blocks, loginErr := s.LoginProblem(member, login.Member, harnessName, profile); loginErr == nil && blocks {
 		return problem, nil
 	}
-	// Beside added logins, a default login that holds no sign-in at all
-	// would start the agent signed out while another login could serve.
+	// Beside added logins, a default login that cannot sign in would start
+	// the agent signed out while another login could serve.
 	if added, err := s.keepsAddedLogin(ctx, harnessName, login.Member); err != nil || !added {
 		return "", err
 	}
-	missing, err := s.defaultSignInMissing(login.Member, harnessName)
-	if missing {
-		return "it holds no sign-in", nil
-	}
-	return "", err
+	return s.defaultSignInProblem(login.Member, harnessName, profile)
 }
 
 // keepsAddedLogin reports whether any of members keeps an added login of
@@ -249,23 +245,36 @@ func (s *Scheduler) keepsAddedLogin(ctx context.Context, agent string, members .
 	return false, nil
 }
 
-// defaultSignInMissing reports whether member's default login of agent
-// holds no sign-in at all: no login file Cloudfield reads, and no
-// apiKeyHelper or variable that signs agent in set in
-// ~/.claude/settings.json. Files it cannot read are an errLoginUnread.
-func (s *Scheduler) defaultSignInMissing(member domain.MemberID, agent string) (bool, error) {
+// defaultSignInProblem is why member's default login of agent, which
+// profile describes, cannot sign it in; empty when it can. It holds no
+// sign-in at all: no login file Cloudfield reads, and no apiKeyHelper or
+// variable that signs agent in set in ~/.claude/settings.json. Or its
+// subscription sign-in file is signed out, which Claude Code sends all the
+// same, ahead of a Console sign-in beside it. Files it cannot read are an
+// errLoginUnread.
+func (s *Scheduler) defaultSignInProblem(member domain.MemberID, agent string, profile harness.Profile) (string, error) {
 	identity, err := s.cfg.Homes.DefaultIdentity(member, agent)
 	if err != nil {
-		return false, fmt.Errorf("%w: %w", errLoginUnread, err)
+		return "", fmt.Errorf("%w: %w", errLoginUnread, err)
 	}
-	if identity.Kind != "" {
-		return false, nil
+	var problem string
+	switch identity.Kind {
+	case "":
+		problem = "it holds no sign-in"
+	case memberhome.LoginSubscription:
+		problem, _ = s.signInFileProblem(member, agent, profile)
 	}
-	settings, err := s.cfg.Homes.ClaudeSettings(member)
+	if problem == "" {
+		return "", nil
+	}
+	key, err := s.settingsSignIn(member, agent)
 	if err != nil {
-		return false, fmt.Errorf("%w: %w", errLoginUnread, err)
+		return "", fmt.Errorf("%w: %w", errLoginUnread, err)
 	}
-	return !settings.APIKeyHelper && !signsIn(settings.Env, agent, ""), nil
+	if key != "" {
+		return "", nil
+	}
+	return problem, nil
 }
 
 // errLoginUnread marks a default login whose files cannot be read to tell
@@ -476,30 +485,31 @@ func (s *Scheduler) ChildLogin(ctx context.Context, workspace domain.WorkspaceID
 }
 
 // LoginPerUse reports whether login of agent, in a session in home's home,
-// is billed per use: a Console login, or home's own default login kept as
-// an API key or a Console profile once they keep login rows. Another
-// member's default login is shared only as a subscription, and a member
-// who keeps no rows is shown as before logins existed.
+// is billed per use: a Console login, or, once home keeps login rows, home's
+// own default login kept as an API key or a Console profile or signed in by
+// ~/.claude/settings.json, which Claude Code prefers to its login file.
+// Another member's default login is shared only as a subscription, and a
+// member who keeps no rows is shown as before logins existed. A default
+// login whose files cannot be read is not billed per use: the flag only
+// orders and labels, and the read must not fail what would run.
 func (s *Scheduler) LoginPerUse(ctx context.Context, home domain.MemberID, login domain.Account, agent string) (bool, error) {
-	var identity memberhome.LoginIdentity
-	var err error
-	switch {
-	case login.Login.Added():
-		identity, err = s.cfg.Logins.Identity(login.Member, agent, login.Login)
-	case login.Member != home || s.cfg.Homes == nil:
-		return false, nil
-	default:
-		var keeps []domain.AgentLogin
-		if keeps, err = s.cfg.Store.ListAgentLogins(ctx, login.Member, agent); err != nil || len(keeps) == 0 {
-			return false, err
+	if login.Login.Added() {
+		identity, err := s.cfg.Logins.Identity(login.Member, agent, login.Login)
+		if err != nil {
+			return false, fmt.Errorf("scheduler: whether the login is billed per use: %w", err)
 		}
-		// A kind that cannot be read is not billed per use: the flag only
-		// orders and labels, and the read must not fail what would run.
-		identity, _ = s.cfg.Homes.DefaultIdentity(login.Member, agent)
+		return identity.PerUse(), nil
 	}
-	if err != nil {
-		return false, fmt.Errorf("scheduler: whether the login is billed per use: %w", err)
+	if login.Member != home || s.cfg.Homes == nil {
+		return false, nil
 	}
+	if keeps, err := s.cfg.Store.ListAgentLogins(ctx, login.Member, agent); err != nil || len(keeps) == 0 {
+		return false, err
+	}
+	if key, _ := s.settingsSignIn(home, agent); key != "" {
+		return true, nil
+	}
+	identity, _ := s.cfg.Homes.DefaultIdentity(login.Member, agent)
 	return identity.PerUse(), nil
 }
 

@@ -397,3 +397,53 @@ func TestIntegrationRealClaudeCodePrefersHomeSettingsToAnAddedLogin(t *testing.T
 		}
 	}
 }
+
+// TestIntegrationRealClaudeCodeSendsADeadSubscriptionAheadOfConsole shows,
+// with the unmodified Claude Code against the stand-in API, that a default
+// login whose subscription sign-in expired with no refresh token still
+// sends that token, not the Console sign-in beside it: such a login is
+// signed out, not billed per use.
+func TestIntegrationRealClaudeCodeSendsADeadSubscriptionAheadOfConsole(t *testing.T) {
+	claude, err := exec.LookPath("claude")
+	if err != nil {
+		t.Skip("Claude Code is not on PATH")
+	}
+	profile, ok := harness.Lookup("claude")
+	if !ok {
+		t.Fatal("no claude profile")
+	}
+	e := newLoginShareEnv(t)
+	writeHomeFile(t, e.adaHome, ".claude.json", `{"hasCompletedOnboarding":true}`)
+	defaultLogins["console"](t, e.adaHome)
+	writeHomeFile(t, e.adaHome, ".claude/.credentials.json", `{"claudeAiOauth":{"accessToken":"test-access-expired","expiresAt":1000,"scopes":["user:inference"]}}`)
+	member, err := e.db.GetMember(t.Context(), e.member.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, err := e.db.GetWorkspace(t.Context(), e.ws.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := &domain.Run{ID: "run-gate", MemberID: member.ID, HomeMemberID: member.ID, AccountMemberID: member.ID, Harness: "claude"}
+	plan, err := e.sched.BuildEnvironmentPlan(t.Context(), run, ws, member, profile, EnvironmentPurposeRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockMessages{}
+	server := httptest.NewServer(mock)
+	defer server.Close()
+	proxy := &proxyLog{}
+	proxyServer := httptest.NewServer(proxy)
+	defer proxyServer.Close()
+	root := t.TempDir()
+	out, _ := runRealClaude(t, claude, plan, containerView(t, plan, root), root, server.URL, proxyServer.URL)
+	seen := mock.seen()
+	if len(seen) == 0 {
+		t.Fatalf("Claude Code sent no request: %.600s", out)
+	}
+	for _, auth := range seen {
+		if auth != "Bearer test-access-expired" {
+			t.Fatalf("a request carried %q; want the expired subscription token", auth)
+		}
+	}
+}

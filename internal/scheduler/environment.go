@@ -933,9 +933,9 @@ func (s *Scheduler) DefaultMode(ctx context.Context, member, account domain.Memb
 // that relied on requested's installation to an account where the agent is
 // missing, nor onto a login a live container holds under another uid:gid. An added login is judged by
 // its own file, never its owner's default login. Once member, requested or
-// the login's owner keeps an added login, a default login that holds no
-// sign-in at all is never a fallback: its usage reads as unknown, which is
-// no sign of a login. It reads member homes,
+// the login's owner keeps an added login, a default login that cannot sign
+// in is never a fallback: its usage reads as unknown, which is no sign of a
+// login. It reads member homes,
 // login directories and the scheduler's own state only, never the runtime or
 // the vendor.
 func (s *Scheduler) FallbackLaunchable(ctx context.Context, member, requested domain.MemberID, login domain.Account, harnessName string, mode domain.LaunchMode, permission domain.Permission) (bool, error) {
@@ -945,20 +945,20 @@ func (s *Scheduler) FallbackLaunchable(ctx context.Context, member, requested do
 	if refusal, err := s.loginRefusal(ctx, member, login, harnessName, permission == domain.PermissionIsolated); (err != nil && !errors.Is(err, errLoginUnread)) || refusal != "" || s.cfg.Homes == nil {
 		return err == nil && refusal == "", err
 	}
+	profile, argvs, err := s.launchProfile(ctx, member, account, harnessName)
+	if err != nil {
+		return false, err
+	}
 	if !login.Login.Added() {
 		added, err := s.keepsAddedLogin(ctx, harnessName, member, requested)
 		if err != nil {
 			return false, err
 		}
 		if added {
-			if missing, _ := s.defaultSignInMissing(account, harnessName); missing {
+			if problem, _ := s.defaultSignInProblem(account, harnessName, profile); problem != "" {
 				return false, nil
 			}
 		}
-	}
-	profile, argvs, err := s.launchProfile(ctx, member, account, harnessName)
-	if err != nil {
-		return false, err
 	}
 	if mode == domain.LaunchACP {
 		installed, adapterErr := s.adapterInstalled(member, account, profile, argvs)

@@ -74,6 +74,23 @@ func (s *Scheduler) LoginProblem(member, account domain.MemberID, agent string, 
 // account share carries the file only. Such a login the server cannot read
 // leaves the file's problem standing.
 func (s *Scheduler) loginFileProblem(member, account domain.MemberID, agent string, profile harness.Profile) (string, error) {
+	problem, err := s.signInFileProblem(account, agent, profile)
+	if err != nil || problem == "" || member != account {
+		return problem, err
+	}
+	own, ownErr := s.cfg.Homes.OwnerLogin(account, agent)
+	switch {
+	case ownErr != nil:
+		return problem + "; a sign-in outside that file cannot be read: " + ownErr.Error(), nil
+	case own != nil:
+		return "", nil
+	}
+	return problem, nil
+}
+
+// signInFileProblem is why the login file of agent in account's home cannot
+// sign it in, naming the file; empty when it can or there is none.
+func (s *Scheduler) signInFileProblem(account domain.MemberID, agent string, profile harness.Profile) (string, error) {
 	file := quota.LoginFile(agent)
 	paths, err := profile.LoginPaths()
 	if s.cfg.Homes == nil || err != nil || !slices.Contains(paths, file) {
@@ -87,22 +104,10 @@ func (s *Scheduler) loginFileProblem(member, account domain.MemberID, agent stri
 	if err != nil {
 		return "", err
 	}
-	problem := quota.LoginProblem(agent, data, time.Now())
-	if problem == "" {
-		return "", nil
+	if problem := quota.LoginProblem(agent, data, time.Now()); problem != "" {
+		return "~/" + file + ": " + problem, nil
 	}
-	problem = "~/" + file + ": " + problem
-	if member != account {
-		return problem, nil
-	}
-	own, ownErr := s.cfg.Homes.OwnerLogin(account, agent)
-	switch {
-	case ownErr != nil:
-		return problem + "; a sign-in outside that file cannot be read: " + ownErr.Error(), nil
-	case own != nil:
-		return "", nil
-	}
-	return problem, nil
+	return "", nil
 }
 
 // loginStamp changes when a login of agent in account's home does: a login
@@ -263,23 +268,36 @@ func (s *Scheduler) loginPayer(ctx context.Context, workspace domain.WorkspaceID
 }
 
 // settingsPayer is what home's ~/.claude/settings.json sets that signs agent
-// in whatever login a session in that home mounts: an apiKeyHelper, or a
-// variable of its env block. A file the server cannot read may hold either.
+// in whatever login a session in that home mounts. A file the server cannot
+// read may sign it in.
 func (s *Scheduler) settingsPayer(home domain.MemberID, agent string) string {
+	key, err := s.settingsSignIn(home, agent)
+	switch {
+	case err != nil:
+		return "~/.claude/settings.json may sign the agent in and cannot be read: " + err.Error()
+	case key == "apiKeyHelper":
+		return "apiKeyHelper in ~/.claude/settings.json signs the agent in"
+	case key != "":
+		return key + " under env in ~/.claude/settings.json signs the agent in"
+	}
+	return ""
+}
+
+// settingsSignIn is what home's ~/.claude/settings.json sets that signs
+// agent in, ahead of any login file: "apiKeyHelper", the first variable of
+// its env block that does, or empty for none.
+func (s *Scheduler) settingsSignIn(home domain.MemberID, agent string) (string, error) {
 	if agent != "claude" || s.cfg.Homes == nil {
-		return ""
+		return "", nil
 	}
 	settings, err := s.cfg.Homes.ClaudeSettings(home)
 	switch {
 	case err != nil:
-		return "~/.claude/settings.json may sign the agent in and cannot be read: " + err.Error()
+		return "", err
 	case settings.APIKeyHelper:
-		return "apiKeyHelper in ~/.claude/settings.json signs the agent in"
+		return "apiKeyHelper", nil
 	}
-	if key := signingKey(settings.Env, agent, ""); key != "" {
-		return key + " under env in ~/.claude/settings.json signs the agent in"
-	}
-	return ""
+	return signingKey(settings.Env, agent, ""), nil
 }
 
 // checkLogin refuses a launch of agent on account whose login cannot sign it
