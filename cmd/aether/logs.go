@@ -33,6 +33,8 @@ var logsFollowPoll = 2 * time.Second
 
 type acpOpen = func(protocol.ACPStreamRequest) (io.ReadWriteCloser, protocol.ACPStreamResponse, error)
 
+const thoughtHead = "thought: "
+
 func runLogs(args []string) error {
 	fs := newFlagSet("logs")
 	limit := fs.Int("limit", 200, "print the newest N terminal lines, or the newest N lines of an Enhanced session's conversation")
@@ -206,7 +208,7 @@ func (l *acpLog) add(f protocol.ACPFrame) *acpEntry {
 	case (it.Kind == "message" || it.Kind == "thought") && it.Message != nil:
 		id, head, text = it.Message.MessageID, it.Message.Role+": ", it.Message.Text
 		if it.Kind == "thought" {
-			head = "thought: "
+			head = thoughtHead
 		}
 	case it.Kind == "tool_call" && it.ToolCall != nil:
 		id, text = it.ToolCall.ID, strings.TrimSpace("tool "+it.ToolCall.Status)+": "+it.ToolCall.Title
@@ -265,7 +267,7 @@ func (l *acpLog) print(w io.Writer, e *acpEntry) error {
 			return err
 		}
 		if e.head != "" && e.shown != "" {
-			rest = e.head + rest
+			rest = e.head + strings.TrimLeft(rest, " ")
 		}
 	}
 	e.shown, l.open = line, e
@@ -329,10 +331,13 @@ func hasReset(frames []protocol.ACPFrame) bool {
 	})
 }
 
-// A message resumes under its MessageID only after tool calls, so a message
-// whose first segment is off the page is the page's first message.
+// A message or thought resumes under its MessageID only after entries of
+// other kinds, so one whose first segment is off the page is the page's
+// first message or its first thought.
 func enough(entries []*acpEntry, limit int) bool {
-	first := slices.IndexFunc(entries, func(e *acpEntry) bool { return e.head != "" })
+	first := max(
+		slices.IndexFunc(entries, func(e *acpEntry) bool { return e.head == thoughtHead }),
+		slices.IndexFunc(entries, func(e *acpEntry) bool { return e.head != "" && e.head != thoughtHead }))
 	return len(entries) > limit && len(entries)-limit > first
 }
 
@@ -387,8 +392,8 @@ func printACPLogs(c *protocol.Client, w io.Writer, runID string, limit int, open
 // falls too far behind, and when an agent session starts on a stream opened
 // with none; each is answered by subscribing again after the last item read.
 // A stream opened with no agent session carries nothing past its replay, so
-// the session's status is read beside every stream, and a session that has
-// ended is read to the end of its replay and no further.
+// the status of a session that has not ended is read beside its stream, and
+// a session that has ended is read to the end of its replay and no further.
 func (l *acpLog) follow(c *protocol.Client, w io.Writer, runID string, last int64, open acpOpen) error {
 	for {
 		r, err := getRun(c, runID)
@@ -403,7 +408,7 @@ func (l *acpLog) follow(c *protocol.Client, w io.Writer, runID string, last int6
 		done := make(chan struct{})
 		go func() {
 			defer func() { _ = stream.Close() }()
-			for {
+			for !ended {
 				select {
 				case <-done:
 					return
@@ -413,6 +418,7 @@ func (l *acpLog) follow(c *protocol.Client, w io.Writer, runID string, last int6
 					return
 				}
 			}
+			<-done
 		}()
 		br := bufio.NewReader(stream)
 		var werr error

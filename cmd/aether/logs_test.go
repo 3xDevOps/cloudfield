@@ -188,9 +188,10 @@ func TestLogsFetchesTheFullItemOfATruncatedFrame(t *testing.T) {
 
 func TestLogsReadsBackToTheStartOfAResumedMessage(t *testing.T) {
 	frames := []protocol.ACPFrame{
-		acpFrame(t, 1, acphost.Item{Kind: acphost.KindMessage, Message: &acphost.Message{Role: "assistant", MessageID: "a1", Text: "start "}}),
-		acpFrame(t, 2, acphost.Item{Kind: acphost.KindToolCall, ToolCall: &acphost.ToolCall{ID: "c1", Title: "ls", Status: "completed"}}),
+		acpFrame(t, 1, acphost.Item{Kind: acphost.KindMessage, Message: &acphost.Message{Role: "assistant", MessageID: "a1", Text: "start ", Complete: true}}),
+		acpFrame(t, 2, acphost.Item{Kind: acphost.KindThought, Message: &acphost.Message{Role: "assistant", MessageID: "a1", Text: "why", Complete: true}}),
 		acpFrame(t, 3, acphost.Item{Kind: acphost.KindMessage, Message: &acphost.Message{Role: "assistant", MessageID: "a1", Text: "end", Complete: true}}),
+		acpFrame(t, 4, acphost.Item{Kind: acphost.KindToolCall, ToolCall: &acphost.ToolCall{ID: "c1", Title: "ls", Status: "completed"}}),
 	}
 	server, client := net.Pipe()
 	go func() {
@@ -220,12 +221,17 @@ func TestLogsReadsBackToTheStartOfAResumedMessage(t *testing.T) {
 	}()
 	c := protocol.NewClient(client)
 	t.Cleanup(func() { _ = c.Close() })
-	var out bytes.Buffer
-	if err := printACPLogs(c, &out, "r1", 2, nil); err != nil {
-		t.Fatal(err)
-	}
-	if got, want := out.String(), "assistant: start end\ntool completed: ls\n"; got != want {
-		t.Fatalf("logs = %q, want %q", got, want)
+	for limit, want := range map[int]string{
+		3: "assistant: start end\nthought: why\ntool completed: ls\n",
+		2: "thought: why\ntool completed: ls\n",
+	} {
+		var out bytes.Buffer
+		if err := printACPLogs(c, &out, "r1", limit, nil); err != nil {
+			t.Fatal(err)
+		}
+		if got := out.String(); got != want {
+			t.Fatalf("logs --limit %d = %q, want %q", limit, got, want)
+		}
 	}
 }
 
@@ -252,12 +258,17 @@ type fakeACPStream struct{ io.ReadCloser }
 
 func (fakeACPStream) Write(p []byte) (int, error) { return len(p), nil }
 
-// acpStreamOf serves lines as one aether-acp stream, which then ends or,
-// held, stays open as the server keeps a stream with no agent session.
+// acpStreamOf serves lines as one aether-acp stream, pausing for each
+// duration among them. The stream then ends or, held, stays open as the
+// server keeps a stream with no agent session.
 func acpStreamOf(held bool, lines ...any) io.ReadWriteCloser {
 	pr, pw := io.Pipe()
 	go func() {
 		for _, v := range lines {
+			if pause, ok := v.(time.Duration); ok {
+				time.Sleep(pause)
+				continue
+			}
 			line, _ := json.Marshal(v)
 			if _, err := pw.Write(append(line, '\n')); err != nil {
 				return
@@ -351,7 +362,7 @@ func TestLogsFollowPrintsAnEnhancedSessionUntilItEnds(t *testing.T) {
 		"assistant: Running the suite\n" +
 		"tool in_progress: go test ./...\n" +
 		"request answered: Allow go test?\n" +
-		"assistant:  now.\n" +
+		"assistant: now.\n" +
 		"thought: hmm [2J\n" +
 		"notice error: Turn interrupted: The agent connection ended before the turn finished.\n" +
 		"[conversation reset]\n" +
@@ -383,6 +394,29 @@ func TestLogsFollowMarksWhatItSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got, want := out.String(), "assistant: one\n[conversation skipped]\nassistant: five\nassistant: six\n"; got != want {
+		t.Fatalf("logs --follow = %q, want %q", got, want)
+	}
+}
+
+// What a session that has ended wrote is read to its end, however slowly it
+// arrives.
+func TestLogsFollowReadsAllAnEndedSessionWrote(t *testing.T) {
+	logsFollowPoll = time.Millisecond
+	message := func(seq int64, text string) protocol.ACPFrame {
+		return acpFrame(t, seq, acphost.Item{Kind: acphost.KindMessage, Message: &acphost.Message{Role: "assistant", MessageID: text, Text: text, Complete: true}})
+	}
+	c := fakeControlMethods(t, map[string]*fakeReply{
+		protocol.MethodRunGet:        {result: protocol.RunResult{Run: protocol.Run{ID: "r1", ACP: true, Status: string(domain.RunCompleted)}}},
+		protocol.MethodRunACPHistory: {result: protocol.RunACPHistoryResult{Frames: []protocol.ACPFrame{message(1, "one")}, OldestSeq: 1}},
+	})
+	var out bytes.Buffer
+	err := printLogs(c, &out, "r1", 10, func(protocol.ACPStreamRequest) (io.ReadWriteCloser, protocol.ACPStreamResponse, error) {
+		return acpStreamOf(true, message(2, "two"), 100*time.Millisecond, message(3, "three")), protocol.ACPStreamResponse{OK: true, Replay: 2}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := out.String(), "assistant: one\nassistant: two\nassistant: three\n"; got != want {
 		t.Fatalf("logs --follow = %q, want %q", got, want)
 	}
 }
