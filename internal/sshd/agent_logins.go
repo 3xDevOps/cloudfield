@@ -366,11 +366,18 @@ func (s *Server) launchLogin(ctx context.Context, workspace domain.WorkspaceID, 
 // MeasureUnnamed reads the usage fallback.Select decides on for member's
 // launch on login, which the launch did not name but was chosen for it: a
 // login billed per use is taken only when no candidate with readable usage
-// is left.
+// is left. An account whose owner keeps no login rows is measured as before
+// logins existed.
 func MeasureUnnamed(ctx context.Context, cfg *Config, member domain.MemberID, login domain.Account, harness string, policy domain.AccountFallback) (fallback.Measured, error) {
-	perUse, err := cfg.Runs.LoginPerUse(ctx, member, login, harness)
+	rows, err := cfg.Store.ListAgentLogins(ctx, login.Member, harness)
 	if err != nil {
 		return nil, err
+	}
+	perUse := false
+	if len(rows) > 0 {
+		if perUse, err = cfg.Runs.LoginPerUse(ctx, member, login, harness); err != nil {
+			return nil, err
+		}
 	}
 	return fallback.MeasureStart(ctx, cfg.Store, cfg.Services.Usage, member, login, harness, policy, perUse)
 }
