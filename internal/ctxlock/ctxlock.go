@@ -18,22 +18,22 @@ type Mutex struct {
 	sem  *semaphore.Weighted
 }
 
-func (m *Mutex) held() *semaphore.Weighted {
+func (m *Mutex) weighted() *semaphore.Weighted {
 	m.once.Do(func() { m.sem = semaphore.NewWeighted(1) })
 	return m.sem
 }
 
-func (m *Mutex) Lock() { _ = m.held().Acquire(context.Background(), 1) }
+func (m *Mutex) Lock() { _ = m.weighted().Acquire(context.Background(), 1) }
 
 // LockContext locks m unless ctx ends first, and then returns why it ended
 // with m not locked. It never locks m for a ctx that has already ended.
 func (m *Mutex) LockContext(ctx context.Context) error {
-	if m.held().Acquire(ctx, 1) != nil {
+	if m.weighted().Acquire(ctx, 1) != nil {
 		return context.Cause(ctx)
 	}
 	return nil
 }
 
-func (m *Mutex) TryLock() bool { return m.held().TryAcquire(1) }
+func (m *Mutex) TryLock() bool { return m.weighted().TryAcquire(1) }
 
-func (m *Mutex) Unlock() { m.held().Release(1) }
+func (m *Mutex) Unlock() { m.weighted().Release(1) }
