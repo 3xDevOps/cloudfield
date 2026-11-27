@@ -282,6 +282,9 @@ func TestIntegrationRealClaudeCodeUsesTheAddedLogin(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
+					// Another session in the home writes a legacy configuration
+					// holding a key once this one has started.
+					writeHomeFile(t, e.adaHome, ".claude/.config.json", `{"hasCompletedOnboarding":true,"primaryApiKey":"test-key-planted-not-a-real-key-00000000"}`)
 					mock := &mockMessages{}
 					server := httptest.NewServer(mock)
 					defer server.Close()

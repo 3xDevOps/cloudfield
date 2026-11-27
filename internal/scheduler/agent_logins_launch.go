@@ -111,7 +111,7 @@ func (s *Scheduler) addedLoginMounts(run *domain.Run, launcher domain.MemberID, 
 		}
 		mounts = append(mounts, runtime.Mount{HostPath: dir, Subpath: memberhome.LoginBackups, ContainerPath: path.Join(home, backups)})
 	}
-	config, err := s.accountConfigMounts(configDir, member, profile, home)
+	config, err := s.accountConfigMounts(configDir, member, profile, home, true)
 	if err != nil {
 		return nil, err
 	}

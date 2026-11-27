@@ -233,7 +233,7 @@ func (s *Scheduler) BuildEnvironmentPlan(ctx context.Context, run *domain.Run, w
 				plan.Mounts = append(plan.Mounts, logins...)
 				plan.LoginMember = run.AccountMemberID
 				if ac := profile.AccountConfig; ac != nil {
-					config, configErr := s.accountConfigMounts(filepath.Join(s.accountConfigRoot(), string(run.ID)), member.ID, profile, home)
+					config, configErr := s.accountConfigMounts(filepath.Join(s.accountConfigRoot(), string(run.ID)), member.ID, profile, home, false)
 					if configErr != nil {
 						return nil, configErr
 					}
@@ -647,12 +647,15 @@ func (s *Scheduler) loginMounts(ctx context.Context, launcher, account domain.Me
 // directory, which no container mounts, or a new login's directory, whose
 // sign-in fills the copy. The copy is made from the Legacy file when the launcher
 // has one, as their own CLI reads that, and an empty read-only file masks
-// the Legacy file so the CLI reads the copy. The copy is mounted where the
+// the Legacy file so the CLI reads the copy. With maskLegacy the mask goes
+// over an empty mountpoint where the launcher has no Legacy file, so one
+// another session writes later is masked too; Claude Code ignores an empty
+// Legacy file. The copy is mounted where the
 // profile's Env points the CLI: mounted over the launcher's file instead, it
 // would be detached by the launcher's other containers replacing that file
 // by rename. Each plan writes the copy afresh, so a run moved to another
 // account starts with none of the previous account cached.
-func (s *Scheduler) accountConfigMounts(dir string, launcher domain.MemberID, profile harness.Profile, home string) ([]runtime.Mount, error) {
+func (s *Scheduler) accountConfigMounts(dir string, launcher domain.MemberID, profile harness.Profile, home string, maskLegacy bool) ([]runtime.Mount, error) {
 	ac := profile.AccountConfig
 	set := profile.BorrowedState[ac.File]
 	data, legacy, err := s.cfg.Homes.StateWithout(launcher, ac.Legacy, ac.Keys, set)
@@ -676,7 +679,12 @@ func (s *Scheduler) accountConfigMounts(dir string, launcher domain.MemberID, pr
 		return nil, fmt.Errorf("scheduler: %w", err)
 	}
 	mounts := []runtime.Mount{{HostPath: filepath.Join(dir, name), ContainerPath: path.Join(home, target)}}
-	if legacy {
+	if !legacy && maskLegacy {
+		if err := s.cfg.Homes.PrepareLoginMountpoint(launcher, ac.Legacy, false); err != nil {
+			return nil, fmt.Errorf("scheduler: %w", err)
+		}
+	}
+	if legacy || maskLegacy {
 		mask := filepath.Join(dir, "legacy-mask")
 		if err := writeFileIn(dir, path.Base(mask), nil); err != nil {
 			return nil, fmt.Errorf("scheduler: mask the session's ~/%s: %w", ac.Legacy, err)

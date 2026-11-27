@@ -5,6 +5,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/harness"
 	"github.com/3xDevOps/cloudfield/internal/memberhome"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
+	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
 
 type loginShareEnv struct {
@@ -67,7 +69,8 @@ const workLogin = `{"claudeAiOauth":{"accessToken":"test-access-work","refreshTo
 // A teammate's session on an added login the owner shared mounts that
 // login from the owner's login directory, as checked subpaths, and nothing
 // of the owner's default login; the launcher's configuration copy carries
-// no key.
+// no key, and the legacy configuration is masked though the launcher has
+// none.
 func TestATeammatesSessionMountsTheSharedAddedLogin(t *testing.T) {
 	e := newLoginShareEnv(t)
 	writeHomeFiles(t, e.ownerHome, ".claude/.credentials.json")
@@ -97,6 +100,12 @@ func TestATeammatesSessionMountsTheSharedAddedLogin(t *testing.T) {
 	}
 	if len(want) > 0 {
 		t.Fatalf("not mounted: %v; mounts %+v", want, spec.Mounts)
+	}
+	// Ada has no legacy configuration; one written later must not win.
+	if !slices.ContainsFunc(spec.Mounts, func(m runtime.Mount) bool {
+		return m.ContainerPath == path.Join(home, ".claude/.config.json") && m.ReadOnly
+	}) {
+		t.Errorf("no read-only mask over ~/.claude/.config.json; mounts %+v", spec.Mounts)
 	}
 	if spec.Env["ANTHROPIC_CONFIG_DIR"] != path.Join(home, ".config/anthropic") {
 		t.Errorf("ANTHROPIC_CONFIG_DIR = %q", spec.Env["ANTHROPIC_CONFIG_DIR"])
