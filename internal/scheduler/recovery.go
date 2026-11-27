@@ -201,8 +201,8 @@ func (s *Scheduler) Relaunch(ctx context.Context, run domain.RunID, actor domain
 	if sameEntry {
 		entry.reported = ""
 		entry.idleReason, entry.idleShown = "", false
-		entry.agentReport, entry.parkedAt, entry.reportsSince = agentstatus.Report{}, time.Time{}, time.Time{}
-		entry.relaunchedAt = now
+		entry.agentReport, entry.parkedAt = agentstatus.Report{}, time.Time{}
+		entry.relaunchedAt, entry.reportsSince = now, now
 		clearErr = s.writeSidecar(entry.sidecar())
 	}
 	s.mu.Unlock()
@@ -1991,6 +1991,7 @@ func (s *Scheduler) entryFromSidecar(r *domain.Run, sc sidecar) *supervised {
 		quietFrom:           time.Now().UTC(),
 		relaunchedAt:        relaunched,
 		turnStartedAt:       turnStarted,
+		reportsSince:        time.Now().UTC(),
 		betweenTurns:        sc.BetweenTurns,
 		paused:              sc.Paused,
 		diskHeld:            sc.DiskHeld,

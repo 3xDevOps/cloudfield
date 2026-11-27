@@ -858,8 +858,8 @@ func (s *Service) enqueueChildReport(ctx context.Context, report *store.CoordRep
 
 // turnReport is the ID of the report whose inbox message key report shares:
 // the first of the reports with report's outcome that the run made in a row
-// since ReportsSince, with no mail read and no needs-input, waiting or
-// answered report in between. A parent that has a message under that key is
+// since ReportsSince, each within repeatWindow of the one before, with no
+// mail read and no needs-input, waiting or answered report in between. A parent that has a message under that key is
 // not sent the outcome again, and one that has none gets report. Any other
 // report has a key of its own.
 func (s *Service) turnReport(ctx context.Context, report *store.CoordReport) (string, error) {
@@ -875,7 +875,7 @@ func (s *Service) turnReport(ctx context.Context, report *store.CoordReport) (st
 		return "", err
 	}
 	i := slices.IndexFunc(turn, func(r *store.CoordReport) bool { return r.ID == report.ID })
-	if i <= 0 || turn[i-1].Outcome != report.Outcome {
+	if i <= 0 || turn[i-1].Outcome != report.Outcome || report.CreatedAt.Sub(turn[i-1].CreatedAt) >= repeatWindow {
 		return report.ID, nil
 	}
 	read, err := s.cfg.Mail.LastRunMessageDeliveredAt(ctx, report.RunID)
@@ -889,7 +889,8 @@ func (s *Service) turnReport(ctx context.Context, report *store.CoordReport) (st
 	if state != "" {
 		return report.ID, nil
 	}
-	for i > 0 && turn[i-1].Outcome == report.Outcome && turn[i-1].CreatedAt.After(read) {
+	for i > 0 && turn[i-1].Outcome == report.Outcome && turn[i-1].CreatedAt.After(read) &&
+		turn[i].CreatedAt.Sub(turn[i-1].CreatedAt) < repeatWindow {
 		i--
 	}
 	return turn[i].ID, nil
