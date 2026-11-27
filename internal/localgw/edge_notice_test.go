@@ -183,20 +183,17 @@ func TestEdgeStatusNotice(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		setup   func(e *noticeEdge)
-		known   bool
 		want    string
 		wantRaw bool
 	}{
 		{name: "no notice", setup: func(*noticeEdge) {}},
 		{name: "retiring", setup: func(e *noticeEdge) { e.retiring = newEdge },
-			want: `{"state":"retiring","replacement":"https://new.example.test","known":false}`},
+			want: `{"state":"retiring","replacement":"https://new.example.test"}`},
 		{name: "retiring with a date", setup: func(e *noticeEdge) { e.retiring, e.date = newEdge, "2027-03-01" },
-			want: `{"state":"retiring","replacement":"https://new.example.test","date":"2027-03-01","known":false}`},
-		{name: "retiring to a known address", setup: func(e *noticeEdge) { e.retiring = newEdge }, known: true,
-			want: `{"state":"retiring","replacement":"https://new.example.test","known":true}`},
+			want: `{"state":"retiring","replacement":"https://new.example.test","date":"2027-03-01"}`},
 		{name: "retired", setup: func(e *noticeEdge) {
 			e.status, e.body = http.StatusGone, `{"error":"retired","retired":{"replacement":"https://new.example.test"}}`
-		}, want: `{"state":"retired","replacement":"https://new.example.test","known":false}`},
+		}, want: `{"state":"retired","replacement":"https://new.example.test"}`},
 		{name: "gone without retired", setup: func(e *noticeEdge) { e.status, e.body = http.StatusGone, `{"error":"gone"}` }},
 		{name: "the replacement is the same edge", setup: func(e *noticeEdge) { e.retiring = e.URL }},
 		{name: "retired in favour of the same edge", setup: func(e *noticeEdge) {
@@ -215,11 +212,7 @@ func TestEdgeStatusNotice(t *testing.T) {
 			g, _ := noticeGateway(t)
 			edge := newNoticeEdge(t)
 			edge.set(tc.setup)
-			if tc.known {
-				signInTo(t, edge.URL, newEdge)
-			} else {
-				signInTo(t, edge.URL)
-			}
+			signInTo(t, edge.URL)
 			if got := retiringOf(t, g, edge.URL); got != tc.want {
 				t.Fatalf("retiring = %s, want %s", got, tc.want)
 			}
@@ -231,7 +224,7 @@ func TestEdgeStatusNoticeCache(t *testing.T) {
 	g, clk := noticeGateway(t)
 	edge := newNoticeEdge(t)
 	signInTo(t, edge.URL)
-	const first = `{"state":"retiring","replacement":"https://new.example.test","known":false}`
+	const first = `{"state":"retiring","replacement":"https://new.example.test"}`
 	edge.set(func(e *noticeEdge) { e.retiring = "https://new.example.test" })
 	if got := retiringOf(t, g, edge.URL); got != first {
 		t.Fatalf("retiring = %s", got)
@@ -244,7 +237,7 @@ func TestEdgeStatusNoticeCache(t *testing.T) {
 	}
 
 	clk.add(time.Second)
-	if got := retiringOf(t, g, edge.URL); got != `{"state":"retiring","replacement":"https://other.example.test","known":false}` {
+	if got := retiringOf(t, g, edge.URL); got != `{"state":"retiring","replacement":"https://other.example.test"}` {
 		t.Fatalf("a changed replacement shows as %s", got)
 	}
 
@@ -421,24 +414,6 @@ func TestEdgeStatusNoticeFromAnObsoleteSnapshot(t *testing.T) {
 	}
 	if n := edge.askedCount(); n != 1 {
 		t.Fatalf("the edge was asked %d times", n)
-	}
-}
-
-// A saved config that cannot be read leaves the notice, as not known.
-func TestEdgeStatusNoticeWithAnUnreadableConfig(t *testing.T) {
-	g, _ := noticeGateway(t)
-	edge := newNoticeEdge(t)
-	signInTo(t, edge.URL, "https://new.example.test")
-	edge.set(func(e *noticeEdge) { e.retiring = "https://new.example.test" })
-	path, err := cli.Path()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if got := retiringOf(t, g, edge.URL); got != `{"state":"retiring","replacement":"https://new.example.test","known":false}` {
-		t.Fatalf("retiring = %s", got)
 	}
 }
 

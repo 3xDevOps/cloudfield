@@ -274,21 +274,15 @@ func (g *Gateway) localEdgeStatus(r *http.Request, _ []byte) (any, *protocol.Err
 	}{Edges: edges, Login: g.local.edge.view()}, nil
 }
 
-// addNotices sets each edge's notice, with whether this machine already
-// knows the replacement; what it holds being unreadable counts as not.
+// addNotices sets each edge's notice.
 func (g *Gateway) addNotices(ctx context.Context, dir string, edges []signedInEdge, gen uint64) {
 	origins := make([]string, len(edges))
 	for i, e := range edges {
 		origins[i] = e.Edge
 	}
 	notices := g.local.notices.lookup(g.ctx, ctx, dir, origins, gen)
-	if len(notices) == 0 {
-		return
-	}
-	holdings, err := cli.LoadEdgeHoldings(dir)
 	for i := range edges {
 		if notice, ok := notices[edges[i].Edge]; ok {
-			notice.Known = err == nil && holdings.Known(edges[i].Edge, notice.Replacement)
 			edges[i].Retiring = &notice
 		}
 	}

@@ -28,7 +28,7 @@ const serverEdge: ServerEdge = {
   claimed: true,
 }
 
-function seed(server: ServerEdge | null = null) {
+function seed() {
   useStore.setState({
     workspaces: { [workspace.id]: workspace },
     activeWorkspace: workspace.id,
@@ -41,7 +41,7 @@ function seed(server: ServerEdge | null = null) {
     onboardingStep: 'Connect',
     onboardingFurthest: 'Connect',
     onboardingWorkspace: '',
-    edge: server,
+    edge: null,
   })
 }
 
@@ -92,7 +92,7 @@ describe('a signed-in edge that says its address is retiring', () => {
 
   it('shows the notice as the old address says it, as text only', async () => {
     seed()
-    const client = await open({ state: 'retiring', replacement: next, date: '2027-03-01', known: true })
+    const client = await open({ state: 'retiring', replacement: next, date: '2027-03-01' })
     expect(noticeText()).toBe(
       'old.example.test says it is retiring on 2027-03-01 and that its new address is https://new.example.test. / Confirm that address with whoever runs the edge before you sign in there. Then run cloudfield login --edge <new address>.',
     )
@@ -101,16 +101,9 @@ describe('a signed-in edge that says its address is retiring', () => {
     expect(client.localEdgeLogin).not.toHaveBeenCalled()
   })
 
-  it('does not take the linked server\'s notice as a reason to fill anything in', async () => {
-    seed({ ...serverEdge, notice: { state: 'retiring', replacement: next } })
-    await open({ state: 'retiring', replacement: next, known: false })
-    expect(noticeText()).toContain('Confirm that address with whoever runs the edge before you sign in there.')
-    expect(screen.queryByDisplayValue(next)).toBeNull()
-  })
-
   it('says when this computer is already signed in at the new address', async () => {
     seed()
-    await open({ state: 'retiring', replacement: next, known: true }, [next])
+    await open({ state: 'retiring', replacement: next }, [next])
     expect(noticeText()).toBe(
       'old.example.test says it is retiring and that its new address is https://new.example.test. / You are already signed in at https://new.example.test.',
     )
@@ -118,7 +111,7 @@ describe('a signed-in edge that says its address is retiring', () => {
 
   it('says a retired address is retired, after its refusal, with no dead ends', async () => {
     seed()
-    await open({ state: 'retired', replacement: next, known: false }, [], new Error('edge.servers: list servers: old.example.test refused: retired (HTTP 410)'))
+    await open({ state: 'retired', replacement: next }, [], new Error('edge.servers: list servers: old.example.test refused: retired (HTTP 410)'))
     expect(noticeText()).toBe(
       'old.example.test says it is retired and that its new address is https://new.example.test. / Confirm that address with whoever runs the edge before you sign in there. Then run cloudfield login --edge <new address>.',
     )
@@ -136,7 +129,7 @@ describe('a signed-in edge that says its address is retiring', () => {
     const client = fakeApi({
       localEdgeStatus: vi.fn(async (): Promise<EdgeStatus> =>
         done
-          ? { edges: [{ edge, account, retiring: { state: 'retiring', replacement: next, known: false } }], login: { ...login, state: 'signed_in', account } }
+          ? { edges: [{ edge, account, retiring: { state: 'retiring', replacement: next } }], login: { ...login, state: 'signed_in', account } }
           : { edges: [], login: { ...login, state: 'pending' } },
       ),
       localEdgeServers: vi.fn(async () => ({ edge, servers: [] })),
@@ -155,7 +148,7 @@ describe('a signed-in edge that says its address is retiring', () => {
     const client = fakeApi({
       localEdgeStatus: vi.fn(async (): Promise<EdgeStatus> =>
         done
-          ? { edges: [{ edge, account, retiring: { state: 'retiring', replacement: next, known: false } }], login: { ...login, state: 'signed_in', account } }
+          ? { edges: [{ edge, account, retiring: { state: 'retiring', replacement: next } }], login: { ...login, state: 'signed_in', account } }
           : { edges: [] },
       ),
       localEdgeLogin: vi.fn(async () => ({ ...login, state: 'pending' as const })),
@@ -173,7 +166,7 @@ describe('a signed-in edge that says its address is retiring', () => {
     const claim = `aether://claim?edge=${encodeURIComponent(edge)}&server=${serverEdge.server_id}#abcdefghijklmnop`
     const client = fakeApi({
       localEdgeStatus: vi.fn(async (): Promise<EdgeStatus> => ({
-        edges: [{ edge, account, retiring: { state: 'retiring', replacement: next, known: true } }, { edge: next, account }],
+        edges: [{ edge, account, retiring: { state: 'retiring', replacement: next } }, { edge: next, account }],
       })),
       localEdgeServers: vi.fn(async () => ({ edge, servers: [] })),
     })

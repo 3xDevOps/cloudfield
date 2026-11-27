@@ -26,13 +26,11 @@ const (
 
 // edgeNotice is what edge.status reports of an edge address that says it
 // is retiring, or that refused as retired. It is the address's own,
-// unauthenticated word. Known is whether this machine already has its
-// own reason to know Replacement, as cli.EdgeHoldings.Known says.
+// unauthenticated word.
 type edgeNotice struct {
 	State       string `json:"state"`
 	Replacement string `json:"replacement"`
 	Date        string `json:"date,omitempty"`
-	Known       bool   `json:"known"`
 }
 
 // edgeNotices caches each signed-in edge's notice by relay origin. gen

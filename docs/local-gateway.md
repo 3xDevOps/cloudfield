@@ -2061,11 +2061,9 @@ does, with the same files in the config directory:
   drops a pending `edge.login` for that edge.
 - An `edge.status` entry carries `retiring` when its edge address says it
   is retiring, or refuses as retired:
-  `{"state":"retiring"|"retired","replacement":"https://...","date":"YYYY-MM-DD","known":true|false}`.
+  `{"state":"retiring"|"retired","replacement":"https://...","date":"YYYY-MM-DD"}`.
   It is the address's own, unauthenticated word, validated as a canonical
-  origin and a real date. `known` is whether this computer already holds a
-  token at `replacement`, a saved link names it, or it is the built-in default
-  edge, the built-in one counting only for a hosted old address. The gateway
+  origin and a real date. The gateway
   asks each signed-in edge's `GET /v1/edge` at most every 5 minutes, and calls
   share an ask in flight; a call waits 2 seconds at most and the ask outlives
   it. A notice shows for at most an hour after that edge last answered. An
