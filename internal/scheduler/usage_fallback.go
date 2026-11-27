@@ -80,6 +80,9 @@ type accountSwap struct {
 	Container string `json:"container,omitempty"`
 	// Continuation is the prompt the Enhanced session on To is still owed.
 	Continuation string `json:"continuation,omitempty"`
+	// perUse is whether To's login is billed per use, read before the old
+	// container goes so that no read can fail the move after it.
+	perUse bool
 }
 
 func (a *accountSwap) to() domain.Account {
@@ -790,7 +793,11 @@ func (s *Scheduler) chooseMove(ctx context.Context, entry *supervised, f *UsageF
 	if to == from {
 		return run, none, excluded, nil
 	}
-	swap := &accountSwap{From: from.Member, FromLogin: from.Login, To: to.Member, ToLogin: to.Login}
+	perUse, err := s.LoginPerUse(ctx, home, to, run.Harness)
+	if err != nil {
+		return nil, none, nil, err
+	}
+	swap := &accountSwap{From: from.Member, FromLogin: from.Login, To: to.Member, ToLogin: to.Login, perUse: perUse}
 	if run.ACP {
 		swap.Continuation = m.continuation(s.memberName(ctx, from.Member), s.memberName(ctx, to.Member))
 	}
@@ -837,13 +844,10 @@ func (s *Scheduler) commitMove(ctx context.Context, entry *supervised, f *UsageF
 	}
 	s.mu.Lock()
 	killed := entry.killRequested
+	perUse := entry.accountSwap != nil && entry.accountSwap.perUse
 	s.mu.Unlock()
 	if killed {
 		return 0, errors.New("the session is being killed")
-	}
-	perUse, err := s.LoginPerUse(ctx, run.HomeMember(), to, run.Harness)
-	if err != nil {
-		return 0, err
 	}
 	seq, err := s.cfg.Store.SetRunAccount(ctx, run.ID, to, perUse, m.segment(), time.Now().UTC())
 	if err != nil {

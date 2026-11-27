@@ -882,3 +882,28 @@ func TestASessionRecordsWhetherItsLoginIsBilledPerUse(t *testing.T) {
 		t.Fatal("want the Console login marked billed per use and the subscription login not")
 	}
 }
+
+// A default login whose kind cannot be read fails no launch: it is not
+// billed per use, a launch that names none passes it over for the next
+// login that serves, and starts on it when none does.
+func TestAnUnreadableDefaultLoginFailsNoLaunch(t *testing.T) {
+	e := newLoginShareEnv(t)
+	ctx := t.Context()
+	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	writeHomeFile(t, e.adaHome, ".claude.json", `{"primaryApiKey":"test-not-a-key-of-ada"`)
+	run, err := e.launchOn(t, domain.Account{Member: e.member.ID}, "")
+	if err != nil {
+		t.Fatalf("a launch on Ada's default login with an unreadable ~/.claude.json: %v", err)
+	}
+	if run.AccountLoginPerUse {
+		t.Fatal("a default login of unknown kind is marked billed per use")
+	}
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI, ""); err != nil || got != work.Login {
+		t.Fatalf("Ada's start = %q, %v; want work, past the default login it cannot read", got, err)
+	}
+	dir, _ := e.logins.Path(e.member.ID, "claude", work.Login)
+	writeHomeFile(t, dir, memberhome.LoginCredentials, `{"claudeAiOauth":{"accessToken":"test-access-old","expiresAt":1}}`)
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI, ""); err != nil || got != "" {
+		t.Fatalf("Ada's start with work signed out = %q, %v; want the default login", got, err)
+	}
+}

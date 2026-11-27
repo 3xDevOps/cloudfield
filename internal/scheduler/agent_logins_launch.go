@@ -227,10 +227,11 @@ func (s *Scheduler) loginRefusal(ctx context.Context, member domain.MemberID, lo
 	if added, err := s.keepsAddedLogin(ctx, harnessName, login.Member); err != nil || !added {
 		return "", err
 	}
-	if s.defaultSignInMissing(login.Member, harnessName) {
+	missing, err := s.defaultSignInMissing(login.Member, harnessName)
+	if missing {
 		return "it holds no sign-in", nil
 	}
-	return "", nil
+	return "", err
 }
 
 // keepsAddedLogin reports whether any of members keeps an added login of
@@ -251,15 +252,26 @@ func (s *Scheduler) keepsAddedLogin(ctx context.Context, agent string, members .
 // defaultSignInMissing reports whether member's default login of agent
 // holds no sign-in at all: no login file Cloudfield reads, and no
 // apiKeyHelper or variable that signs agent in set in
-// ~/.claude/settings.json. One whose files cannot be read is not reported.
-func (s *Scheduler) defaultSignInMissing(member domain.MemberID, agent string) bool {
+// ~/.claude/settings.json. Files it cannot read are an errLoginUnread.
+func (s *Scheduler) defaultSignInMissing(member domain.MemberID, agent string) (bool, error) {
 	identity, err := s.cfg.Homes.DefaultIdentity(member, agent)
-	if err != nil || identity.Kind != "" {
-		return false
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", errLoginUnread, err)
+	}
+	if identity.Kind != "" {
+		return false, nil
 	}
 	settings, err := s.cfg.Homes.ClaudeSettings(member)
-	return err == nil && !settings.APIKeyHelper && !signsIn(settings.Env, agent, "")
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", errLoginUnread, err)
+	}
+	return !settings.APIKeyHelper && !signsIn(settings.Env, agent, ""), nil
 }
+
+// errLoginUnread marks a default login whose files cannot be read to tell
+// whether it signs in. A launch that names no login passes over it, and
+// starts on it only when no other login serves.
+var errLoginUnread = errors.New("its files cannot be read")
 
 // addedLoginRefusal is loginRefusal for an added login: it must still
 // exist, be member's own or on for shares and automatic, have mounts the
@@ -397,6 +409,7 @@ func (s *Scheduler) StartLogin(ctx context.Context, workspace domain.WorkspaceID
 		return "", payerErr
 	}
 	var refused []string
+	unread := false
 	for _, l := range logins {
 		if account != member && (!l.Automatic || !l.Shared) {
 			continue
@@ -408,12 +421,16 @@ func (s *Scheduler) StartLogin(ctx context.Context, workspace domain.WorkspaceID
 		login := domain.Account{Member: account, Login: loginOf(l.ID)}
 		refusal, refusalErr := s.loginRefusal(ctx, member, login, harness, permission == domain.PermissionIsolated)
 		if refusalErr != nil {
+			unread = unread || (errors.Is(refusalErr, errLoginUnread) && !login.Login.Added())
 			refusal = refusalErr.Error()
 		}
 		if refusal == "" {
 			return login.Login, nil
 		}
 		refused = append(refused, l.Name+": "+refusal)
+	}
+	if unread {
+		return "", nil
 	}
 	if account != member {
 		if len(refused) == 0 {
@@ -476,7 +493,9 @@ func (s *Scheduler) LoginPerUse(ctx context.Context, home domain.MemberID, login
 		if keeps, err = s.cfg.Store.ListAgentLogins(ctx, login.Member, agent); err != nil || len(keeps) == 0 {
 			return false, err
 		}
-		identity, err = s.cfg.Homes.DefaultIdentity(login.Member, agent)
+		// A kind that cannot be read is not billed per use: the flag only
+		// orders and labels, and the read must not fail what would run.
+		identity, _ = s.cfg.Homes.DefaultIdentity(login.Member, agent)
 	}
 	if err != nil {
 		return false, fmt.Errorf("scheduler: whether the login is billed per use: %w", err)

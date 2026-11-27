@@ -940,7 +940,9 @@ func (s *Scheduler) DefaultMode(ctx context.Context, member, account domain.Memb
 // the vendor.
 func (s *Scheduler) FallbackLaunchable(ctx context.Context, member, requested domain.MemberID, login domain.Account, harnessName string, mode domain.LaunchMode, permission domain.Permission) (bool, error) {
 	account := login.Member
-	if refusal, err := s.loginRefusal(ctx, member, login, harnessName, permission == domain.PermissionIsolated); err != nil || refusal != "" || s.cfg.Homes == nil {
+	// A default login whose files cannot be read stays a fallback, as
+	// before logins existed; only a launch that names none passes it over.
+	if refusal, err := s.loginRefusal(ctx, member, login, harnessName, permission == domain.PermissionIsolated); (err != nil && !errors.Is(err, errLoginUnread)) || refusal != "" || s.cfg.Homes == nil {
 		return err == nil && refusal == "", err
 	}
 	if !login.Login.Added() {
@@ -948,8 +950,10 @@ func (s *Scheduler) FallbackLaunchable(ctx context.Context, member, requested do
 		if err != nil {
 			return false, err
 		}
-		if added && s.defaultSignInMissing(account, harnessName) {
-			return false, nil
+		if added {
+			if missing, _ := s.defaultSignInMissing(account, harnessName); missing {
+				return false, nil
+			}
 		}
 	}
 	profile, argvs, err := s.launchProfile(ctx, member, account, harnessName)
