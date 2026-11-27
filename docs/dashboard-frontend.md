@@ -386,7 +386,14 @@ top to bottom:
    server's error, below the row (`choices_error`). Drag the panel's right
    edge, or focus **Resize launch panel** and press the arrow keys, to set its
    width from 360px to 720px, never past the room right of the sidebar. The
-   width is saved on this browser.
+   width is saved on this browser. While the panel is open it calls
+   `workspace.mirror.warm` for its workspace, once when the panel opens or
+   the workspace changes and at most every 5 seconds as the task is edited
+   (`launch/warm-base.ts`), so a launch right after typing starts from a
+   source mirror the server has just refreshed and does not wait for the
+   upstream. One call runs at a time, and after one fails the panel makes no
+   more until the workspace changes or the panel is reopened. Nothing is
+   shown; the launch reports a source that cannot be fetched.
 3. **Sessions** (`sidebar-runs.tsx`), a `region` with three groups, **Needs you**,
    **Working** and **Finished** (see [Session state](#session-state)), each an `h2`
    holding an `aria-expanded` disclosure button, a chevron that turns a
