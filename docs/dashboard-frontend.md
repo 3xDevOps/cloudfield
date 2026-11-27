@@ -6748,7 +6748,8 @@ never lands. Each login has its rank (1, 2, 3) with framed
 one at either end drawn without a frame
 (`agent.login.order`, every id). Each control is a server-decided action
 (see [Actions](#actions)): while its call and the read of the list after it
-are pending, it alone is locked and shows "Saving…" beside a switch or
+are pending, it alone is locked (a switch with `aria-disabled`, so it keeps
+focus) and shows "Saving…" beside a switch or
 "Moving…" in the moved row, then "Still waiting for the server…" past the
 deadline. Any outcome of a change, an answer, a refusal or a failure that
 may hide a committed change, reads the list again, and only the newest read

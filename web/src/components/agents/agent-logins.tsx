@@ -246,7 +246,14 @@ export function SwitchRow({ label, detail, checked, pending, onChange }: { label
       </span>
       <span className="flex shrink-0 items-center gap-2">
         {pending && <Pending label="Saving…" />}
-        <Switch id={id} checked={checked} disabled={pending} aria-describedby={detail ? `${id}-detail` : undefined} onCheckedChange={onChange} />
+        <Switch
+          id={id}
+          checked={checked}
+          aria-disabled={pending || undefined}
+          aria-describedby={detail ? `${id}-detail` : undefined}
+          className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+          onCheckedChange={(on) => { if (!pending) onChange(on) }}
+        />
       </span>
     </span>
   )
