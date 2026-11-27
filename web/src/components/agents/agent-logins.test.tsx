@@ -258,7 +258,7 @@ describe('login list', () => {
 
   it('confirms a removal, says Anthropic keeps the sign-in, and shows a refusal verbatim with ways to act on it', async () => {
     const user = userEvent.setup()
-    const refusal = "login \"work\" is in use by your sessions run-7kq2m9x4ab (end them) and 1 of your teammates' sessions, which hold it until they end and their containers go (revoking the share you gave a teammate, with cloudfield account revoke <member-id>, moves their running sessions off it)"
+    const refusal = "login \"work\" is in use by your sessions run-7kq2m9x4ab (end them, or free the sandbox of one that has ended) and 1 of your teammates' sessions, which hold it until they end and their containers go (revoking the share you gave a teammate, with cloudfield account revoke <member-id>, moves their running sessions off it)"
     const navigate = vi.fn()
     const original = useStore.getState().navigate
     useStore.setState({ navigate })

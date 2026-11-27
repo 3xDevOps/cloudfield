@@ -166,7 +166,7 @@ function RenameForm({ login, client, onDone, onFailed, onCancel }: { login: Agen
 }
 
 // The server names the caller's own sessions that hold a login after "your sessions", and points at the CLI to revoke a teammate's share.
-const ownSessions = /your sessions (.*?) \(end them\)/
+const ownSessions = /your sessions (.*?) \(end them/
 const runIDs = /\brun-[0-9a-z]{10}\b/g
 const revokeCommand = 'cloudfield account revoke'
 const teammateSessions = "of your teammates' sessions"
