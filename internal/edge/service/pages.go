@@ -131,8 +131,8 @@ func (s *Service) pendingDevice(r *http.Request, v visitor) (edgestore.DeviceAut
 	}
 	if p := s.pair(r); err == nil && !startedAt(a, p) {
 		return edgestore.DeviceAuth{}, "", pageErr(http.StatusForbidden,
-			"code %s is for a sign-in started at %s for the relay origin %s, not at %s for %s; enter it at %s/device",
-			code, a.SigninOrigin, a.RelayOrigin, p.signin, p.relay, a.SigninOrigin)
+			"code %s is for a sign-in started at %s, not at %s for %s; enter it at %s/device",
+			code, startedWhere(a), p.signin, p.relay, a.SigninOrigin)
 	}
 	return a, code, err
 }

@@ -158,8 +158,8 @@ func (s *Service) apiDeviceToken(r *http.Request) (any, error) {
 	a, err := s.store.DeviceAuth(ctx, hash)
 	if err == nil {
 		if p := s.pair(r); !startedAt(a, p) {
-			return nil, pageErr(http.StatusBadRequest, "this sign-in was started at %s for the relay origin %s, not at %s for %s; finish it there",
-				a.SigninOrigin, a.RelayOrigin, p.signin, p.relay)
+			return nil, pageErr(http.StatusBadRequest, "this sign-in was started at %s, not at %s for %s; finish it there",
+				startedWhere(a), p.signin, p.relay)
 		}
 		a, err = s.store.PollDeviceAuth(ctx, hash, now)
 	}
@@ -244,7 +244,16 @@ func (s *Service) apiEdgeInfo(r *http.Request) (any, error) {
 }
 
 // startedAt reports whether the device authorization a was started at the
-// pair p, or is bound to no pair.
+// pair p, as far as a records its origins. While the edge records origins
+// every row records both, since a start deletes those without a relay.
 func startedAt(a edgestore.DeviceAuth, p *pair) bool {
-	return a.SigninOrigin == "" && a.RelayOrigin == "" || sameOrigin(a.SigninOrigin, p.signin) && sameOrigin(a.RelayOrigin, p.relay)
+	return (a.SigninOrigin == "" || sameOrigin(a.SigninOrigin, p.signin)) && (a.RelayOrigin == "" || sameOrigin(a.RelayOrigin, p.relay))
+}
+
+// startedWhere names the origins the device authorization a records.
+func startedWhere(a edgestore.DeviceAuth) string {
+	if a.RelayOrigin == "" {
+		return a.SigninOrigin
+	}
+	return a.SigninOrigin + " for the relay origin " + a.RelayOrigin
 }

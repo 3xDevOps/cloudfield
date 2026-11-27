@@ -377,3 +377,26 @@ func TestDeviceAuthAcrossRestart(t *testing.T) {
 		t.Errorf("%s device authorizations bound to no relay origin survived a start that records origins", got)
 	}
 }
+
+// TestDeviceAuthWithoutRelayOrigin polls, on an edge that does not record
+// origins, a pending sign-in that records only its sign-in origin, as one
+// started while the edge recorded origins before the step that added the
+// relay origin: it goes on at its sign-in origin and is refused at the
+// other.
+func TestDeviceAuthWithoutRelayOrigin(t *testing.T) {
+	h := newPairsHarness(t)
+	code := edgeproto.NewToken()
+	h.exec(t, `INSERT INTO device_authorizations (code_hash, user_code_hash, label, public_key, client_addr, status, created_at, expires_at, last_poll_at, signin_origin)
+		VALUES (?, 'user-code', 'laptop', 'key', '127.0.0.1', 'pending', 0, 9000000000000000000, 0, ?)`, edgeproto.HashToken(code), testSignin)
+	poll := func(origin string) (int, string) {
+		h.clock.Advance(pollInterval)
+		return h.apiCallOn(t, origin, http.MethodPost, edgeproto.PathDeviceToken, "", edgeproto.DeviceTokenRequest{DeviceCode: code}, nil)
+	}
+	if status, msg := poll(testSignin); msg != string(edgeproto.DevicePending) {
+		t.Errorf("poll at %s: %d %q, want %s", testSignin, status, msg, edgeproto.DevicePending)
+	}
+	want := "this sign-in was started at " + testSignin + ", not at " + testSignin2 + " for " + testRelay2 + "; finish it there"
+	if status, msg := poll(testSignin2); status != http.StatusBadRequest || msg != want {
+		t.Errorf("poll at %s: %d %q, want 400 %q", testSignin2, status, msg, want)
+	}
+}
