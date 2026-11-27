@@ -19,6 +19,9 @@ it('shows a held mail wake as agent mail that the member in control types now or
   fireEvent.click(screen.getByRole('button', { name: 'Type it now' }))
   expect(decide).toHaveBeenCalledWith('wake_1', true)
 
+  rerender(<TimelineRow item={{ kind: 'row', key: wake.id, row: { ...wake, deliverAfter: '2026-08-14T10:00:45Z' }, open: false }} ctx={ctx} />)
+  expect(screen.getByText('Typed when quiet')).toBeDefined()
+
   rerender(<TimelineRow item={{ kind: 'row', key: wake.id, row: { ...wake, delivery: 'Denied', deliverAfter: undefined }, open: false }} ctx={ctx} />)
   expect(screen.getByText('Dismissed')).toBeDefined()
   expect(screen.queryByRole('button', { name: 'Type it now' })).toBeNull()

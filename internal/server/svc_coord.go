@@ -32,7 +32,7 @@ func init() {
 			childAuthority = childSvc
 		}
 		rooms, _ := d.SSH.Services.Rooms.(*collab.Service)
-		var holdWake func(context.Context, domain.RunID, string, string) (bool, error)
+		var holdWake func(context.Context, domain.RunID, string, string) (bool, bool, error)
 		if rooms != nil {
 			holdWake = rooms.HoldWake
 		}

@@ -876,6 +876,7 @@ type fakePTYSession struct {
 	out   bytes.Buffer
 	last  time.Time
 	typed time.Time
+	draft time.Time
 	ended bool
 }
 
@@ -999,6 +1000,18 @@ func (p *fakePTY) LastOutput(key ptyhost.SessionKey) (time.Time, bool) {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	return sess.last, true
+}
+
+func (p *fakePTY) Drafting(key ptyhost.SessionKey) time.Time {
+	p.mu.Lock()
+	sess, ok := p.sessions[key]
+	p.mu.Unlock()
+	if !ok {
+		return time.Time{}
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	return sess.draft
 }
 
 func (p *fakePTY) LastInput(key ptyhost.SessionKey) (time.Time, bool) {

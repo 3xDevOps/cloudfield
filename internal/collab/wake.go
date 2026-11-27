@@ -31,21 +31,26 @@ func (s *Service) SetWaker(w Waker) {
 // HoldWake shows the member connected in control of runID the mail wake the
 // server owes its agent: a steer request under domain.ViaAgentMail that the
 // run's owner authors, held for SteeringDelay like a teammate's message, and
-// delivered by the Waker instead of as its own text. It reports whether a
-// notice stands for the mail, which is false when nobody is connected in
-// control. One key makes one notice. A busy run admission fails with
+// delivered by the Waker instead of as its own text. One key makes one
+// notice. held reports a notice that stands undecided, and settled that the
+// notice for key was typed or dismissed, which a restart does not forget.
+// With neither, the wake is the caller's to type: nobody is connected in
+// control, or run is a subsession, whose mail waits for the member to let go
+// as its parent is told. A busy run admission fails with
 // control.ErrAdmissionBusy instead of being waited for.
-func (s *Service) HoldWake(ctx context.Context, runID domain.RunID, key, notice string) (bool, error) {
-	open, ok := s.cfg.Store.(store.OpenRoomRequestStore)
+func (s *Service) HoldWake(ctx context.Context, runID domain.RunID, key, notice string) (held, settled bool, _ error) {
+	notices, ok := s.cfg.Store.(interface {
+		store.OpenRoomRequestStore
+		GetRoomMessageByIdempotency(context.Context, domain.MemberID, domain.RunID, string) (*store.RoomMessage, error)
+	})
 	if !ok || s.cfg.Control == nil {
-		return false, nil
+		return false, false, nil
 	}
-	held := false
 	var created *store.RoomMessage
 	// The caller holds a coordination reference to the run, which cleanup
 	// inside this admission waits for.
 	err := s.cfg.Control.TryAdmitSnapshot(string(runID), func(current control.Snapshot, controlled bool) error {
-		requests, err := open.ListOpenRoomRequests(ctx, runID)
+		requests, err := notices.ListOpenRoomRequests(ctx, runID)
 		if err != nil {
 			return err
 		}
@@ -57,8 +62,28 @@ func (s *Service) HoldWake(ctx context.Context, runID domain.RunID, key, notice 
 			}
 		}
 		run, err := s.cfg.Runs.GetRun(ctx, runID)
-		if err != nil || run.Protected || !controlled || !current.Connected {
+		if err != nil {
 			return err
+		}
+		for {
+			prior, lookupErr := notices.GetRoomMessageByIdempotency(ctx, run.MemberID, runID, key)
+			if errors.Is(lookupErr, store.ErrNotFound) {
+				break
+			}
+			if lookupErr != nil {
+				return lookupErr
+			}
+			if prior.State != store.RoomMessageCancelled && prior.State != store.RoomMessageNotSent {
+				settled = prior.State == store.RoomMessageDenied || prior.State == store.RoomMessageSent
+				held = !settled
+				return nil
+			}
+			// Protection cancelled that notice, or its session took no
+			// typed wake when it fell due: the mail is owed another.
+			key += "-" + prior.ID
+		}
+		if run.Protected || !controlled || !current.Connected || run.ParentRunID != "" && !run.Detached {
+			return nil
 		}
 		due := s.now().Add(SteeringDelay)
 		created = &store.RoomMessage{
@@ -71,19 +96,32 @@ func (s *Service) HoldWake(ctx context.Context, runID domain.RunID, key, notice 
 	if err == nil && created != nil {
 		err = s.publishMessage(ctx, created)
 	}
-	return held, err
+	return held, settled, err
 }
 
 // deliverWake has the Waker type the wake a notice held. It types before it
 // claims the row, inside the run's admission, so a terminal that cannot take
 // the line leaves the notice queued for the next sweep and no second
-// delivery types meanwhile.
+// delivery types meanwhile. A wake nobody asked for is typed as shown since
+// the notice appeared (domain.WithWakeShownSince) while a member is still
+// connected in control.
 func (s *Service) deliverWake(ctx context.Context, msg *store.RoomMessage, approver domain.MemberID, admit func(func() error) error) (Result, error) {
 	s.mu.Lock()
 	wake := s.waker
 	s.mu.Unlock()
+	wakeCtx := ctx
+	if approver != "" {
+		wakeCtx = domain.WithWakeApproved(ctx)
+	}
 	if admit == nil {
-		admit = s.deliveryAdmission(msg.RunID)
+		admit = func(fn func() error) error {
+			return s.cfg.Control.AdmitSnapshot(string(msg.RunID), func(current control.Snapshot, controlled bool) error {
+				if controlled && current.Connected {
+					wakeCtx = domain.WithWakeShownSince(ctx, msg.CreatedAt)
+				}
+				return fn()
+			})
+		}
 	}
 	var (
 		receipt Receipt
@@ -93,10 +131,6 @@ func (s *Service) deliverWake(ctx context.Context, msg *store.RoomMessage, appro
 		current, err := s.cfg.Store.GetRoomMessage(ctx, msg.ID)
 		if err != nil || current.State != store.RoomMessageQueued || wake == nil {
 			return err
-		}
-		wakeCtx := ctx
-		if approver != "" {
-			wakeCtx = domain.WithWakeApproved(ctx)
 		}
 		typed, err := wake(wakeCtx, msg.RunID)
 		if err != nil {

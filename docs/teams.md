@@ -827,8 +827,9 @@ only in Background, and a session that waits for mail needs another agent`. A
 subsession must wake on mail too: `--mode standard` for an Antigravity
 subsession is refused with the same message, and it runs Background. A
 Standard Copilot, Gemini or Cursor session is woken by a line typed into its
-terminal, which a member in control is shown for 45 seconds first
-([harnesses.md](harnesses.md#typed-wake)).
+terminal. A member in control of a session that is not a subsession is shown
+the line for 45 seconds first; mail to a subsession they control waits until
+they let go ([harnesses.md](harnesses.md#typed-wake)).
 
 ### Turn subsessions off
 

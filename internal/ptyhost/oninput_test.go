@@ -69,3 +69,41 @@ func TestOnInputReportsFirstKeystrokeOnce(t *testing.T) {
 		t.Fatalf("OnInput calls = %v, want one for bob", got)
 	}
 }
+
+// A draft in the agent's input box is submitted joined to a line the server
+// types, which the typed mail wake must not do to a person still writing.
+func TestDraftingFollowsWhatAPersonTypedSinceTheirLastEnter(t *testing.T) {
+	h, _ := newTestHost(t)
+	run := domain.RunID("run-draft")
+	key := RunSession(run)
+	att := newFakeAtt()
+	att.captureStdin()
+	if err := h.StartSession(context.Background(), key, att); err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	a := startAttach(t, h, run, "bob", 80, 24, false)
+	for _, step := range []struct {
+		keys  string
+		draft bool
+	}{
+		{"fix the te", true},
+		{"sts\r", false},
+		{"line one\x1b\r", true},
+		{"\r", false},
+		{"half a pro", true},
+	} {
+		a.typeKeys(t, step.keys)
+		// The attach reads this focus report only after it recorded the
+		// keys, and a report is nothing a person typed.
+		a.typeKeys(t, "\x1b[I")
+		if got := !h.Drafting(key).IsZero(); got != step.draft {
+			t.Fatalf("after %q: drafting %v, want %v", step.keys, got, step.draft)
+		}
+	}
+	if err := h.Inject(context.Background(), key, "Cloudfield", "", "read your inbox", "\r"); err != nil {
+		t.Fatalf("Inject: %v", err)
+	}
+	if at := h.Drafting(key); !at.IsZero() {
+		t.Fatalf("a line the server submitted left a draft from %s", at)
+	}
+}

@@ -37,7 +37,9 @@ func (s *Scheduler) TypedWake(run domain.RunID) bool {
 // there, a request waits for an answer, the terminal is about to be replaced
 // or it is not at rest: the line would join a draft, answer the request, be
 // lost with the old terminal or stay unsent. The member in control who asks
-// for the line (domain.WithWakeApproved) is not held for their own input.
+// for the line (domain.WithWakeApproved) is held for neither their own
+// input nor the agent's output. One who was shown it and did not ask
+// (domain.WithWakeShownSince) holds it by typing without pressing Enter.
 func (s *Scheduler) typeWake(ctx context.Context, run domain.RunID, line string) error {
 	awake, err := s.holdAwakeNow(run)
 	if err != nil {
@@ -57,16 +59,22 @@ func (s *Scheduler) typeWake(ctx context.Context, run domain.RunID, line string)
 	}
 	s.mu.Unlock()
 	key := ptyhost.RunSession(run)
-	if out, _ := s.cfg.PTY.LastOutput(key); time.Since(out) < typedWakeQuietOutput {
+	// A click on the dashboard's button moves focus off the terminal. The
+	// agent CLIs ask it to report that as input and, measured, each
+	// redraws within 300 ms and still submits a line pasted 30 ms later.
+	asked := domain.WakeApproved(ctx)
+	if out, _ := s.cfg.PTY.LastOutput(key); !asked && time.Since(out) < typedWakeQuietOutput {
 		return fmt.Errorf("scheduler: typed wake held: the terminal printed %s ago", time.Since(out).Round(time.Millisecond))
 	}
 	// A restarted server knows neither who controlled the terminal nor when a person last typed in it.
-	// A click on the dashboard's button moves focus off the terminal, which the agent CLIs ask it to report as input.
-	if in, _ := s.cfg.PTY.LastInput(key); in.After(unattended) && !domain.WakeApproved(ctx) {
+	if in, _ := s.cfg.PTY.LastInput(key); in.After(unattended) && !asked {
 		unattended = in
 	}
 	if time.Since(unattended) < typedWakeQuietInput {
 		return fmt.Errorf("scheduler: typed wake held: a person typed in the terminal, or the session started or resumed, in the last %s", typedWakeQuietInput)
+	}
+	if shown, ok := domain.WakeShownSince(ctx); ok && s.cfg.PTY.Drafting(key).After(shown) {
+		return errors.New("scheduler: typed wake held: the member in control typed in the terminal after the notice appeared and has not pressed Enter")
 	}
 	// The supervisor leaves a login shell where the agent exited, and bash
 	// turns bracketed paste on at its prompt.

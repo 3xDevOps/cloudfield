@@ -25,15 +25,21 @@ type noticeWaker struct {
 	lines    []string
 	approved int
 	refusal  error
+	enhanced atomic.Bool
+	// shown is since when each wake's line was shown to a member connected
+	// in control, the zero time for a wake nobody was shown.
+	shown []time.Time
 }
 
-func (*noticeWaker) Wakeable(domain.RunID) bool  { return true }
-func (*noticeWaker) InTurn(domain.RunID) bool    { return false }
-func (*noticeWaker) TypedWake(domain.RunID) bool { return true }
+func (*noticeWaker) Wakeable(domain.RunID) bool    { return true }
+func (*noticeWaker) InTurn(domain.RunID) bool      { return false }
+func (w *noticeWaker) TypedWake(domain.RunID) bool { return !w.enhanced.Load() }
 
 func (w *noticeWaker) Wake(ctx context.Context, _ domain.RunID, prompt string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	shown, _ := domain.WakeShownSince(ctx)
+	w.shown = append(w.shown, shown)
 	if w.refusal != nil {
 		return w.refusal
 	}
@@ -48,6 +54,12 @@ func (w *noticeWaker) typed() []string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return append([]string(nil), w.lines...)
+}
+
+func (w *noticeWaker) lastShown() time.Time {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.shown[len(w.shown)-1]
 }
 
 func (w *noticeWaker) refuse(err error) {
@@ -66,7 +78,12 @@ type noticeFixture struct {
 
 func newNoticeFixture(t *testing.T) *noticeFixture {
 	t.Helper()
-	f := &noticeFixture{wakeServerFixture: newWakeServerFixture(t, false), waker: &noticeWaker{}}
+	return newNoticeFixtureFor(t, false)
+}
+
+func newNoticeFixtureFor(t *testing.T, subsession bool) *noticeFixture {
+	t.Helper()
+	f := &noticeFixture{wakeServerFixture: newWakeServerFixture(t, subsession), waker: &noticeWaker{}}
 	start := time.Now().UTC()
 	f.now.Store(&start)
 	f.boot(t, nil)
@@ -158,6 +175,15 @@ func (f *noticeFixture) notice(t *testing.T, rows int) []*store.RoomMessage {
 	}
 }
 
+// woken wakes the run's coordination and waits for it to type a line.
+func (f *noticeFixture) woken() {
+	f.coord.WakeIdle(f.run.ID)
+	deadline := time.Now().Add(3 * time.Second)
+	for len(f.waker.typed()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // settled gives a coordination wake pass time to do what it should not.
 func (f *noticeFixture) settled() {
 	f.coord.WakeIdle(f.run.ID)
@@ -195,11 +221,7 @@ func TestATypedWakeWithNobodyConnectedInControlIsTypedAtOnce(t *testing.T) {
 	if err := f.control.Release(string(f.run.ID), f.member.ID, "tab", lease.Generation); err != nil {
 		t.Fatal(err)
 	}
-	f.coord.WakeIdle(f.run.ID)
-	deadline := time.Now().Add(3 * time.Second)
-	for len(f.waker.typed()) == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
+	f.woken()
 	f.wantTyped(t, 1)
 	if room := f.room(t); len(room) != 0 {
 		t.Fatalf("a wake nobody had to be shown left %d room messages", len(room))
@@ -313,6 +335,128 @@ func TestAHeldWakeWaitsForATerminalThatCannotTakeItsLine(t *testing.T) {
 	}
 }
 
+// A member who typed after the notice appeared may have a draft in the input
+// box, which only the terminal's side can tell.
+func TestAHeldWakeTellsTheTerminalSinceWhenAConnectedMemberSawIt(t *testing.T) {
+	f := newNoticeFixture(t)
+	lease := f.takeControl(t)
+	notice := f.notice(t, 1)[0]
+	f.waker.refuse(errors.New("scheduler: typed wake held: the member in control typed and has not pressed Enter"))
+	f.expire(t)
+	if shown := f.waker.lastShown(); !shown.Equal(notice.CreatedAt) {
+		t.Fatalf("the wake of a notice created at %s was typed as shown since %s", notice.CreatedAt, shown)
+	}
+	if _, err := f.rooms.ApproveNow(context.Background(), notice.ID, f.member.ID, "tab", lease.Generation); !errors.Is(err, collab.ErrWakeNotTyped) {
+		t.Fatalf("typing it now into a refusing terminal = %v", err)
+	}
+	if shown := f.waker.lastShown(); !shown.IsZero() {
+		t.Fatalf("a wake the member asked for was typed as shown since %s, so their own draft would hold it", shown)
+	}
+	f.control.Disconnect(string(f.run.ID), "tab", lease.Generation)
+	f.expire(t)
+	if shown := f.waker.lastShown(); !shown.IsZero() {
+		t.Fatalf("a wake whose member left was typed as shown since %s, so a draft they left would hold it for good", shown)
+	}
+}
+
+// Protection cancels every queued message and takes control away.
+func TestAHeldWakeThatProtectionCancelledStaysOwed(t *testing.T) {
+	for _, retake := range []bool{false, true} {
+		f := newNoticeFixture(t)
+		ctx := context.Background()
+		f.takeControl(t)
+		f.notice(t, 1)
+		if err := f.db.GrantWorkspace(ctx, f.run.WorkspaceID, f.member.ID, ""); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.rooms.Protect(ctx, f.run.ID, f.member.ID); err != nil {
+			t.Fatal(err)
+		}
+		if room := f.room(t); room[0].State != store.RoomMessageCancelled {
+			t.Fatalf("notice of a protected session = %+v", room[0])
+		}
+		f.settled()
+		f.wantTyped(t)
+		if err := f.db.SetRunProtected(ctx, f.run.ID, false); err != nil {
+			t.Fatal(err)
+		}
+		if !retake {
+			f.woken()
+			f.wantTyped(t, 1)
+			continue
+		}
+		f.takeControl(t)
+		if room := f.notice(t, 2); room[0].State != store.RoomMessageQueued {
+			t.Fatalf("notice after protection ended = %+v", room[0])
+		}
+		f.expire(t)
+		f.wantTyped(t, 1)
+	}
+}
+
+func TestAHeldWakeLeftByASwitchToEnhancedStaysOwed(t *testing.T) {
+	f := newNoticeFixture(t)
+	f.takeControl(t)
+	f.notice(t, 1)
+	f.waker.enhanced.Store(true)
+	f.expire(t)
+	f.wantTyped(t)
+	if room := f.room(t); room[0].State != store.RoomMessageNotSent {
+		t.Fatalf("notice of a session that takes no typed wake = %+v", room[0])
+	}
+	f.woken()
+	if prompt := protocol.CoordInboxContext(1) + protocol.CoordReportReminder; len(f.waker.typed()) != 1 || f.waker.typed()[0] != prompt {
+		t.Fatalf("the Enhanced session was prompted %q, want %q", f.waker.typed(), prompt)
+	}
+}
+
+// Its parent is told the mail is held, which means until the member lets go.
+func TestAControlledSubsessionKeepsItsMailUntilTheMemberLetsGo(t *testing.T) {
+	f := newNoticeFixtureFor(t, true)
+	lease := f.takeControl(t)
+	f.settled()
+	f.wantTyped(t)
+	if room := f.room(t); len(room) != 0 {
+		t.Fatalf("held subsession mail made %d notices", len(room))
+	}
+	if err := f.control.Release(string(f.run.ID), f.member.ID, "tab", lease.Generation); err != nil {
+		t.Fatal(err)
+	}
+	f.woken()
+	f.wantTyped(t, 1)
+}
+
+func TestADismissedWakeStaysDismissedAfterAServerRestart(t *testing.T) {
+	for _, reconnect := range []bool{false, true} {
+		f := newNoticeFixture(t)
+		lease := f.takeControl(t)
+		notice := f.notice(t, 1)[0]
+		if _, err := f.rooms.Deny(context.Background(), notice.ID, f.member.ID, "tab", lease.Generation); err != nil {
+			t.Fatal(err)
+		}
+		if err := errors.Join(f.coord.Close(), f.rooms.Close()); err != nil {
+			t.Fatal(err)
+		}
+		f.control = control.New(control.Config{})
+		f.boot(t, nil)
+		if reconnect {
+			f.takeControl(t)
+		}
+		f.settled()
+		f.wantTyped(t)
+		if room := f.room(t); len(room) != 1 {
+			t.Fatalf("reconnect %v: the dismissed mail came back as %d room messages", reconnect, len(room))
+		}
+		f.mail(t, "more mail")
+		if reconnect {
+			f.notice(t, 2)
+			continue
+		}
+		f.woken()
+		f.wantTyped(t, 2)
+	}
+}
+
 func TestAHeldWakeForMailTheAgentReadIsNotTyped(t *testing.T) {
 	f := newNoticeFixture(t)
 	f.takeControl(t)
@@ -407,7 +551,7 @@ func TestHoldingAWakeNeverWaitsForBusyControl(t *testing.T) {
 	<-entered
 	held := make(chan error, 1)
 	go func() {
-		_, err := f.rooms.HoldWake(context.Background(), f.run.ID, "key", "notice")
+		_, _, err := f.rooms.HoldWake(context.Background(), f.run.ID, "key", "notice")
 		held <- err
 	}()
 	select {

@@ -991,6 +991,21 @@ func WakeApproved(ctx context.Context) bool {
 	return approved
 }
 
+type wakeShownKey struct{}
+
+// WithWakeShownSince marks ctx as typing a held mail wake that the member
+// connected in control of the session has been shown since t and did not
+// ask for.
+func WithWakeShownSince(ctx context.Context, t time.Time) context.Context {
+	return context.WithValue(ctx, wakeShownKey{}, t)
+}
+
+// WakeShownSince reports the time WithWakeShownSince marked ctx with.
+func WakeShownSince(ctx context.Context) (time.Time, bool) {
+	t, ok := ctx.Value(wakeShownKey{}).(time.Time)
+	return t, ok
+}
+
 // AccountMember returns the member whose agent account backs the run.
 func (r *Run) AccountMember() MemberID {
 	if r.AccountMemberID != "" {

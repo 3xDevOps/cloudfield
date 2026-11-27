@@ -90,6 +90,7 @@ type session struct {
 	stopped            bool
 	lastOut            time.Time
 	lastIn             time.Time
+	draftAt            time.Time
 	paintQuietUntil    time.Time
 	done               chan struct{}
 	title              titleScanner
@@ -650,6 +651,19 @@ func (s *session) writeClientStdinContext(ctx context.Context, c *client, p []by
 	return s.writeStdinContextLocked(ctx, p)
 }
 
+// noteTyped records what a person typed on an attach: p ending in Enter
+// submits what is in the agent's input box, and anything else leaves a
+// draft there. Alt+Enter, ESC CR, is a newline in the draft.
+func (s *session) noteTyped(p []byte) {
+	s.mu.Lock()
+	if p[len(p)-1] == '\r' && !bytes.HasSuffix(p, []byte("\x1b\r")) {
+		s.draftAt = time.Time{}
+	} else {
+		s.draftAt = time.Now()
+	}
+	s.mu.Unlock()
+}
+
 func (s *session) removeClient(c *client) {
 	s.mu.Lock()
 	if _, ok := s.clients[c]; ok {
@@ -1013,6 +1027,9 @@ func (s *session) inject(ctx context.Context, actorName, actorColor, message, su
 	if err := s.writeStdinContextLocked(writeCtx, []byte(line)); err != nil {
 		return fmt.Errorf("ptyhost: inject: %w", err)
 	}
+	s.mu.Lock()
+	s.draftAt = time.Time{}
+	s.mu.Unlock()
 	return s.annotateDelivered(ctx, tr, actorName, actorColor, message)
 }
 

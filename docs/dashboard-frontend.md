@@ -5579,7 +5579,8 @@ and applies again once there is room. Sections (`details.tsx`):
   `run.room.decide` and a bar draining toward `deliver_after`, and teammate
   questions with a reply field. A held [typed wake](harnesses.md#typed-wake)
   is such a message with `via` `agent mail`: its card is titled **The agent
-  has unread mail** behind the agent's glyph, counts down as **Typed in Ns**,
+  has unread mail** behind the agent's glyph, counts down as **Typed in Ns**
+  and then reads **Typed when quiet**,
   and answers `run.room.decide` with **Type it now** (`approve`) and a
   `secondary` **Not now** (`deny`). It is shown to the controller although
   the server writes it as the session's owner, and it stays out of the

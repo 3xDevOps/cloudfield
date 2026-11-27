@@ -681,6 +681,19 @@ func (h *Host) LastInput(key SessionKey) (time.Time, bool) {
 	return s.lastInput()
 }
 
+// Drafting reports when a person last typed on an attach without pressing
+// Enter since. It is the zero time once they did, once Inject submitted a
+// line, which takes their draft with it, or when the key has no session.
+func (h *Host) Drafting(key SessionKey) time.Time {
+	s := h.lookup(key)
+	if s == nil {
+		return time.Time{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.draftAt
+}
+
 // Replay opens the retained raw terminal output and its metadata at one
 // immutable boundary. An expired prefix is explicit, not a complete transcript.
 // os.ErrNotExist means the run has never recorded a transcript.
@@ -1206,9 +1219,12 @@ func (h *Host) Attach(ctx context.Context, key SessionKey, a AttachClient, conn 
 					report(writeErr)
 					return
 				}
-				if !typed && scan.typed(buf[:n]) {
-					typed = true
-					h.reportInput(key, a.Member)
+				if scan.typed(buf[:n]) {
+					s.noteTyped(buf[:n])
+					if !typed {
+						typed = true
+						h.reportInput(key, a.Member)
+					}
 				}
 			}
 			if err != nil {

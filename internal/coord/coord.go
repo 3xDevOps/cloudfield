@@ -156,11 +156,12 @@ type Config struct {
 	// no reminders.
 	ReminderAdmission WakeAdmission
 	// HoldWake holds a typed wake for the member connected in control of
-	// run and shows it to them as notice, one notice per key. It reports
-	// whether a notice stands for the mail, which TypeHeldWake or the
-	// member's dismissal ends; false means nobody is connected in control.
-	// Nil leaves such a wake owed until the member leaves.
-	HoldWake func(ctx context.Context, run domain.RunID, key, notice string) (bool, error)
+	// run and shows it to them as notice, one notice per key. held reports
+	// a notice that stands, which TypeHeldWake or the member's dismissal
+	// ends, and settled that key's notice ended either way. With neither
+	// the wake is typed under ReminderAdmission, at once when nobody is
+	// connected in control. Nil leaves every such wake to that admission.
+	HoldWake func(ctx context.Context, run domain.RunID, key, notice string) (held, settled bool, err error)
 	// Waits judges a peer's reported wait (the scheduler); nil shows none.
 	Waits RunWaits
 	// Reports is where run.report lands: the scheduler. Leaving it unset

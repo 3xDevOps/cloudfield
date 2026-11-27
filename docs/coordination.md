@@ -371,8 +371,9 @@ it types one line that points at the inbox, never a message:
    It does so only while the terminal is quiet, bracketed paste is on and no
    recorded request waits for an answer; otherwise the wake stays owed. A
    member connected in control of the session is shown the wake for 45
-   seconds first and can type it at once or dismiss it. Each set of new
-   unread messages is typed for once.
+   seconds first and can type it at once or dismiss it; mail to a subsession
+   they control [waits for them to let go](#subsessions) instead. Each set
+   of new unread messages is typed for once.
    Nothing is typed after the agent exits to its login shell.
    The conditions and what they cannot see are in
    [harnesses.md](harnesses.md#typed-wake).

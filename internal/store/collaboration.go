@@ -500,7 +500,14 @@ func nullableJSON(s string) any {
 }
 
 func (d *DB) GetRoomMessageByIdempotency(ctx context.Context, actor domain.MemberID, run domain.RunID, key string) (*RoomMessage, error) {
-	return scanRoomMessage(d.db.QueryRowContext(ctx, `SELECT `+roomMessageCols+` FROM room_messages WHERE actor_id = ? AND run_id = ? AND idempotency_key = ?`, actor, run, key))
+	m, err := scanRoomMessage(d.db.QueryRowContext(ctx, `SELECT `+roomMessageCols+` FROM room_messages WHERE actor_id = ? AND run_id = ? AND idempotency_key = ?`, actor, run, key))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: get room message by idempotency key: %w", err)
+	}
+	return m, nil
 }
 
 func (d *DB) GetRoomMessage(ctx context.Context, id string) (*RoomMessage, error) {

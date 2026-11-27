@@ -35,7 +35,7 @@ const emptyMessages: RoomMessage[] = []
 const emptyRequests: SessionRequest[] = []
 
 const deliveryText = (remaining: number, mail: boolean) => mail
-  ? (remaining ? `Typed in ${remaining}s` : 'Typed once the terminal is quiet')
+  ? (remaining ? `Typed in ${remaining}s` : 'Typed when quiet')
   : (remaining ? `Delivers in ${remaining}s` : 'Ready to deliver')
 
 export function DeliveryCountdown({ deliverAfter, mail = false }: { deliverAfter?: string; mail?: boolean }) {

@@ -116,11 +116,12 @@ Mail wakes an idle Standard Copilot, Gemini or Cursor session with one line
 the server types into its terminal. While you are connected in control, the
 line is held for 45 seconds and shown to you first: **The agent has unread
 mail** under **Details → Needs you**, an **Agent mail** row in Chat and
-**Review agent mail** in the header. **Type it now** types it at once and
-**Not now** dismisses it. Otherwise it is typed when the 45 seconds end and
-you have not typed in the terminal for 10 seconds. Text still in the agent's
-input box then is submitted joined to the line
-([harnesses.md](harnesses.md#typed-wake)).
+**Review agent mail** in the header. **Type it now** types it at once,
+joined to any text in the agent's input box, and **Not now** dismisses it.
+Otherwise it is typed when the 45 seconds end, you have not typed in the
+terminal for 10 seconds, and you pressed Enter after anything you typed
+since the notice appeared. A subsession's mail gets no notice and waits as
+above ([harnesses.md](harnesses.md#typed-wake)).
 
 ### The Terminal toolbar
 

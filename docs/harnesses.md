@@ -1026,7 +1026,10 @@ and the server tries again, at least every 30 seconds:
 - Nobody is connected in control of the session
   ([terminal.md](terminal.md#session-control)). A member who is gets a notice
   first, described below. A lease whose connection dropped holds the wake,
-  without a notice, until it reconnects or lapses 15 seconds later.
+  without a notice, until it reconnects or lapses 15 seconds later. Mail to
+  a [subsession](teams.md#subsessions) a member controls gets no notice: it
+  waits until they let go, and its sender sees it as `held`
+  ([coordination.md](coordination.md#subsessions)).
 - The agent is not waiting in `cloudfield-internal inbox --wait`, which takes
   the mail itself.
 
@@ -1040,25 +1043,38 @@ you**, shows an **Agent mail** row in Chat that counts down, and offers
 **Review agent mail** in the header:
 
 - **Type it now** types the line at once, also right after the member typed
-  in the terminal. The other conditions above still apply: if the terminal
-  cannot take the line, the dashboard shows why and the notice stays.
-- **Not now** dismisses the notice. That mail is not typed for again; new
-  mail makes a new notice.
+  in the terminal or the agent printed: the click moves focus off the
+  terminal, which these CLIs redraw for. Text in the agent's input box is
+  submitted joined to the line. The other conditions above still apply: if
+  the terminal cannot take the line, the dashboard shows why and the notice
+  stays.
+- **Not now** dismisses the notice. The mail it was shown for is not typed
+  for again, and a server restart does not forget that. Mail that arrived
+  after the notice appeared makes a new notice.
 - With neither, the line is typed when the 45 seconds end and the conditions
-  above hold. The server checks every second, so a member who is still
-  typing is not cut into: the notice reads **Typed once the terminal is
-  quiet** until 10 seconds pass without input.
+  above hold. The server checks every second. While the member is still
+  connected in control, anything they typed in the terminal after the notice
+  appeared also holds the line until they press Enter, so a prompt they are
+  still writing is not sent half finished. The notice reads **Typed when
+  quiet** meanwhile. Once they release control or disconnect, 10 seconds
+  without input are enough.
 
 Mail that arrives while a notice waits joins it, and the line counts the
 mail unread when it is typed. If the agent reads its inbox first, nothing is
 typed and the row ends as **Not sent**. A notice survives a server restart.
+Protection cancels a notice, and a session switched to Enhanced ends it as
+**Not sent**; the mail stays owed either way and wakes the session once it
+can, with a new notice when a member is connected in control.
 A member in control from `cloudfield attach` has no dashboard and sees no
 notice: the line is typed on the same schedule.
 
 What the server cannot see:
 
-- A draft left in the agent's input box for more than 10 seconds is submitted
-  joined to the line.
+- The agent's input box. The server sees keystrokes, not what they left
+  there. Text typed before the notice appeared and not touched since, or
+  left by a member who is no longer connected in control, is submitted
+  joined to the line. Any key but Enter pressed after the notice appeared,
+  Esc or an arrow included, holds the line like a draft.
 - A dialog the agent shows on its own, such as a sign-in prompt or a
   permission question, takes the line. The Enter confirms the dialog's
   highlighted choice, and that mail is not typed for again.
