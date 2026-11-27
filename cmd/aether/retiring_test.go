@@ -285,8 +285,8 @@ func TestLogoutAtARetiredAddress(t *testing.T) {
 			if readErr != nil {
 				t.Fatal(readErr)
 			}
-			if slices.Contains(signedIn, relay.URL) == (tc.errMsg == "") {
-				t.Fatalf("token at the retired address kept = %v, want %v", !(tc.errMsg == ""), tc.errMsg != "")
+			if kept := slices.Contains(signedIn, relay.URL); kept != (tc.errMsg != "") {
+				t.Fatalf("token at the retired address kept = %v, want %v", kept, !kept)
 			}
 			if tc.errMsg != "" {
 				if err == nil || !strings.Contains(err.Error(), hosts.Replace(tc.errMsg)) {
