@@ -1,6 +1,6 @@
 import type { Command } from '@/lib/commands'
 import type { CloseOutcome, LinearLink, RunCloseCheck, WatchTarget } from '@/lib/types'
-import { saveLaunchDraft, type LaunchDraft } from '@/components/launch/draft'
+import { saveLaunchDraft, type ChangeLaunchDrafts, type LaunchDraft } from '@/components/launch/draft'
 import type { SliceCreator } from '@/store/slice'
 
 /** Every form the shell hosts; sweep this list rather than keep a copy. */
@@ -22,7 +22,7 @@ export interface PaletteSlice {
   paletteLaunchLinear: LinearLink | null
   launchDraft: LaunchDraft | null
   savedLaunchDrafts: LaunchDraft[]
-  updateLaunchDrafts: (draft: LaunchDraft | null, changeSaved: (current: LaunchDraft[]) => LaunchDraft[]) => string | null
+  updateLaunchDrafts: (change: ChangeLaunchDrafts) => string | null
   launchDraftError: string | null
   setLaunchDraft: (draft: LaunchDraft | null, persist?: boolean) => string | null
   clearLaunchDraftError: () => void
@@ -51,18 +51,24 @@ export const createPaletteSlice: SliceCreator<PaletteSlice> = (set, get) => ({
   paletteLaunchLinear: null,
   launchDraft: null,
   savedLaunchDrafts: [],
-  updateLaunchDrafts: (launchDraft, changeSaved) => {
+  updateLaunchDrafts: (change) => {
     const state = get()
     const linkStatusPending = state.capabilities === null || (state.capabilities.local?.includes('link.status') && !state.linkStatus)
-    const { saved, error } = saveLaunchDraft(state.identityKey, launchDraft, !state.linkStatus?.edge_url && !linkStatusPending, state.savedLaunchDrafts, changeSaved)
-    if (!error) set({ launchDraft, savedLaunchDrafts: saved })
+    const { draft, saved, error } = saveLaunchDraft(
+      state.identityKey, !state.linkStatus?.edge_url && !linkStatusPending,
+      { draft: state.launchDraft, saved: state.savedLaunchDrafts }, change,
+    )
+    if (!error) set({ launchDraft: draft, savedLaunchDrafts: saved })
     return error
   },
   launchDraftError: null,
   setLaunchDraft: (launchDraft, persist = true) => {
     const state = get()
     const linkStatusPending = state.capabilities === null || (state.capabilities.local?.includes('link.status') && !state.linkStatus)
-    const { saved, error } = saveLaunchDraft(state.identityKey, launchDraft, persist && !state.linkStatus?.edge_url && !linkStatusPending, state.savedLaunchDrafts)
+    const { saved, error } = saveLaunchDraft(
+      state.identityKey, persist && !state.linkStatus?.edge_url && !linkStatusPending,
+      { draft: state.launchDraft, saved: state.savedLaunchDrafts }, () => ({ draft: launchDraft }),
+    )
     set({
       launchDraft,
       savedLaunchDrafts: saved,

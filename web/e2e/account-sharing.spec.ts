@@ -71,6 +71,7 @@ test('a member shares their agent account and a teammate launches on it', async 
     await expect(dialog.getByRole('radio', { name: /^custom/ })).toBeVisible()
     await expect(dialog.getByRole('radiogroup', { name: 'Account' })).toHaveCount(0)
     await dialog.getByRole('button', { name: 'Cancel' }).click()
+    await bobPage.getByRole('dialog', { name: 'Close new session?' }).getByRole('button', { name: 'Delete draft' }).click()
     await expect(dialog).toBeHidden()
 
     // Alice's environment terminal is running when she first shares, so
@@ -117,6 +118,7 @@ test('a member shares their agent account and a teammate launches on it', async 
     writeFileSync(login, `${ownerLogin}\n`, { mode: 0o600 })
 
     await dialog.getByRole('button', { name: 'Cancel' }).click()
+    await bobPage.getByRole('dialog', { name: 'Close new session?' }).getByRole('button', { name: 'Delete draft' }).click()
     await expect(dialog).toBeHidden()
     dialog = await openLaunch()
     await chooseAliceAccount(dialog)

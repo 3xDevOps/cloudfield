@@ -117,7 +117,7 @@ export function handOverFocus(target: HTMLElement | null) {
   handedOver = target
 }
 
-function openerOf(active: Element | null): HTMLElement | null {
+export function dialogOpener(active: Element | null): HTMLElement | null {
   const menu = active?.closest('[role="menu"]')
   // A menu item is gone once its dialog closes; its menu's trigger is still there.
   const target = handedOver ?? (menu
@@ -130,14 +130,14 @@ function openerOf(active: Element | null): HTMLElement | null {
 export function useReturnFocus() {
   // Read while rendering: an autoFocus field inside the dialog takes focus
   // before any effect runs, and Radix then skips onOpenAutoFocus.
-  const [atMount] = useState(() => (typeof document === 'undefined' ? null : openerOf(document.activeElement)))
+  const [atMount] = useState(() => (typeof document === 'undefined' ? null : dialogOpener(document.activeElement)))
   const opener = useRef(atMount)
   useEffect(() => {
     handedOver = null
   }, [])
   return {
     onOpenAutoFocus: () => {
-      opener.current = openerOf(document.activeElement)
+      opener.current = dialogOpener(document.activeElement)
       handedOver = null
     },
     onCloseAutoFocus: (event: Event) => {

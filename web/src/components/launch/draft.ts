@@ -53,22 +53,36 @@ function readLaunchDraft(identity: string): { draft: LaunchDraft | null; saved: 
   }
 }
 
-export function saveLaunchDraft(
-  identity: string | null,
-  draft: LaunchDraft | null,
-  persistent: boolean,
-  saved: LaunchDraft[],
-  changeSaved: (current: LaunchDraft[]) => LaunchDraft[] = (current) => current,
-): { saved: LaunchDraft[]; error: string | null } {
-  if (!identity || !persistent) return { saved: changeSaved(saved), error: null }
-  const stored = readLaunchDraft(identity)
-  const next = changeSaved(stored.error ? saved : stored.saved)
+interface LaunchDrafts {
+  draft: LaunchDraft | null
+  saved: LaunchDraft[]
+}
+
+export type ChangeLaunchDrafts = (saved: LaunchDraft[]) => Partial<LaunchDrafts>
+
+function writeLaunchDrafts(identity: string, { draft, saved }: LaunchDrafts): string | null {
   try {
-    if (next.length) localStorage.setItem(storageKey(identity), JSON.stringify({ version: 2, draft, saved: next }))
+    if (saved.length) localStorage.setItem(storageKey(identity), JSON.stringify({ version: 2, draft, saved }))
     else if (draft) localStorage.setItem(storageKey(identity), JSON.stringify(draft))
     else localStorage.removeItem(storageKey(identity))
-    return { saved: next, error: null }
-  } catch (error) { return { saved, error: message(error) } }
+    return null
+  } catch (error) { return message(error) }
+}
+
+export function saveLaunchDraft(
+  identity: string | null,
+  persistent: boolean,
+  memory: LaunchDrafts,
+  change: ChangeLaunchDrafts,
+): LaunchDrafts & { error: string | null } {
+  if (!identity || !persistent) return { ...memory, ...change(memory.saved), error: null }
+  const stored = readLaunchDraft(identity)
+  const previous = stored.error ? memory : stored
+  const update = change(previous.saved)
+  const saved = update.saved ?? previous.saved
+  const draft = update.draft === undefined ? memory.draft : update.draft
+  const error = writeLaunchDrafts(identity, { ...previous, ...update, saved })
+  return { draft, saved, error }
 }
 
 export function recoverLaunchDrafts(
@@ -86,8 +100,8 @@ export function recoverLaunchDrafts(
   }
   const launchDraft = active ?? restored.draft
   const saved = [...savedInMemory, ...restored.saved.filter(({ id }) => !savedInMemory.some((draft) => draft.id === id))]
-  const write = saveLaunchDraft(identity, launchDraft, true, saved, () => saved)
-  return { launchDraft, savedLaunchDrafts: saved, launchDraftError: write.error }
+  const error = writeLaunchDrafts(identity, { draft: launchDraft, saved })
+  return { launchDraft, savedLaunchDrafts: saved, launchDraftError: error }
 }
 
 export function clearLaunchDraft(identity: string | null): string | null {

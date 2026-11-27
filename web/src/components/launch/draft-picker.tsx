@@ -3,7 +3,7 @@ import type { LaunchDraft } from '@/components/launch/draft'
 import { Plus, Trash2 } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { handOverFocus, useReturnFocus } from '@/lib/hooks'
+import { dialogOpener, handOverFocus, useReturnFocus } from '@/lib/hooks'
 import { toast } from 'sonner'
 import { useStore } from '@/store'
 
@@ -15,7 +15,7 @@ export function DraftPicker() {
   const drafts = useStore((s) => s.savedLaunchDrafts)
   const workspaces = useStore((s) => s.workspaces)
   const close = useStore((s) => s.closePaletteDialog)
-  const [opener] = useState(() => document.activeElement instanceof HTMLElement ? document.activeElement : null)
+  const [opener] = useState(() => dialogOpener(document.activeElement))
   const returnFocus = useReturnFocus()
   const deleteButtons = useRef(new Map<string, HTMLButtonElement>())
   const startButton = useRef<HTMLButtonElement>(null)
@@ -28,10 +28,24 @@ export function DraftPicker() {
 
   const take = (draft: LaunchDraft, resume: boolean) => {
     const state = useStore.getState()
-    const error = state.updateLaunchDrafts(resume ? draft : null, (current) => current.filter(({ id }) => id !== draft.id))
-    if (error) toast.error(`Could not ${resume ? 'continue' : 'delete'} draft: ${error}`)
-    else if (resume) start()
-    else if (!useStore.getState().savedLaunchDrafts.length) close()
+    const error = state.updateLaunchDrafts((current) => {
+      const selected = current.find(({ id }) => id === draft.id)
+      return {
+        ...(resume && selected ? { draft: selected } : {}),
+        saved: current.filter(({ id }) => id !== draft.id),
+      }
+    })
+    if (error) {
+      toast.error(`Could not ${resume ? 'continue' : 'delete'} draft: ${error}`)
+      return
+    }
+    const next = useStore.getState()
+    if (resume && next.launchDraft?.id === draft.id) {
+      start()
+      return
+    }
+    if (resume) toast.error('This draft is no longer available.')
+    if (!next.savedLaunchDrafts.length) close()
     else {
       setDeleting(null)
       startButton.current?.focus()

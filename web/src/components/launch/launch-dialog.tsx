@@ -51,6 +51,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const ended = useRef(false)
   const [confirmClose, setConfirmClose] = useState(false)
   const closeOpener = useRef<HTMLElement | null>(null)
+  const saveDraftButton = useRef<HTMLButtonElement>(null)
   const outsideClick = useRef(false)
   const storageFailed = useRef(false)
   const choiceEdited = useRef(false)
@@ -250,7 +251,10 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
     const state = useStore.getState()
     const draft = state.launchDraft
     if (state.identityKey !== identityKey || draft?.id !== draftID) return
-    const error = state.updateLaunchDrafts(null, (current) => save ? [draft, ...current.filter(({ id }) => id !== draftID)] : current)
+    const error = state.updateLaunchDrafts((current) => ({
+      draft: null,
+      ...(save ? { saved: [draft, ...current.filter(({ id }) => id !== draftID)] } : {}),
+    }))
     if (error) {
       toast.error(`Could not ${save ? 'save' : 'delete'} draft: ${error}`)
       return
@@ -426,19 +430,26 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
 
   const closeChoice = (
     <Dialog open={open && confirmClose} onOpenChange={setConfirmClose}>
-      <DialogContent showCloseButton={false} onCloseAutoFocus={(event) => {
-        if (!ended.current && closeOpener.current?.isConnected) {
+      <DialogContent
+        showCloseButton={false}
+        onOpenAutoFocus={(event) => {
           event.preventDefault()
-          closeOpener.current.focus()
-        }
-      }}>
+          saveDraftButton.current?.focus()
+        }}
+        onCloseAutoFocus={(event) => {
+          if (!ended.current && closeOpener.current?.isConnected) {
+            event.preventDefault()
+            closeOpener.current.focus()
+          }
+        }}
+      >
         <DialogHeader>
           <DialogTitle>Close new session?</DialogTitle>
           <DialogDescription>Save this task and its launch settings to continue later.</DialogDescription>
         </DialogHeader>
         <DialogFooter>
           <Button variant="danger" onClick={() => finishDraft(false)}>Delete draft</Button>
-          <Button autoFocus onClick={() => finishDraft(true)}>Save draft</Button>
+          <Button ref={saveDraftButton} onClick={() => finishDraft(true)}>Save draft</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
