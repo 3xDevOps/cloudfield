@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Code } from '@/components/ui/code'
 import { copyText } from '@/lib/clipboard'
+import { runLoginName } from '@/lib/run-account'
 import { RequestCard } from '@/components/ui/request-card'
 import { RequestAction, RequestActions, RequestFooter } from '@/components/ui/request-choice'
 import { RelativeTime } from '@/components/ui/relative-time'
@@ -179,13 +180,14 @@ function Facts({ run, agent, agentName, inset }: { run: RunRecord; agent: AgentT
   const selfID = useStore((s) => s.info?.member.id)
   const controllerID = agent.localControl ? selfID : status?.controller?.member_id
   const containerBytes = useStore((s) => s.info?.disk?.containers?.find((c) => c.owner_kind === 'run' && c.owner_id === run.id)?.bytes)
+  const login = runLoginName(run)
   return (
     <Section id="details-people" title="Details" inset={inset}>
       {run.task.trim() && <p className="max-h-48 overflow-y-auto break-words whitespace-pre-wrap text-ui text-text">{run.task}</p>}
       <dl className="text-ui-sm">
         <Row label="Owner"><Person id={run.member_id} /></Row>
         {run.account_member_id && run.account_member_id !== run.member_id && <Row label="Agent account"><Person id={run.account_member_id} /></Row>}
-        {run.account_login_name && <Row label="Login">{run.account_login_name}{run.account_login_per_use && <Badge className="ml-1.5">Billed per use</Badge>}</Row>}
+        {login && <Row label="Login">{login}{run.account_login_per_use && <Badge className="ml-1.5">Billed per use</Badge>}</Row>}
         <Row label="Agent">{agentName} · {modeLabel[run.mode] ?? run.mode}</Row>
         <Row label="Branch">
           <Button variant="quiet" size="sm" hint="Copy branch name" aria-label={`Copy branch ${run.branch}`} className="max-w-full" onClick={(event) => void copyText(run.branch, event.currentTarget)}>

@@ -119,6 +119,11 @@ describe('run frame', () => {
     expect(within(screen.getByRole('banner')).getByText('Billed per use').dataset.slot).toBe('badge')
   })
 
+  it('names a removed login by its id, as the activity line does', async () => {
+    open({ account_member_id: alice.id, account_login: 'lgn-gone0000001' })
+    await waitFor(() => expect(screen.getByRole('banner').textContent).toContain('On your account, login lgn-gone0000001'))
+  })
+
   it("names a teammate's account by name", async () => {
     open({ account_member_id: bob.id, account_login: 'lgn-work0000001', account_login_name: 'work' })
     await waitFor(() => expect(screen.getByRole('banner').textContent).toContain("On Bob's account, login work"))
