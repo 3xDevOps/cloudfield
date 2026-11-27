@@ -303,7 +303,7 @@ func TestALaunchNamingNoLoginNeverFallsBackToALoginThatIsOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI, "")
-	if !errors.Is(err, ErrNoStartLogin) || !strings.Contains(err.Error(), "work is automatic off; default is automatic off") {
+	if !errors.Is(err, ErrNoStartLogin) || !strings.Contains(err.Error(), "work is automatic off; default is automatic off") || !strings.Contains(err.Error(), "cloudfield agent logins auto <name> on") {
 		t.Fatalf("Ada's start with every login automatic off: %v; want refused naming both", err)
 	}
 	if err := e.db.SetAgentLoginAutomatic(ctx, e.member.ID, "claude", domain.DefaultLogin, true); err != nil {

@@ -380,7 +380,7 @@ func (s *Scheduler) StartLogin(ctx context.Context, workspace domain.WorkspaceID
 		}
 		return "", fmt.Errorf("%w: none of this account's logins can serve you: %s", permissions.ErrDenied, strings.Join(refused, "; "))
 	}
-	return "", fmt.Errorf("%w: %s; name one with cloudfield session --login <name>", ErrNoStartLogin, strings.Join(refused, "; "))
+	return "", fmt.Errorf("%w: %s; name one with cloudfield session --login <name>, or let Cloudfield choose it with cloudfield agent logins auto <name> on", ErrNoStartLogin, strings.Join(refused, "; "))
 }
 
 // ChildLogin is the login a subsession of owner starts from on account.
