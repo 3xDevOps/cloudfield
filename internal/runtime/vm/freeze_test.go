@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -96,16 +95,9 @@ func TestAFailedSaveLeavesTheVMRunning(t *testing.T) {
 }
 
 // The snapshot's page cache is charged to the unit: its memory limit is off
-// while the monitor writes, and back before a failed save's guest runs on.
+// while the monitor writes, and back once a failed save's guest runs on.
 func TestASaveLiftsTheUnitsMemoryLimitForTheSnapshot(t *testing.T) {
 	h := newHarness(t)
-	limit := func(key string) string {
-		data, err := os.ReadFile(filepath.Join(h.units.cgroup(unitName(key)), "memory.max"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(data)
-	}
 	h.createStarted("run-a", sessionSpec("run-a"))
 	hold := make(chan struct{})
 	vmm := h.units.vmm("run-a")
@@ -115,7 +107,7 @@ func TestASaveLiftsTheUnitsMemoryLimitForTheSnapshot(t *testing.T) {
 	saved := make(chan error, 1)
 	go func() { saved <- h.engine.save(t.Context(), "run-a") }()
 	<-hold
-	if got := limit("run-a"); got != "max" {
+	if got, _ := unitLimit(t, h, "run-a"); got != "max" {
 		t.Errorf("during the snapshot the unit's memory.max is %q, want max", got)
 	}
 	hold <- struct{}{}
@@ -131,13 +123,76 @@ func TestASaveLiftsTheUnitsMemoryLimitForTheSnapshot(t *testing.T) {
 	if err := h.engine.save(t.Context(), "run-b"); err == nil {
 		t.Fatal("a save whose snapshot fails returned no error")
 	}
-	rec, err := h.engine.load("run-b")
+	if got, want := unitLimit(t, h, "run-b"); got != want || h.engine.halted(t.Context(), "run-b") {
+		t.Errorf("after a failed save the unit's memory.max is %q, halted=%v; want %s and the guest running", got, h.engine.halted(t.Context(), "run-b"), want)
+	}
+}
+
+// A paused guest whose unit has no memory limit, as a server that stopped
+// during a snapshot leaves it, or a failed save of a VM its caller paused,
+// gets the limit as a resume or a capture runs it, and not while it
+// stays paused: its monitor may still be writing the snapshot.
+func TestAPausedGuestGetsItsUnitsMemoryLimitAsItRuns(t *testing.T) {
+	h := newHarness(t)
+	halt := func(key string) *fakeVMM {
+		t.Helper()
+		h.createStarted(key, sessionSpec(key))
+		if err := newCHAPI(h.engine.path(key, apiSocket)).pause(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		return h.units.vmm(key)
+	}
+	check := func(key, when string, limited bool) {
+		t.Helper()
+		got, want := unitLimit(t, h, key)
+		if !limited {
+			want = "max"
+		}
+		if got != want || h.engine.halted(t.Context(), key) == limited {
+			t.Errorf("%s the unit's memory.max is %q and halted=%v, want %s and halted=%v", when, got, !limited, want, !limited)
+		}
+	}
+
+	vmm := halt("run-a")
+	vmm.mu.Lock()
+	vmm.snapshotFails, vmm.refuseResumes = true, 1
+	vmm.mu.Unlock()
+	if err := h.engine.save(t.Context(), "run-a"); err == nil {
+		t.Fatal("a save whose snapshot fails returned no error")
+	}
+	check("run-a", "after a failed save of a paused VM", false)
+	if err := h.engine.resume(t.Context(), "run-a"); err == nil {
+		t.Fatal("a refused resume returned no error")
+	}
+	check("run-a", "after a refused resume", false)
+	if err := h.engine.resume(t.Context(), "run-a"); err != nil {
+		t.Fatal(err)
+	}
+	check("run-a", "after a resume", true)
+
+	halt("run-b")
+	if err := os.WriteFile(h.engine.memoryMaxFile("run-b"), []byte("max"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Runtime{vms: h.engine}).BootForCapture(t.Context(), runtime.ID(idPrefix+"run-b")); err != nil {
+		t.Fatal(err)
+	}
+	check("run-b", "after a capture started its vCPUs", true)
+}
+
+// unitLimit returns what key's unit holds in memory.max, and the MemoryMax
+// its record gives it.
+func unitLimit(t *testing.T, h *harness, key string) (got, want string) {
+	t.Helper()
+	data, err := os.ReadFile(h.engine.memoryMaxFile(key))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := limit("run-b"), strconv.FormatInt(unitMemoryMiB(rec)<<20, 10); got != want {
-		t.Errorf("after a failed save the unit's memory.max is %q, want %s", got, want)
+	rec, err := h.engine.load(key)
+	if err != nil {
+		t.Fatal(err)
 	}
+	return string(data), strconv.FormatInt(unitMemoryMiB(rec)<<20, 10)
 }
 
 // A save or park whose context ends while the guest still runs gives up

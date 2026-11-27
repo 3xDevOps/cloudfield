@@ -100,16 +100,11 @@ func (e *engine) save(ctx context.Context, key string) error {
 			return fmt.Errorf("vm runtime: save VM %s: %w", key, err)
 		}
 	}
-	memoryMax := filepath.Join(e.cgroupRoot, runtime.SessionSlice, unitName(key), "memory.max")
 	resumeAfter := func(cause error) error {
-		// A unit that is gone has no limit to put back.
-		if limitErr := writeCgroup(memoryMax, strconv.FormatInt(unitMemoryMiB(rec)<<20, 10)); limitErr != nil && !errors.Is(limitErr, fs.ErrNotExist) {
-			cause = fmt.Errorf("%w; and its unit keeps no memory limit: %w", cause, limitErr)
-		}
 		if paused {
 			return fmt.Errorf("vm runtime: save VM %s: %w", key, cause)
 		}
-		return e.resumeAfter(ctx, api, key, cause)
+		return e.resumeAfter(ctx, rec, cause)
 	}
 	dir := e.path(key, snapshotDir)
 	if err = errors.Join(os.RemoveAll(dir), os.RemoveAll(e.path(key, usedSnapshotDir))); err != nil {
@@ -120,8 +115,8 @@ func (e *engine) save(ctx context.Context, key string) error {
 	}
 	// The snapshot's page cache is charged to the unit, and at the unit's
 	// limit the kernel kills the monitor. The guest is paused and takes no
-	// more memory, so the limit is off until it runs again.
-	if err = writeCgroup(memoryMax, "max"); err != nil {
+	// more memory, so the limit is off until resumeGuest runs it again.
+	if err = writeCgroup(e.memoryMaxFile(key), "max"); err != nil {
 		return resumeAfter(err)
 	}
 	// Not cut short with ctx: a monitor cut off goes on writing, and answers
@@ -242,11 +237,29 @@ func (e *engine) savedMemory(key string) (uint64, error) {
 	return uint64(n), nil
 }
 
-func (e *engine) resumeAfter(ctx context.Context, api chAPI, key string, cause error) error {
-	if err := api.resume(context.WithoutCancel(ctx)); err != nil {
-		return fmt.Errorf("vm runtime: save VM %s: %w; and it stays paused: %w", key, cause, err)
+func (e *engine) resumeAfter(ctx context.Context, rec *record, cause error) error {
+	if err := e.resumeGuest(context.WithoutCancel(ctx), rec); err != nil {
+		return fmt.Errorf("vm runtime: save VM %s: %w; and its resume: %w", rec.Key, cause, err)
 	}
-	return fmt.Errorf("vm runtime: save VM %s: %w", key, cause)
+	return fmt.Errorf("vm runtime: save VM %s: %w", rec.Key, cause)
+}
+
+func (e *engine) memoryMaxFile(key string) string {
+	return filepath.Join(e.cgroupRoot, runtime.SessionSlice, unitName(key), "memory.max")
+}
+
+// resumeGuest starts the stopped vCPUs of rec's VM and writes its unit's
+// memory limit, which a save turned off for its snapshot. The limit comes
+// second: a monitor still writing a snapshot answers no resume until it is
+// done, and a limit under the page cache it holds gets it killed.
+func (e *engine) resumeGuest(ctx context.Context, rec *record) error {
+	if err := newCHAPI(e.path(rec.Key, apiSocket)).resume(ctx); err != nil {
+		return err
+	}
+	if err := writeCgroup(e.memoryMaxFile(rec.Key), strconv.FormatInt(unitMemoryMiB(rec)<<20, 10)); err != nil {
+		return fmt.Errorf("it runs, and its unit keeps no memory limit: %w", err)
+	}
+	return nil
 }
 
 func (e *engine) awaitStopped(ctx context.Context, key string) error {
