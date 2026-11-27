@@ -1485,3 +1485,74 @@ func TestNoFallbackReason(t *testing.T) {
 		}
 	}
 }
+
+// What Grace changes on her default login after a move chose it, while the
+// old container goes: automatic off governs the next choice, so the move
+// lands on it; off for shares, the move fails as a revoke in that gap does
+// and the run stays recorded on the account it ran on.
+func TestAMoveToALoginTurnedOffMeanwhile(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		off  func(context.Context, *shareEnv) error
+	}{
+		{"automatic off", func(ctx context.Context, e *shareEnv) error {
+			return e.db.SetAgentLoginAutomatic(ctx, e.owner.ID, "claude", domain.DefaultLogin, false)
+		}},
+		{"off for shares", func(ctx context.Context, e *shareEnv) error {
+			return e.db.SetAgentLoginShared(ctx, e.owner.ID, "claude", domain.DefaultLogin, false)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e, _, notes := newFallbackEnv(t, enhancedClaude)
+			e.share(t)
+			if _, err := e.db.AddAgentLogin(t.Context(), domain.AgentLogin{MemberID: e.owner.ID, Agent: "claude", ID: "lgn-work000000", Name: "work", CreatedAt: time.Now()}, ""); err != nil {
+				t.Fatal(err)
+			}
+			run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+			var turnedOff atomic.Bool
+			old := e.rt.byName(string(run.ID)).id
+			e.rt.mu.Lock()
+			e.rt.destroyHook = func(id runtime.ID) {
+				if id == old && turnedOff.CompareAndSwap(false, true) {
+					if setErr := tc.off(context.Background(), e); setErr != nil {
+						panic(setErr)
+					}
+				}
+			}
+			e.rt.mu.Unlock()
+			_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+			if tc.name == "automatic off" {
+				waitFor(t, "the move on Grace's account", func() bool {
+					row, getErr := e.db.GetRun(t.Context(), run.ID)
+					if getErr == nil && row.Status.Terminal() {
+						t.Fatalf("run %s (%q); want it moved to Grace's account", row.Status, row.Reason)
+					}
+					sc, scErr := e.sched.readSidecar(run.ID)
+					_, liveErr := e.sched.acp.live(t.Context(), run.ID)
+					return turnedOff.Load() && getErr == nil && scErr == nil && liveErr == nil && row.AccountMemberID == e.owner.ID && sc.AccountSwap == nil
+				})
+				return
+			}
+			waitFor(t, "the move to give up", func() bool {
+				row, getErr := e.db.GetRun(t.Context(), run.ID)
+				if getErr == nil && row.Status.Terminal() && !strings.Contains(row.Reason, "not shared with you") {
+					t.Fatalf("run %s (%q), hook ran %v; want the move refused for the login", row.Status, row.Reason, turnedOff.Load())
+				}
+				return turnedOff.Load() && getErr == nil && strings.Contains(row.Reason, "not shared with you")
+			})
+			got, err := e.db.GetRun(t.Context(), run.ID)
+			if err != nil || got.AccountMemberID != e.member.ID || len(notes.all()) != 0 {
+				t.Fatalf("run %s on %s (%q), notes %v, %v; want it left on Ada's account", got.Status, got.AccountMemberID, got.Reason, notes.all(), err)
+			}
+			if segments, err := e.db.ListRunAccountSegments(t.Context(), run.ID); err != nil || len(segments) != 0 {
+				t.Fatalf("segments = %+v, %v; want no move recorded", segments, err)
+			}
+		})
+	}
+}

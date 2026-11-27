@@ -42,7 +42,8 @@ func countRows(t *testing.T, db *DB, table string) int {
 
 // A member's first added login writes the default login's row before it;
 // removing the last added one leaves the member with no row at all, as a
-// member who never added one.
+// member who never added one, unless they turned a switch of the default
+// login off: its row then keeps that choice.
 func TestAgentLoginsOrderAndLeaveNoRowWhenNoneAreLeft(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
@@ -93,6 +94,25 @@ func TestAgentLoginsOrderAndLeaveNoRowWhenNoneAreLeft(t *testing.T) {
 	}
 	if n := countRows(t, db, "agent_logins"); n != 0 {
 		t.Fatalf("agent_logins rows after removing every added login = %d; want 0", n)
+	}
+	for _, off := range []func(domain.LoginID) error{
+		func(id domain.LoginID) error { return db.SetAgentLoginAutomatic(ctx, ada.ID, "claude", id, false) },
+		func(id domain.LoginID) error { return db.SetAgentLoginShared(ctx, ada.ID, "claude", id, false) },
+	} {
+		last := addLogin(t, db, ada.ID, "last")
+		if err := off(domain.DefaultLogin); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.DeleteAgentLogin(ctx, ada.ID, "claude", last.ID); err != nil {
+			t.Fatal(err)
+		}
+		logins, err := db.ListAgentLogins(ctx, ada.ID, "claude")
+		if err != nil || len(logins) != 1 || logins[0].ID != domain.DefaultLogin || (logins[0].Automatic && logins[0].Shared) {
+			t.Fatalf("logins after removing the last added login with a switch of the default off = %+v, %v; want the default's row, the switch still off", logins, err)
+		}
+		if _, err := db.db.ExecContext(ctx, `DELETE FROM agent_logins`); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

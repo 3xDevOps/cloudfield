@@ -15,6 +15,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/coordtransport"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/envname"
+	"github.com/3xDevOps/cloudfield/internal/fallback"
 	"github.com/3xDevOps/cloudfield/internal/gitengine"
 	"github.com/3xDevOps/cloudfield/internal/harness"
 	"github.com/3xDevOps/cloudfield/internal/mirror"
@@ -314,11 +315,11 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 		}
 	}
 	if opts.AccountLogin.Added() {
-		err = s.checkAddedLogin(ctx, member, domain.Account{Member: account, Login: opts.AccountLogin}, harness)
+		err = s.checkAddedLogin(ctx, member, domain.Account{Member: account, Login: opts.AccountLogin}, harness, opts.Permission == domain.PermissionIsolated)
 		if err == nil {
 			var byEnv bool
 			if byEnv, err = s.environmentSignsIn(ctx, workspace, harness, profile, mode); err == nil && byEnv {
-				err = fmt.Errorf("scheduler: a workspace variable signs %s in here, so login %s would not pay; launch on the default login", harness, opts.AccountLogin)
+				err = EnvironmentPays(opts.AccountLogin)
 			}
 		}
 	} else if err = s.checkDefaultLoginShared(ctx, member, account, harness); err == nil {
@@ -515,6 +516,9 @@ func (s *Scheduler) provisionSteps(ctx context.Context, entry *supervised, run *
 	}
 	if run.AccountMember() != run.HomeMember() {
 		if err = s.resolveRunAccount(ctx, run); err != nil {
+			return fmt.Errorf("check the account share: %w", err)
+		}
+		if err = fallback.ResolveLoginUse(ctx, s.cfg.Store, run.HomeMember(), run.Account(), run.Harness, runWorkspaces(run)); err != nil {
 			return fmt.Errorf("check the account share: %w", err)
 		}
 	}

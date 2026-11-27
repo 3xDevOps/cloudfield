@@ -28,9 +28,9 @@ type Runs interface {
 	DefaultMode(ctx context.Context, member, account domain.MemberID, harnessName string) (domain.LaunchMode, error)
 	// ChildLogin is the login a subsession of owner starts from on its
 	// parent's account.
-	ChildLogin(ctx context.Context, workspace domain.WorkspaceID, owner, account domain.MemberID, inherited domain.LoginID, harness string, mode domain.LaunchMode) (domain.LoginID, error)
+	ChildLogin(ctx context.Context, workspace domain.WorkspaceID, owner, account domain.MemberID, inherited domain.LoginID, harness string, mode domain.LaunchMode, permission domain.Permission) (domain.LoginID, error)
 	EnvironmentSignsIn(ctx context.Context, workspace domain.WorkspaceID, harness string, mode domain.LaunchMode) (bool, error)
-	FallbackLaunchable(ctx context.Context, member, requested domain.MemberID, account domain.Account, harnessName string, mode domain.LaunchMode) (bool, error)
+	FallbackLaunchable(ctx context.Context, member, requested domain.MemberID, account domain.Account, harnessName string, mode domain.LaunchMode, permission domain.Permission) (bool, error)
 	AgentModels(ctx context.Context, member, account domain.MemberID, name string, refresh bool) (protocol.AgentModelsResult, error)
 	Paused(run domain.RunID) bool
 }

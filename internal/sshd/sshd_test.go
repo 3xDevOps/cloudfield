@@ -393,6 +393,10 @@ type fakeRuns struct {
 	// whileTerminalStopped, when set, runs inside WithStoppedTerminal
 	// before its callback.
 	whileTerminalStopped func()
+	// startLogins are what StartLogin answers, one per call, then "".
+	startLogins []domain.LoginID
+	// environmentPays is what EnvironmentSignsIn answers.
+	environmentPays bool
 }
 
 func (f *fakeRuns) Retention(run *domain.Run) (scheduler.RetentionInfo, error) {
@@ -485,19 +489,26 @@ func (f *fakeRuns) CachedAgentModels(_ domain.MemberID, harness string) (protoco
 	return protocol.AgentModelsResult{Source: protocol.ModelSourceAgent, Models: []protocol.AgentModel{{ID: harness}, {ID: "opus"}}}, true
 }
 
-func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.MemberID, domain.Account, string, domain.LaunchMode) (bool, error) {
+func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.MemberID, domain.Account, string, domain.LaunchMode, domain.Permission) (bool, error) {
 	return true, nil
 }
 
-func (f *fakeRuns) StartLogin(context.Context, domain.WorkspaceID, domain.MemberID, domain.MemberID, string, domain.LaunchMode) (domain.LoginID, error) {
-	return "", nil
+func (f *fakeRuns) StartLogin(context.Context, domain.WorkspaceID, domain.MemberID, domain.MemberID, string, domain.LaunchMode, domain.Permission) (domain.LoginID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.startLogins) == 0 {
+		return "", nil
+	}
+	login := f.startLogins[0]
+	f.startLogins = f.startLogins[1:]
+	return login, nil
 }
 
 func (f *fakeRuns) EnvironmentSignsIn(_ context.Context, workspace domain.WorkspaceID, _ string, _ domain.LaunchMode) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.environmentReads = append(f.environmentReads, workspace)
-	return false, nil
+	return f.environmentPays, nil
 }
 
 func (f *fakeRuns) DefaultMode(context.Context, domain.MemberID, domain.MemberID, string) (domain.LaunchMode, error) {

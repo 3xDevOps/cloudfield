@@ -179,6 +179,13 @@ func runRealClaude(t *testing.T, claude string, plan *EnvironmentPlan, laid []ru
 			env = append(env, key+"="+remap(v))
 		}
 	}
+	// The variables the plan sets empty, so an image's ENV cannot fill
+	// them; the stand-in's address stays.
+	for key, v := range plan.Env {
+		if v == "" && key != "ANTHROPIC_BASE_URL" {
+			env = append(env, key+"=")
+		}
+	}
 	args := []string{"-rm", "sh", "-c", mountScript, "sh"}
 	for _, m := range laid {
 		mode := "rw"
@@ -282,6 +289,9 @@ func TestIntegrationRealClaudeCodeUsesTheAddedLogin(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
+					// Another session in the home writes a legacy configuration
+					// holding a key once this one has started.
+					writeHomeFile(t, e.adaHome, ".claude/.config.json", `{"hasCompletedOnboarding":true,"primaryApiKey":"test-key-planted-not-a-real-key-00000000"}`)
 					mock := &mockMessages{}
 					server := httptest.NewServer(mock)
 					defer server.Close()

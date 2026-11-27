@@ -172,7 +172,10 @@ func (d *DB) DeleteAgentLogin(ctx context.Context, member domain.MemberID, agent
 		if rowErr := requireRow(res, "remove login"); rowErr != nil {
 			return rowErr
 		}
-		_, delErr = tx.ExecContext(ctx, `DELETE FROM agent_logins WHERE member_id = ?1 AND agent = ?2 AND id = ?3
+		// The default login's row goes with the last added login only while
+		// both its switches are on: one its owner turned off keeps holding
+		// that choice.
+		_, delErr = tx.ExecContext(ctx, `DELETE FROM agent_logins WHERE member_id = ?1 AND agent = ?2 AND id = ?3 AND automatic = 1 AND shared = 1
 			AND NOT EXISTS (SELECT 1 FROM agent_logins WHERE member_id = ?1 AND agent = ?2 AND id <> ?3)`, member, agent, domain.DefaultLogin)
 		return delErr
 	})

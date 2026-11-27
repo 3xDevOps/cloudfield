@@ -200,9 +200,17 @@ func (s *Service) choose(ctx context.Context, p *policy, req protocol.ChildStart
 		return launchSpec{}, rpcErr(protocol.MethodChildStart, err)
 	}
 	for _, c := range choices {
-		if c.Harness == req.Harness && (c.Status == choiceNotInstalled || c.Status == choiceNotSignedIn) {
-			return launchSpec{}, denied("%s", c.Detail)
+		if c.Harness != req.Harness || (c.Status != choiceNotInstalled && c.Status != choiceNotSignedIn) {
+			continue
 		}
+		// The listing reads the account's default login; a subsession that
+		// will run on an added login is judged by that login.
+		if c.Status == choiceNotSignedIn {
+			if on, loginErr := s.cfg.Runs.ChildLogin(ctx, p.parent.WorkspaceID, p.owner, account, login, req.Harness, mode, p.parent.Permission); loginErr == nil && on.Added() {
+				continue
+			}
+		}
+		return launchSpec{}, denied("%s", c.Detail)
 	}
 	spec := launchSpec{harness: req.Harness, account: account, login: login, mode: mode, model: req.Model, fallback: p.parent.Fallback}
 	defaultMode, err := s.cfg.Runs.DefaultMode(ctx, p.owner, spec.account, spec.harness)

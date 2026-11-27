@@ -128,7 +128,7 @@ func (s *Scheduler) loginStamp(account domain.MemberID, agent string, profile ha
 // while the account's login files read stamp. Only the agent's own message
 // is kept, and bounded: the error around it can carry the agent's stderr,
 // and everyone the account is shared with reads this.
-func (s *Scheduler) loginRefused(account domain.MemberID, agent, stamp string, cause error) {
+func (s *Scheduler) loginRefused(account domain.Account, agent, stamp string, cause error) {
 	message := "Authentication required"
 	if refused := (*acp.RequestError)(nil); errors.As(cause, &refused) && refused.Message != "" {
 		message = refused.Message
@@ -142,7 +142,7 @@ func (s *Scheduler) loginRefused(account domain.MemberID, agent, stamp string, c
 	if s.loginRefusals == nil {
 		s.loginRefusals = make(map[loginKey]loginRefusal)
 	}
-	s.loginRefusals[loginKey{domain.AccountOf(account), agent}] = loginRefusal{problem: problem, stamp: stamp, at: time.Now()}
+	s.loginRefusals[loginKey{account, agent}] = loginRefusal{problem: problem, stamp: stamp, at: time.Now()}
 }
 
 // signInSteps is where the owner of an account signs agent in again. Only a
@@ -158,13 +158,7 @@ func signInSteps(agent string, profile harness.Profile) string {
 // agent in without the account's login: Claude Code's in every mode, Codex's
 // CODEX_API_KEY in Background runs only (docs/harnesses.md).
 func (s *Scheduler) environmentSignsIn(ctx context.Context, workspace domain.WorkspaceID, agent string, profile harness.Profile, mode domain.LaunchMode) (bool, error) {
-	var keys []string
-	switch {
-	case agent == "claude":
-		keys = []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"}
-	case agent == "codex" && mode == domain.LaunchHeadless:
-		keys = []string{"CODEX_API_KEY"}
-	default:
+	if signInKeys(agent, mode) == nil {
 		return false, nil
 	}
 	ws, err := s.cfg.Store.GetWorkspace(ctx, workspace)
@@ -179,7 +173,33 @@ func (s *Scheduler) environmentSignsIn(ctx context.Context, workspace domain.Wor
 	if err != nil {
 		return false, err
 	}
-	return slices.ContainsFunc(keys, func(key string) bool { return env[key] != "" }), nil
+	return signsIn(env, agent, mode), nil
+}
+
+// signInKeys are the variables that sign agent in, in mode, whatever its
+// login.
+func signInKeys(agent string, mode domain.LaunchMode) []string {
+	switch {
+	case agent == "claude":
+		return []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"}
+	case agent == "codex" && mode == domain.LaunchHeadless:
+		return []string{"CODEX_API_KEY"}
+	}
+	return nil
+}
+
+// signsIn reports whether env signs agent in, in mode, whatever its login.
+func signsIn(env map[string]string, agent string, mode domain.LaunchMode) bool {
+	return slices.ContainsFunc(signInKeys(agent, mode), func(key string) bool { return env[key] != "" })
+}
+
+// ErrEnvironmentPays refuses an added login where a variable signs the agent
+// in: that variable would pay, not the login.
+var ErrEnvironmentPays = errors.New("a workspace or server variable signs the agent in here")
+
+// EnvironmentPays is why a session in such a workspace cannot run on login.
+func EnvironmentPays(login domain.LoginID) error {
+	return fmt.Errorf("scheduler: %w, so login %s would not pay; launch on the default login", ErrEnvironmentPays, login)
 }
 
 // checkLogin refuses a launch of agent on account whose login cannot sign it
@@ -201,7 +221,7 @@ func (s *Scheduler) checkLogin(ctx context.Context, workspace domain.WorkspaceID
 // cannot be resolved or a workspace variable signs the agent in instead.
 type runLogin struct {
 	known   bool
-	account domain.MemberID
+	account domain.Account
 	owner   string
 	// agent is the name the run launched and label what to call it; a
 	// definition without an executable resolves to a profile that has
@@ -219,20 +239,29 @@ func (s *Scheduler) runLogin(ctx context.Context, runID domain.RunID) runLogin {
 	if err != nil {
 		return runLogin{}
 	}
-	login := runLogin{account: run.AccountMember(), agent: run.Harness}
-	if login.profile, _, err = s.launchProfile(ctx, run.MemberID, login.account, run.Harness); err != nil {
+	login := runLogin{account: run.Account(), agent: run.Harness}
+	if login.profile, _, err = s.launchProfile(ctx, run.MemberID, login.account.Member, run.Harness); err != nil {
 		return runLogin{}
 	}
 	if byEnv, envErr := s.environmentSignsIn(ctx, run.WorkspaceID, login.agent, login.profile, run.Mode); envErr != nil || byEnv {
 		return runLogin{}
 	}
-	if login.fileProblem, err = s.loginFileProblem(run.HomeMember(), login.account, login.agent, login.profile); err != nil {
-		return runLogin{}
+	if login.account.Login.Added() {
+		if login.fileProblem, err = s.addedLoginProblem(login.account, login.agent); err != nil {
+			return runLogin{}
+		}
+		if login.stamp, err = s.cfg.Logins.Stamp(login.account.Member, login.agent, login.account.Login); err != nil {
+			return runLogin{}
+		}
+	} else {
+		if login.fileProblem, err = s.loginFileProblem(run.HomeMember(), login.account.Member, login.agent, login.profile); err != nil {
+			return runLogin{}
+		}
+		if login.stamp, err = s.loginStamp(login.account.Member, login.agent, login.profile); err != nil {
+			return runLogin{}
+		}
 	}
-	if login.stamp, err = s.loginStamp(login.account, login.agent, login.profile); err != nil {
-		return runLogin{}
-	}
-	login.known, login.owner, login.label = true, s.memberName(ctx, login.account), cmp.Or(login.profile.Label(), run.Harness)
+	login.known, login.owner, login.label = true, s.memberName(ctx, login.account.Member), cmp.Or(login.profile.Label(), run.Harness)
 	return login
 }
 

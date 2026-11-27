@@ -792,7 +792,7 @@ func (s *Scheduler) chooseMove(ctx context.Context, entry *supervised, f *UsageF
 				}
 			}
 		}
-		return s.FallbackLaunchable(ctx, home, from.Member, account, run.Harness, mode)
+		return s.FallbackLaunchable(ctx, home, from.Member, account, run.Harness, mode, run.Permission)
 	})
 	if to == from {
 		return run, none, excluded, nil
@@ -822,7 +822,8 @@ func (s *Scheduler) chooseMove(ctx context.Context, entry *supervised, f *UsageF
 // the authorization mutex, as a launch is admitted: the run's owner and home
 // member are admitted again and to must still be shared with both, so a
 // handoff, revocation or kill since chooseMove fails the move rather than
-// record an account the run never ran on.
+// record an account the run never ran on. to need not still be automatic:
+// that switch governs the next choice, not a move that chose it.
 func (s *Scheduler) commitMove(ctx context.Context, entry *supervised, f *UsageFallback, m accountMove, run *domain.Run, to domain.Account) (int, error) {
 	f.AuthorizationMu.Lock()
 	defer f.AuthorizationMu.Unlock()

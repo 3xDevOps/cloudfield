@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"sync"
 	"time"
 
@@ -301,13 +300,20 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 	if _, perr := authorize(); perr != nil {
 		return nil, perr
 	}
-	login, perr := s.launchLogin(ctx, domain.WorkspaceID(p.WorkspaceID), member, domain.MemberID(p.AccountMemberID), p.Harness, p.Login, mode)
+	permission := cmp.Or(domain.Permission(p.Permission), domain.PermissionDefault)
+	login, perr := s.launchLogin(ctx, domain.WorkspaceID(p.WorkspaceID), member, domain.MemberID(p.AccountMemberID), p.Harness, p.Login, mode, permission)
 	if perr != nil {
 		return nil, perr
 	}
-	byEnv, err := s.cfg.Runs.EnvironmentSignsIn(ctx, domain.WorkspaceID(p.WorkspaceID), p.Harness, mode)
-	if err != nil {
-		return nil, rpcError(err)
+	byEnv := sync.OnceValues(func() (bool, error) {
+		return s.cfg.Runs.EnvironmentSignsIn(ctx, domain.WorkspaceID(p.WorkspaceID), p.Harness, mode)
+	})
+	// A named login is refused, never traded for another, when a variable
+	// would pay instead of it.
+	if login.Added() {
+		if signsIn, envErr := byEnv(); envErr != nil || signsIn {
+			return nil, rpcError(cmp.Or(envErr, scheduler.EnvironmentPays(login)))
+		}
 	}
 	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Services.Usage, member, domain.Account{Member: domain.MemberID(p.AccountMemberID), Login: login}, p.Harness, policy)
 	if err != nil {
@@ -320,6 +326,13 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 	if perr != nil {
 		return nil, perr
 	}
+	// An unnamed start is chosen again under the mutex: the login chosen
+	// before the usage read may have been turned off or removed meanwhile.
+	if p.Login == "" {
+		if login, perr = s.launchLogin(ctx, domain.WorkspaceID(p.WorkspaceID), member, domain.MemberID(p.AccountMemberID), p.Harness, p.Login, mode, permission); perr != nil {
+			return nil, perr
+		}
+	}
 	requested := admission.Account.ID
 	if mode == "" {
 		if mode, err = s.cfg.Runs.DefaultMode(ctx, member, requested, p.Harness); err != nil {
@@ -327,10 +340,12 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 		}
 	}
 	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, member, domain.Account{Member: requested, Login: login}, p.Harness, workspaces, policy, func(ctx context.Context, account domain.Account) (bool, error) {
-		if byEnv && account.Login.Added() {
-			return false, nil
+		if account.Login.Added() {
+			if signsIn, envErr := byEnv(); envErr != nil || signsIn {
+				return false, envErr
+			}
 		}
-		return s.cfg.Runs.FallbackLaunchable(ctx, member, requested, account, p.Harness, mode)
+		return s.cfg.Runs.FallbackLaunchable(ctx, member, requested, account, p.Harness, mode, permission)
 	})
 	account := chosen.Member
 	if excluded != nil {
@@ -341,7 +356,6 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 	if p.Limits != nil {
 		limits = domain.RunLimits{CPUs: p.Limits.CPUs, MemoryBytes: p.Limits.MemoryBytes, Pids: p.Limits.Pids}
 	}
-	permission := cmp.Or(domain.Permission(p.Permission), domain.PermissionDefault)
 	run, err := launchWithOptions(ctx, s.cfg.Runs, domain.WorkspaceID(p.WorkspaceID), member, account, p.Task, p.Harness, mode, domain.LaunchOptions{
 		Limits:     limits,
 		CachedBase: p.CachedBase, Model: p.Model, Effort: p.Effort, Permission: permission, RequestedAccount: requested, AccountLogin: chosen.Login, Fallback: policy,
@@ -719,16 +733,8 @@ func (s *Server) runRelaunch(ctx context.Context, member domain.MemberID, params
 			}
 		}
 	}
-	// The member who reopens it must reach its login, and on an added login
-	// so must the session's owner and the member whose home it mounts.
-	reach := []domain.MemberID{member}
-	if run.AccountLogin.Added() {
-		reach = slices.Compact([]domain.MemberID{member, run.MemberID, run.HomeMember()})
-	}
-	for _, who := range reach {
-		if err = fallback.ResolveRunRelaunch(ctx, s.cfg.Store, who, run, workspaces); err != nil {
-			return nil, rpcError(err)
-		}
+	if err = fallback.ResolveRunRelaunch(ctx, s.cfg.Store, member, run, workspaces); err != nil {
+		return nil, rpcError(err)
 	}
 	reopened, err := s.cfg.Runs.Relaunch(ctx, id, member)
 	if err != nil {
