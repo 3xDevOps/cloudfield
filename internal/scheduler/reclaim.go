@@ -214,7 +214,7 @@ func (s *Scheduler) dropSavedState(ctx context.Context, entry *supervised) (stri
 	if err := s.cfg.Runtime.Stop(ctx, cid, s.cfg.StopGrace); err != nil {
 		return "", err
 	}
-	if err := s.recordSaved(entry, false); err != nil {
+	if err := s.recordSaved(entry, false, false); err != nil {
 		return "", err
 	}
 	s.publishSleep(entry)

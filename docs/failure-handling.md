@@ -20,7 +20,7 @@ shown beside the status says why it is there.
 | Free disk falls toward the floor | Launch refused with `scheduler: insufficient disk headroom: ...`. | Frees space on its own first, in a fixed order. | [Recover from disk pressure](#recover-from-disk-pressure). |
 | Host memory is low, or the server stalls on memory | Launch refused with `scheduler: insufficient host memory headroom: ...`. | For low available memory, saves idle session VMs to disk and checks once more before it refuses. Below the floor it freezes every session VM at once, so none takes more memory, then saves awake session VMs to disk and thaws the rest; it never kills one. | [Recover from memory pressure](#recover-from-memory-pressure). |
 | An Enhanced Claude Code session is idle for `--run-sleep-after` (30 minutes) | The Chat view shows **Asleep since &lt;time&gt;**; `cloudfield sessions` shows `(asleep)`. | Stops the container with `docker stop`, freeing its memory and CPU, and keeps its disk and checkout. | Nothing. The next message wakes it ([Idle sleep](#idle-sleep)). |
-| A Standard or Enhanced session in a VM is idle for `--run-sleep-after` (5 minutes) | As above. | Saves the whole VM to disk with every process in it, freeing its memory and CPU. | Nothing. The next message restores it ([Sessions in VMs](#sessions-in-vms)). |
+| A Standard or Enhanced session in a VM is idle for `--run-sleep-after` (5 minutes) | As above. | Pauses the whole VM in the server's memory with every process in it, freeing its CPU, and saves it to disk once less than twice the memory floor is free. | Nothing. The next message resumes or restores it ([Sessions in VMs](#sessions-in-vms)). |
 | An agent goes silent | `needs-attention`, reason `stalled: no output or file changes for <duration>`, state **Waiting**. An Enhanced session is **Possibly stalled**: `stalled: possibly — no progress for <duration>, <phase>, transport open`. | Keeps the session supervised. It returns to `running` as soon as the agent writes output, makes progress or changes a file. | Attach (`cloudfield attach <session-id>`) or send a message. See [Picking a stall threshold](#picking-a-stall-threshold). |
 | A Standard agent exits | The session stays live and its terminal shows a login shell. | Opens a shell in place of the agent. It never restarts the agent. | Start the agent again in that shell, or close the session. |
 | A Background agent exits | `completed`, or `failed` with `agent exited <code>: <last line of output>`. | Commits and publishes the branch, then removes the container. | Read the full output in the session's transcript. |
@@ -374,8 +374,9 @@ parse refuses launches with `scheduler: host capacity unavailable`, like the
 other probes.
 
 A launch or wake that memory refuses first saves idle session VMs to disk,
-the longest idle first, until twice the floor plus what the start and the
-starts in flight take is free, then checks once more. It waits at most 30
+those paused in memory first and then the longest idle, until twice the
+floor plus what the start and the starts in flight take is free, then
+checks once more. It waits at most 30
 seconds for any one save: a save still running then goes on alone, and the
 check runs at once, so the launch or wake is likely refused until that save
 lands. It never saves a VM
@@ -388,7 +389,8 @@ last memory in two steps: a brake that freezes them at once, and a memory
 guard that then frees memory by saving them to disk.
 
 The brake reads `MemAvailable` from `/proc/meminfo` every 500 ms. Below the
-floor it freezes every session's VM by writing `1` to the
+floor it freezes every session's VM, except those already paused in memory,
+by writing `1` to the
 `cgroup.freeze` of its unit under `/sys/fs/cgroup/aether.slice`. That takes
 one write per VM, no new process and no answer from systemd, Cloud
 Hypervisor or the guest, so it works on a host with no memory left. A
@@ -450,17 +452,23 @@ browser operation in flight, which a frozen guest never finishes. Kill or
 close sessions, which thaws theirs, or free memory or disk.
 
 The memory guard reads `/proc/meminfo` and
-`/proc/pressure/memory` every 5 seconds. It starts when available memory
+`/proc/pressure/memory` every 5 seconds. While less than twice the floor is
+free it saves the VMs of sleeping sessions that are paused in memory, the
+longest asleep first, until twice the floor is free again, so their memory
+is back before any session that works is touched. Working VMs that take
+memory faster than those saves return it still reach the floor and the
+brake. For the others it starts when available memory
 falls below the floor, or when the host stalls on memory: `full avg10` at
 60% or more for 30 seconds, which means every task was blocked on memory
 for most of the time. Those are systemd-oomd's defaults, where it starts
-killing. The guard never kills a session. It saves awake session VMs to
-disk, with every process in them, as an idle sleep does
+killing. The guard never kills a session. It saves session VMs to
+disk, with every process in them
 ([Sessions in VMs](#sessions-in-vms)), in this order:
 
-1. a closed session's VM that its close could not stop, and the still
-   running VM of a session recorded asleep, such as one a restart took up
-   frozen; a closed session's is stopped rather than saved;
+1. a closed session's VM that its close could not stop, and the VM of a
+   session recorded asleep that still holds memory: one paused in memory,
+   or one a restart took up frozen; a closed session's is stopped rather
+   than saved;
 2. an open session whose agent is idle, the longest idle first;
 3. when none is idle, the session holding the most host memory, even while
    its agent works. A VM's host memory is what its unit holds, guest page
@@ -471,7 +479,7 @@ that, one more each time a stall lasts 30 seconds again, and never one
 whose agent works: such a stall may come from outside the VMs. A VM it
 saves while less than twice the floor is free is frozen first and saved as
 it stands, without
-the sync and the wait for dropped page cache an idle sleep makes
+the sync and the wait for dropped page cache a save of a running VM makes
 ([vm-guest.md](vm-guest.md#limits-stats-and-the-clock)), which would let its guest run and
 take memory. A guest the brake froze cannot say whether it is busy, so a
 session saved after the brake froze it always wakes on its own, also when a
@@ -535,8 +543,9 @@ session's memory limit and never the helper
 To recover, close or kill sessions. A closed Standard or mode-switched
 session's paused container still holds its memory; **Free sandbox…** releases it. An idle
 Enhanced Claude Code session frees its memory on its own after
-`--run-sleep-after` ([Idle sleep](#idle-sleep)), and so does any idle session
-in a VM. A closed session VM or Enhanced session frees it as soon as it is
+`--run-sleep-after` ([Idle sleep](#idle-sleep)). An idle session in a VM is
+paused then, and frees its memory once less than twice the floor is free
+([Sessions in VMs](#sessions-in-vms)). A closed session VM or Enhanced session frees it as soon as it is
 closed. Running work in a container is never stopped to make room.
 
 ## Capture an unresponsive host
@@ -856,7 +865,9 @@ the connection is refused until you start it again. The request that woke it wai
 container starts and the agent restores its conversation, then goes through.
 Two wakes at once start the container once. Waking counts against the same
 memory and disk checks as a launch, and a saved VM must fit its saved memory
-([Recover from memory pressure](#recover-from-memory-pressure)). A refused or failed wake returns its
+([Recover from memory pressure](#recover-from-memory-pressure)); a VM
+still paused in memory already holds what it wakes with and passes no
+check. A refused or failed wake returns its
 error to the request that caused it, keeps the session asleep and shows the
 error under **Asleep since**. A container's wake never starts a new
 conversation: when the agent cannot restore its own, every wake fails with
@@ -904,9 +915,35 @@ no dashboard setting.
 
 ### Sessions in VMs
 
-With `--session-runtime vm`, a sleep saves the session's whole VM to disk,
-with every process in it, and a wake restores it where it was. Nothing is
-lost, so more sessions sleep, sooner:
+With `--session-runtime vm`, a sleep pauses the session's whole VM in the
+server's memory, with every process in it, and a wake resumes it: on a
+hosted test runner a paused VM returned its first command 30 to 47 ms after
+the resume began (`TestKVMIdleVMPausedInMemoryAnswersAtOnce`). The guest
+drops its page cache before the pause, so a paused VM keeps the memory its
+processes use, which every launch's memory check counts as used. A VM that
+has stayed paused for an hour is saved to disk and holds none. While less
+than twice the memory
+floor is free, the server saves paused VMs to disk, the longest paused
+first, until twice the floor is free again ([Recover from memory
+pressure](#recover-from-memory-pressure)): 1.6 to 2.3 seconds each in that
+test. So paused VMs hold only memory above that line, and a small host
+saves most of them soon after they pause. A session the server saved while
+it worked wakes on its own into the room paused VMs hold, when they hold
+enough for it: the server saves them first. A paused VM is saved only while the data filesystem has its
+reserve, 4 GiB and the VM's memory free, so an idle VM is paused only while
+it does: on a fuller disk a sleep saves it at once, and disk reclaim makes
+the room. A VM already paused when the disk fills stays paused, a launch
+that needs its memory is refused, and at the floor working sessions stay
+frozen: free disk space or close sessions
+([Recover from disk pressure](#recover-from-disk-pressure)). A wake
+restores a saved VM where it was. A server restart or update leaves a
+paused VM paused. Wake paused sessions before `cloudfield server update
+--allow-downgrade` to a release that saved idle VMs: that release restores
+a paused VM with its processes still frozen. Its memory is gone with the
+host's: after a host reboot, or once the kernel's OOM killer ended its
+hypervisor, the session starts again from its disk on its next use,
+without its processes. Nothing is lost otherwise, so more sessions sleep,
+sooner:
 
 - Every agent sleeps, and Standard sessions too. Background sessions never
   do.
@@ -923,7 +960,7 @@ lost, so more sessions sleep, sooner:
   wakes a VM: a tunnel such as `cloudflared` or `ngrok`, a webhook receiver,
   or a quiet download or remote `ssh` job freezes with it and may lose its
   connection, so keep such a session in use, or set `--run-sleep-after` to
-  `0`. A save that fails leaves the session running; Cloudfield tries again
+  `0`. A pause that fails leaves the session running; Cloudfield tries again
   after another `--run-sleep-after`.
 - A closed session's VM is stopped as soon as the close finishes, whatever
   `--run-sleep-after` is, and keeps its disks without its memory
@@ -937,7 +974,8 @@ tab's browser; its terminals and shell tabs, which reconnect on the wake;
 the agent process and its conversation; its disks. Connections to outside
 the session, such as a database client's or a port forward's, can end while
 it sleeps, and the programs holding them see them fail after the wake, as
-after a network outage. The VM's clock is set right on the wake.
+after a network outage. A restored VM's clock is set right on the wake; a
+paused VM's clock kept time.
 
 Timers in a saved VM stop with it and count only time awake: on a test
 host, a 150-second `sleep` and a Node `setTimeout` started before a save
@@ -952,8 +990,11 @@ sleeping session, Standard or Enhanced: mail, `cloudfield-internal report
 
 A Standard session's Chat and Terminal views, and an Enhanced session's
 Chat view, show **Asleep since** with a **Wake** button while it sleeps.
+Selecting the row says whether the VM is paused in the server's memory or
+saved to disk, as do the session's details and
+`cloudfield sessions <session-id>`.
 
-A wake reads all of the saved memory before the VM runs. On a hosted test
+The wake of a saved VM reads all of the saved memory before the VM runs. On a hosted test
 runner, a VM with 1.3 GiB of saved memory woke in 1.9 to 8.5 seconds with
 the file read from disk, and in about 1 second with it still in the host's
 page cache. Cloud Hypervisor can also load the memory on demand, which ran
@@ -966,7 +1007,9 @@ message to a sleeping Claude Code or Codex session running a dev server and
 a `docker compose` stack was accepted 0.7 to 1.5 seconds after it was sent,
 and a start from disk after a failed restore took 5 seconds. The Chat view
 and the session's terminal say
-`Cloudfield had saved this session to disk and restored it`.
+`Cloudfield had saved this session to disk and restored it`, or
+`Cloudfield had paused this idle session in the server's memory and resumed
+it` for a VM that was only paused.
 
 When the saved state cannot be restored, because the server now runs
 another Cloud Hypervisor or guest kernel, or the file is gone or damaged,
@@ -1181,7 +1224,7 @@ sudo systemctl restart aether-server
 | `--poll-interval` | `30s` | How often stalls, retention and disk are checked. Values above `1m` act as `1m`. | Keep it at a third of the threshold or less. |
 | `--checkout-ttl` | `72h` | How long a finished session's checkout is kept after the session ends. It also stays while the session's container is kept. Negative keeps every checkout, and disk cleanup leaves them alone. | Lower on a small disk. |
 | `--run-container-ttl` | `720h`; `168h` for a container that stays frozen in memory | How long a closed session's container or VM disks are kept for reopening ([Relaunching a closed session](#relaunching-a-closed-session)). A value you set applies to every closed session. Negative removes them at once. | Lower when paused containers hold too much memory, or closed sessions too much disk. |
-| `--run-sleep-after` | `30m`; `5m` for session VMs | How long an idle Enhanced session of an agent that can restore its conversation keeps its container running, and how long any idle session VM runs before it is saved ([Idle sleep](#idle-sleep)). `0` keeps every session awake. | Lower on a host short of memory; `0` when processes in idle sessions must keep running. |
+| `--run-sleep-after` | `30m`; `5m` for session VMs | How long an idle Enhanced session of an agent that can restore its conversation keeps its container running, and how long any idle session VM runs before it is paused in memory ([Idle sleep](#idle-sleep)). `0` keeps every session awake. | Lower on a host short of memory, for containers; `0` when processes in idle sessions must keep running. |
 | `--min-free-disk` | automatic | The free-space reserve per filesystem, in bytes. Negative turns the disk check off; the memory check stays. | See below. |
 | `--run-cpus` | 8, or the host's CPU count if lower | CPU ceiling per session and environment. | Lower to share a small host. |
 | `--run-memory` | 8 GiB | Memory ceiling per session and environment, in bytes. Swap adds a quarter of it, in a container from the host's swap and in a VM from a swap file on its data disk. | Raise when sessions hit out-of-memory kills. |

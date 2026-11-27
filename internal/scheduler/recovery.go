@@ -2020,6 +2020,7 @@ func (s *Scheduler) entryFromSidecar(r *domain.Run, sc sidecar) *supervised {
 		usageLimit:          sc.UsageLimit,
 		asleepSince:         asleepSince,
 		asleepSaved:         sc.AsleepSaved,
+		asleepResident:      sc.AsleepResident,
 		wakeErr:             wakeErr,
 		done:                make(chan struct{}),
 	}
