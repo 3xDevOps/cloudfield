@@ -402,7 +402,11 @@ What changes:
   caches go back when it powers off, and a reopen before then keeps them on
   the session. The server writes the member's new caches in the background,
   and a VM that starts again before that is done first copies its own cache
-  disk. An idle sleep does not promote them. Caches over 20 GiB are dropped,
+  disk. An idle sleep does not promote them. Nor does a stop when
+  writing them could leave the data filesystem with less free than its
+  reserve (`--min-free-disk`) plus 4 GiB, the level below which the server
+  starts deleting stopped sessions' state: the member's newest caches stay
+  as they were, and the server log gives the sizes. Caches over 20 GiB are dropped,
   and so are a member's newest caches once no VM has used them for 7 days;
   the next session then starts empty. An Isolated session's caches never go
   back.

@@ -51,7 +51,7 @@ func qemuWrite(t *testing.T, path string, pattern byte) {
 func TestCachePoolLayersCachesOverRawBases(t *testing.T) {
 	needTools(t, "mkfs.ext4", "cp", "qemu-img", "qemu-io")
 	dir := t.TempDir()
-	s, err := Open(filepath.Join(dir, "images"), "", nil)
+	s, err := Open(filepath.Join(dir, "images"), "", nil, -1)
 	if err != nil {
 		t.Fatal(err)
 	}

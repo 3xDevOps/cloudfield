@@ -94,13 +94,6 @@ func (s *Scheduler) runLimits(ctx context.Context, override domain.RunLimits) (d
 	}, nil
 }
 
-func diskReserve(total uint64, override int64) uint64 {
-	if override > 0 {
-		return uint64(override)
-	}
-	return max(uint64(5<<30), min(total/20, uint64(20<<30)))
-}
-
 // memoryFloor is the host memory admission keeps available.
 func memoryFloor(total uint64) uint64 {
 	return max(uint64(2<<30), total/10)
@@ -329,7 +322,7 @@ func (s *Scheduler) tryReserveCapacity(ctx context.Context, claim *memoryClaim) 
 		if fs.TotalBytes == 0 || fs.FreeBytes > fs.TotalBytes {
 			return fmt.Errorf("%w: %s disk measurement is invalid", ErrCapacityUnknown, fs.Name)
 		}
-		floor := diskReserve(fs.TotalBytes, s.cfg.MinFreeBytes)
+		floor := disk.Reserve(fs.TotalBytes, s.cfg.MinFreeBytes)
 		if claim.wake {
 			floor = 0
 		}
