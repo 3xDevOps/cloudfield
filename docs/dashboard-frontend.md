@@ -6761,14 +6761,18 @@ and runs the sign-in under the heading "Sign in to <name>" in the
 assistant's sign-in terminal on `/ws/terminal?agent_login=<id>`, then shows
 how it ended. A login added retitles the panel "Added <name>", drops the
 sign-in instructions, and shows a callout with its kind and plan, email and
-organisation (with the **Billed per use** badge for a login billed per use)
-and the login's live **Automatic** and **Use for shares** switches, the
-same calls, pending state and verbatim refusal as on its row, each with a
-line on what it does for this login: "Sessions can move here when the
-automatic logins above it run out.", adding ", charged per use to
-<organisation>" for a login billed per use, and "Sessions of <teammates>
-can run here too", with the same addition ("No share reaches it while
-Automatic is off." once Automatic is off).
+organisation (with the **Billed per use** badge for a login billed per use),
+once the page has read the list again its place, "Added as number <n> in
+your order", adding ", after <name>, billed per use" when an automatic login
+billed per use is above it (the server puts a subscription before the first
+login billed per use, and one billed per use last), and the login's live
+**Automatic** and **Use for shares** switches, the same calls, pending state
+and verbatim refusal as on its row, each with a line on what it does for
+this login: "Sessions can move here when the automatic logins above it run
+out.", adding ", charged per use to <organisation>" for a login billed per
+use, and "Sessions of <teammates> can run here too", with the same addition
+("No share reaches it while Automatic is off." once Automatic is off). The
+callout is as wide as the form.
 The switches show the login as the page's read of the list holds it, which
 each change reads again. A refused sign-in shows the refusal with **Start
 again**. The

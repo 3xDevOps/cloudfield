@@ -499,6 +499,23 @@ describe('add login', () => {
     expect(onChanged).toHaveBeenCalledTimes(2)
   })
 
+  it('says where in the order the added login landed once the list is read again, and any login billed per use above it', () => {
+    const console = { id: 'lgn-console0001', name: 'console', kind: 'console' as const, per_use: true, organization_name: 'Alice API', automatic: true, shared: true, position: 1 }
+    const spare = { id: 'lgn-spare000001', name: 'spare', kind: 'subscription' as const, automatic: true, shared: true, position: 1 }
+    const api = { id: 'lgn-api00000001', name: 'api', kind: 'console' as const, per_use: true, automatic: true, shared: true, position: 2 }
+    const base = { id: 'default', name: 'default', kind: 'subscription' as const, automatic: true, shared: true, position: 0 }
+    const { unmount } = addLogin({ client: fakeApi(), logins: null, ended: { id: spare.id, outcome: { login: spare } }, running: { id: spare.id, name: 'spare' }, resume: true })
+    expect(screen.queryByText(/^Added as number/)).toBeNull()
+    unmount()
+
+    const again = addLogin({ client: fakeApi(), logins: [base, spare, { ...console, position: 2 }], ended: { id: spare.id, outcome: { login: spare } }, running: { id: spare.id, name: 'spare' }, resume: true })
+    expect(screen.getByText(/^Added as number/).textContent).toBe('Added as number 2 in your order.')
+    again.unmount()
+
+    addLogin({ client: fakeApi(), logins: [base, console, api], ended: { id: api.id, outcome: { login: api } }, running: { id: api.id, name: 'api' }, resume: true })
+    expect(screen.getByText(/^Added as number/).textContent).toBe('Added as number 3 in your order, after console, billed per use.')
+  })
+
   it('says before the sign-in what the new login is used for, and after it that a Console login is billed per use and charged for whom', async () => {
     const user = userEvent.setup()
     const client = fakeApi({ agentLoginAdd: vi.fn(async () => ({ login_id: 'lgn-new00000009' })) })

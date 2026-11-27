@@ -98,12 +98,16 @@ export function AddLogin({ client, sharedWith, logins, onChanged, running, ended
   if (signIn) {
     const outcome = ended?.id === signIn.id ? ended.outcome : null
     const added = outcome && 'login' in outcome ? logins?.find((login) => login.id === outcome.login.id) ?? outcome.login : null
+    // Known once the list is read again: the server puts a subscription before the first login billed per use, and one billed per use last.
+    const place = added && logins ? logins.findIndex((login) => login.id === added.id) : -1
+    const perUseAbove = logins && place > 0 ? logins.slice(0, place).filter((login) => login.per_use && login.automatic).map((login) => login.name) : []
     return (
       <div className="flex flex-col gap-3">
         <h2 className="text-title">{added ? 'Added' : 'Sign in to'} <span className="font-code">{signIn.name}</span></h2>
         {outcome && (added ? (
           <Callout
             tone="done"
+            className="max-w-xl"
             title={
               <span role="status" className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 {[kindWords(added), added.email, added.organization_name].filter(Boolean).join(' · ')}
@@ -111,6 +115,12 @@ export function AddLogin({ client, sharedWith, logins, onChanged, running, ended
               </span>
             }
           >
+            {place >= 0 && (
+              <p className="text-ui-sm text-text">
+                Added as number {place + 1} in your order
+                {perUseAbove.length > 0 && `, after ${perUseAbove.join(', ')}, billed per use`}.
+              </p>
+            )}
             <AddedSwitches login={added} sharedWith={sharedWith} client={client} onChanged={onChanged} />
           </Callout>
         ) : 'refused' in outcome && (
