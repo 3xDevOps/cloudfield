@@ -351,7 +351,8 @@ export function BoardLanes({ agentNames }: { agentNames: Record<string, string> 
         {!following && <Button variant="secondary" size="sm" onClick={() => setEnd(null)}>Now</Button>}
         {history.loading && !loadingMore && <span role="status" className="text-ui-sm text-muted">Loading history…</span>}
         {(loadingMore || (!history.loading && history.capped)) && (
-          <>
+          // One item, so the label and its button wrap together; on a phone it takes a row of its own.
+          <span className={cn('flex items-center gap-2', compact && 'basis-full')}>
             <span className="text-ui-sm text-muted">Older history not loaded</span>
             {/* Both labels share one cell, so the toolbar does not move while the read runs. */}
             <Button variant="secondary" size="sm" disabled={loadingMore} onClick={() => { setMore(true); history.more() }}>
@@ -360,7 +361,8 @@ export function BoardLanes({ agentNames }: { agentNames: Record<string, string> 
                 <span aria-hidden={!loadingMore} className={cn('[grid-area:1/1]', !loadingMore && 'invisible')}>Loading…</span>
               </span>
             </Button>
-          </>
+            {loadingMore && <span role="status" className="sr-only">Loading older history…</span>}
+          </span>
         )}
       </header>
       {history.error && (
