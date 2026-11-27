@@ -535,7 +535,7 @@ it('moves a connector at a retiring address to the new one, skipping one added a
   fireEvent.click(screen.getByRole('button', { name: 'Move Claude (claude.ai) to the new address' }))
   const dialog = await screen.findByRole('alertdialog')
   expect(within(dialog).getByText('Move Claude (claude.ai) to the new address?')).toBeTruthy()
-  expect(dialog.textContent).toContain(`Add Aether again in Claude with ${newUniversal} and sign in. Once the new connection calls Cloudfield, this connector is revoked; remove the old Aether connector in Claude too.`)
+  expect(dialog.textContent).toContain(`Add it again in Claude with ${newUniversal} and sign in. Once the new connection calls Cloudfield, this connector is revoked; remove the old connector in Claude too.`)
   fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }))
   const panel = await screen.findByRole('tabpanel', { name: 'Claude' })
   expect(await within(panel).findByText(newUniversal)).toBeTruthy()
@@ -559,7 +559,7 @@ it('moves a connector at a retiring own URL to the same path on the new address,
   expect(within(callout as HTMLElement).getByText(newOwn)).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'Move ChatGPT (chatgpt.com) to the new address' }))
   const dialog = await screen.findByRole('alertdialog')
-  expect(dialog.textContent).toContain(`Add Aether again in ChatGPT with ${newOwn} and paste the code.`)
+  expect(dialog.textContent).toContain(`Add it again in ChatGPT with ${newOwn} and paste the code.`)
   fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }))
   expect(await screen.findByText('ABCD-EFGH')).toBeTruthy()
   const panel = screen.getByRole('tabpanel', { name: 'ChatGPT' })
@@ -614,7 +614,7 @@ it('offers no move or reconnect while the server takes no connectors at the new 
   const old: Connector = { ...claude, resource: oldUniversal, notice: { state: 'retiring', date: '2027-03-01' } }
   show({ connectorList: vi.fn().mockResolvedValue({ connectors: [old], url: oldUniversal, universal_url: oldUniversal, universal_urls: [oldUniversal], sign_in: true }) })
   const callout = (await screen.findByText('This address is retiring on 2027-03-01')).closest('[data-slot=callout]')
-  expect(callout?.textContent).toContain('It keeps working until then. This server does not take connectors at the new address yet; ask its admin where to add it again.')
+  expect(callout?.textContent).toBe('This address is retiring on 2027-03-01It keeps working until then. Ask this server’s admin where to add it again.')
   expect(screen.queryByRole('button', { name: /new address/ })).toBeNull()
   expect(screen.queryByRole('button', { name: 'Reconnect Claude (claude.ai)' })).toBeNull()
   expect(screen.getByRole('button', { name: 'Revoke Claude (claude.ai)' })).toBeTruthy()
@@ -625,9 +625,27 @@ it('reconnects a retired universal connector by signing in at the new address, a
   const client = show({ connectorList: vi.fn().mockResolvedValue({ connectors: [old], ...movedEdge, universal_urls: [newUniversal] }) })
   fireEvent.click(await screen.findByRole('button', { name: 'Reconnect Claude (claude.ai)' }))
   const dialog = await screen.findByRole('alertdialog')
-  expect(dialog.textContent).toContain('Connect Aether again in Claude and sign in')
+  expect(dialog.textContent).toContain('Connect it again in Claude and sign in')
   fireEvent.click(within(dialog).getByRole('button', { name: 'Reconnect' }))
   const panel = await screen.findByRole('tabpanel', { name: 'Claude' })
   expect(await within(panel).findByText(newUniversal)).toBeTruthy()
   expect(client.connectorCode).not.toHaveBeenCalled()
+})
+
+it('says nothing of a date it was not given, and keeps the code a reconnect at the old own URL asks for', async () => {
+  const notice = JSON.parse('{"state":"retiring"}') as Connector['notice']
+  const old: Connector = { ...chatgpt, resource: 'https://relay-old.example.test/mcp/srv', notice }
+  show({ connectorList: vi.fn().mockResolvedValue({ connectors: [old], url: oldUniversal, universal_url: oldUniversal, universal_urls: [oldUniversal], sign_in: true }) })
+  const callout = (await screen.findByText('This address is retiring')).closest('[data-slot=callout]')
+  expect(callout?.textContent).toBe('This address is retiringAsk this server’s admin where to add it again.')
+  fireEvent.click(screen.getByRole('button', { name: 'Revoke ChatGPT (chatgpt.com)' }))
+  expect((await screen.findByRole('alertdialog')).textContent).toContain('ChatGPT asks you to connect again with a new code.')
+})
+
+it('reconnects a connector the server no longer lists, as before any address notice', async () => {
+  const client = show({ connectorList: vi.fn().mockResolvedValueOnce({ connectors: [claude] }).mockResolvedValue({ connectors: [] }) })
+  fireEvent.click(await screen.findByRole('button', { name: 'Reconnect Claude (claude.ai)' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }))
+  expect(await screen.findByText('ABCD-EFGH')).toBeTruthy()
+  expect(client.connectorCode).toHaveBeenCalled()
 })
