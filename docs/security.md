@@ -334,9 +334,10 @@ file yours is mounted over and detach it. For `claude` that is
 [harnesses.md](harnesses.md#per-agent-setup) gives each agent's path. A Claude
 Code sign-in through the Anthropic Console lives elsewhere in your home
 (`primaryApiKey` in `~/.claude.json`, or `~/.config/anthropic`) and is never
-mounted into their session. The server reads it to decide whether the account
-is signed in and keeps a digest of it, never the key or token. A member the
-account is shared with can learn that the sign-in exists, which of
+mounted into their session; an added Console login, outside your home, can be
+([Several logins](#several-logins)). The server reads the one in your home to
+decide whether the account is signed in and keeps a digest of it, never the
+key or token. A member the account is shared with can learn that the sign-in exists, which of
 `~/.claude.json`, `~/.claude/.config.json` and `~/.config/anthropic` holds it,
 and roughly when it changes: the
 refusal of their launch and the account's usage row name it. Their own
@@ -500,8 +501,10 @@ What they do not stop:
 - With that token a teammate's session can ask Anthropic whose login it runs
   on.
 - A member's own sessions are not walled from each other. They share the home,
-  so code one session plants there runs in the next container, and a session
-  with sudo can unmount what covers the default login. A compromised session
+  so code one session plants there runs in the next container. Whether root in
+  a session can unmount what covers the default login depends on the container
+  runtime's capabilities, not on sudo alone: unmounting needs `CAP_SYS_ADMIN`,
+  which Docker's default capability set leaves out. A compromised session
   can reach, in time, every login Cloudfield puts that member's sessions on,
   and each login left automatic adds to that. Isolated sessions do not write
   to the home and narrow this.
@@ -512,9 +515,10 @@ What they do not stop:
 - Whoever may steer a session can tell its agent to print its login file,
   whichever login it is on ([who can act](#who-can-see-and-act-on-a-session)).
 - A session that can write its login's directory can replace the sign-in in
-  it with another account's of the same kind. Cloudfield refuses only a change
-  of kind: `scheduler: login lgn-… no longer holds the subscription sign-in it
-  was added with; its owner removes it and adds it again`.
+  it with another account's of the same kind. Cloudfield compares the kind of
+  sign-in, not which account it is, and refuses a change of kind with
+  `scheduler: login lgn-… no longer holds the subscription sign-in it was
+  added with; its owner removes it and adds it again`.
 - A move resumes the conversation on the next login, so the agent can send
   earlier conversation content to that login's provider. Do not let a
   session with content one organisation must not see move onto another's

@@ -464,9 +464,11 @@ title keeps its room.
 the row's right edge (`run-details.tsx`): the whole title, the state's
 reason, the workspace, the agent and mode, the branch, a root's subsession counts, when the session started, when it last changed if that is later,
 its owner, the account it is on in the header's words when it is on an added
-login or a fallback (from a server with the `logins` feature, or for a run
-that carries a login), and the people on it with the controller marked
-**Controlling**.
+login, a default login billed per use, or a fallback (from a server with the
+`logins` feature, or for a run that carries a login), with the **Billed per
+use** badge on a login billed per use, and the people on it with the
+controller marked **Controlling**. The row itself names no account and
+carries no badge.
 A live session nobody controls says so above them and names who had control
 last, when the server knows. Moving to another row swaps the box without
 the delay or the animation. The box takes no pointer events, closes when the
@@ -684,7 +686,8 @@ under the title (from a server with the `logins` feature, or for a run that
 carries a login; a server without them shows the phone what it did before), wrapping rather than cut: "On your account, login console"
 with a **Billed per use** badge, whose tooltip and accessible name say
 "Billed per use to your account, login console", or "On Ada's account, …"
-on a teammate's; a removed login is named by its id.
+on a teammate's; a removed login is named by its id. The line and its
+badge hide while the on-screen keyboard is up.
 
 **More** opens with a **Views** group (Trace, Files, Browser, **Session
 details**, **Session tree**, **Search…**, **Assistant**), then the session's
@@ -3075,7 +3078,7 @@ dialog that reads it as Off keeps it saved unless the fallback was changed. Sett
 
 Where the server offers `run.children.allow`, the form has a **Child
 sessions** select: **Use my setting** (naming it, "(off)"), **Allow for this
-session** and **Off for this session**, sent as `run.launch` `subsessions: "on"` or
+session** and **Off for this session**, sent as `run.launch` `children: "on"` or
 `"off"`; the first sends nothing.
 
 The collapsed **Fallback** under the account list, whose caption reads

@@ -146,9 +146,9 @@ run `cloudfield member merge <code>` (options `--keep <member id>`, `--keep-admi
 discarded before you confirm. The survivor takes the other member's sessions,
 schedules, devices and accounts, and the lower of the two roles. The absorbed
 member's home moves to `<data-dir>/merged/<merge id>/home` and their private
-signing key to `signing-key` beside it. Their added Claude Code logins move to
-the survivor after the survivor's own, off for shares and with their
-Automatic switch as it was, so the survivor's sessions can move onto them;
+signing key to `signing-key` beside it. Their added Claude Code logins
+([agents.md](agents.md#several-logins)) move to the survivor after the
+survivor's own, off for shares and with their Automatic switch as it was, so the survivor's sessions can move onto them;
 check `cloudfield agent logins` afterwards. A name the survivor already uses
 gets the first free suffix, `-2`, `-3` and so on, the name cut to fit 32
 characters. Both hold credentials, so remove the
@@ -612,8 +612,10 @@ See [memory.md](memory.md).
 
 Each member signs in to each agent once, in their own environment (`cloudfield agent
 add <name>`, then `cloudfield terminal`). That home is mounted into every session they
-launch. A member's **agent account** is that vendor login and the subscription
-behind it. One member can let a collaborator launch sessions on theirs.
+launch. A member's **agent account** is that vendor login, their **default login**,
+and the subscription behind it, plus, for Claude Code, the logins they added
+outside their home ([Shares and several logins](#shares-and-several-logins)).
+One member can let a collaborator launch sessions on theirs.
 
 The owner turns on **Share my account** on the recipient's row in **Members**. The
 recipient picks the owner under **New session → Account**, below the agent.
@@ -664,11 +666,13 @@ lists exactly what is shared.
 - An owner with no login shows **Needs `<owner>`'s login**. A CLI launch fails with `Grace
   is not logged in to claude: no login at ~/.claude/.credentials.json in their
   home; Grace logs in to claude in their own environment terminal`.
-- A Claude Code sign-in through the Anthropic Console is never shared
-  ([harnesses.md](harnesses.md#claude-code)): it holds an API key or a token
-  for the API, which stays in its owner's sessions. An owner with only that
-  sign-in shows **Needs `<owner>`'s login**, and a CLI launch fails with `Grace
-  is not logged in to claude with a login Cloudfield shares: ~/.claude.json
+- A Claude Code sign-in through the Anthropic Console in the owner's home is
+  never shared ([harnesses.md](harnesses.md#claude-code)): it holds an API key
+  or a token for the API, which stays in its owner's sessions. An added
+  Console login can be ([Shares and several
+  logins](#shares-and-several-logins)). An owner with only that sign-in shows
+  **Needs `<owner>`'s login**, and a CLI launch fails with `Grace is not
+  logged in to claude with a login Cloudfield shares: ~/.claude.json
   holds an Anthropic Console sign-in, which stays in Grace's own sessions;
   sharing needs a subscription login at ~/.claude/.credentials.json`.
 - Every member's containers mount their own Claude Code and Gemini login files
@@ -719,12 +723,15 @@ its email or organisation; a session on the login can still learn whose it is
 is open to you fails with `run.launch: permission denied: none of this
 account's logins is available to you, so it is not shared with you`; one
 whose open logins cannot serve the session fails with `run.launch: permission
-denied: none of this account's logins can serve you: <login>: <why>; ...`.
+denied: none of this account's logins can serve you: <login>: <why>`, with
+`; <login>: <why>` for each further open login. Launch on another account, or
+ask the owner to fix what `<why>` names.
 
 - Turning a login off for shares moves teammates' running sessions off it to
   another login or account they may use, as revoking the share does, and
-  stops those that cannot move with `login share revoked: <owner> turned use
-  for shares off for login <name>; ...`. The owner's own sessions stay.
+  stops those that cannot move with a reason that starts `login share revoked:
+  <owner> turned use for shares off for login <name>; ` and says why it could
+  not move. The owner's own sessions stay.
   Turning a login automatic off moves nothing: sessions already on it stay
   ([agents.md](agents.md#manage-logins)).
 - A session on a login that is off for shares is handed off only to that

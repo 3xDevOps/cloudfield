@@ -310,6 +310,16 @@ message.
 
 ### Add a login
 
+Adding a login needs a role that may launch sessions, collaborator or above
+([teams.md](teams.md#roles)); a viewer is refused with `agent.login.add:
+permission denied: launching sessions requires the collaborator role`. It
+also needs Claude Code installed in your environment, or the CLI stops with
+`agent claude is not installed in your environment; run aether agent add
+claude first`, and a server that advertises the `logins` feature; against an
+older one it stops with `--as: server <version> lacks the "logins" feature, so
+it keeps only the login in your home; update the server with cloudfield
+server update`, which a super admin runs.
+
 A new login starts with **Automatic** and **Use for shares** on, at once:
 Cloudfield may start or move your sessions onto it, and the sessions of
 teammates you share your account with can run on it
@@ -319,9 +329,12 @@ does not tell you when a teammate's session lands there. There is no interval in
 is yours alone; to keep it out of reach, run the two commands the sign-in
 prints last as soon as it ends.
 
-`--as <name>` runs `claude auth login` in a container of its own, with the new
-login mounted over your default one, so the sign-in cannot overwrite another
-login. It prints:
+`--as <name>` runs `claude auth login` in a container of its own, with your
+home mounted and the new login's directory mounted over the files that hold
+your default login, so Claude Code saves the sign-in into the new login. The
+`claude` it runs is the one in your home's `~/.local/bin`: code planted in your
+home runs during the sign-in and can capture the new login
+([security.md](security.md#several-logins)). It prints:
 
 ```text
 adding login work as lgn-…: claude auth login runs in a container of its own; follow its prompts
@@ -350,9 +363,10 @@ sign-in that creates no API key. Nothing is added when the sign-in:
 
 - saved a Console API key: `the sign-in saved an Anthropic Console API key,
   which Cloudfield does not keep as an added login: Claude Code copies it into
-  backups in your home, where it would outlive the login. ...`. Cloudfield does
-  not revoke the key. Keep a key as your default login or as a workspace secret
-  ([harnesses.md](harnesses.md#use-an-api-key));
+  backups in your home, where it would outlive the login. Keep the key as your
+  default login or as a workspace secret (docs/harnesses.md#use-an-api-key);
+  nothing was added` ([harnesses.md](harnesses.md#use-an-api-key)). Cloudfield
+  does not revoke the key;
 - saved nothing: `the sign-in ended before Claude Code saved a login; nothing
   was added`;
 - recorded the same email and organisation as a login you have: `this sign-in
@@ -392,6 +406,8 @@ add it again.
 
 `--json` prints the same, with the ids of those sessions (`null` when they
 could not be read). The other commands take a login's name or id:
+
+With a second added login, `spare`:
 
 ```sh
 cloudfield agent logins order work default spare   # every login once, default included
@@ -482,10 +498,12 @@ pays whatever the login. When none of your logins can serve, the launch fails
 with:
 
 ```text
-none of your logins starts a session unless you name it: <login>: <why>; <login> is automatic off; ...; name one with cloudfield session --agent claude --login <name>, or let Cloudfield choose it with cloudfield agent logins auto <name> on
+none of your logins starts a session unless you name it: <login>: <why>; name one with cloudfield session --agent claude --login <name>, or let Cloudfield choose it with cloudfield agent logins auto <name> on
 ```
 
-The full command is `cloudfield session "<task>" --agent claude --login <name>`.
+`<login>: <why>` repeats, separated by `; `, once for each login, and reads
+`<login> is automatic off` for a login with Automatic off. The full command is
+`cloudfield session "<task>" --agent claude --login <name>`.
 
 Named or not, when a usage read shows the login's five-hour or seven-day
 window at 95% or more, the session starts on the first other candidate whose
@@ -536,9 +554,9 @@ of any kind, reads 95% or more ([security.md](security.md#several-logins)). A
 teammate's session on a Console login, which has no windows, therefore stops
 on such a message instead of moving.
 
-The session's chat gets `Continued on Ada (work)'s account because Ada's
-usage ran out.` An Enhanced session ([enhanced-sessions.md](enhanced-sessions.md))
-gets the continuation prompt at most once, and not at all when a person's
+The session's notes, which its **Chat** view in the dashboard shows, get
+`Continued on Ada (work)'s account because Ada's usage ran out.` An Enhanced
+session ([enhanced-sessions.md](enhanced-sessions.md)) gets the continuation prompt at most once, and not at all when a person's
 message reaches the agent first; a Standard or
 [Background](enhanced-sessions.md#background-sessions) session gets it as
 the prompt of the command that resumes the conversation. A message sent
@@ -553,7 +571,7 @@ a key in `~/.claude/settings.json`. Unless you name it or launch with
 `--no-fallback`, a session reaches one, at launch or by a move, only when no
 login it may use has usage known to be left, and a subsession does not
 inherit its parent's login when that is billed per use. Landing on it adds
-`Ada (console)'s account is billed per use.` to the session's log and chat,
+`Ada (console)'s account is billed per use.` to the session's log and notes,
 and `cloudfield sessions` shows `billed per use`.
 
 Cloudfield enforces no spending cap on a login billed per use;
@@ -581,9 +599,9 @@ usable again at 2026-11-27T18:00:00Z`
 | Setup | Refusal | Why |
 | --- | --- | --- |
 | A workspace or server variable that signs Claude Code in, such as `ANTHROPIC_API_KEY` | `scheduler: a sign-in outside the login pays here: a workspace or server variable signs the agent in, so login lgn-… would not pay; launch on the default login` | Claude Code would pay with the variable. A launch that names no login stays on the default login. |
-| `apiKeyHelper`, or a variable that signs Claude Code in under `env`, in `~/.claude/settings.json` | `scheduler: a sign-in outside the login pays here: apiKeyHelper in ~/.claude/settings.json signs the agent in, ...`, or `... ANTHROPIC_API_KEY under env in ~/.claude/settings.json signs the agent in, ...` | Claude Code prefers those settings to a login file. |
-| A `~/.claude/settings.json` the server cannot read: not a regular file, another hard link, not JSON, or over 1 MiB | `scheduler: a sign-in outside the login pays here: ~/.claude/settings.json may sign the agent in and cannot be read: <error>, ...` | It may hold either of the above. Fix the file the error names, or launch on the default login. |
-| An agent definition (`--agent-definitions`) that gives `claude` its own executable | `scheduler: only Claude Code keeps added logins: this server runs claude from its --agent-definitions entry, whose executable leaves no place for an added login; use the default login, ...` | The definition has no sign-in command and no account configuration to mount a login into. |
+| `apiKeyHelper`, or a variable that signs Claude Code in under `env`, in `~/.claude/settings.json` | The first row's refusal, with `apiKeyHelper in ~/.claude/settings.json signs the agent in`, or `ANTHROPIC_API_KEY under env in ~/.claude/settings.json signs the agent in`, in place of `a workspace or server variable signs the agent in` | Claude Code prefers those settings to a login file. |
+| A `~/.claude/settings.json` the server cannot read: not a regular file, another hard link, not JSON, or over 1 MiB | The first row's refusal, with `~/.claude/settings.json may sign the agent in and cannot be read: <error>` in place of `a workspace or server variable signs the agent in` | It may hold either of the above. Fix the file the error names, or launch on the default login. |
+| An agent definition (`--agent-definitions`) that gives `claude` its own executable | `scheduler: only Claude Code keeps added logins: this server runs claude from its --agent-definitions entry, whose executable leaves no place for an added login; use the default login, or the server's operator removes executable from that entry, or the entry, to use added logins` | The definition has no sign-in command and no account configuration to mount a login into. |
 | An [Isolated](security.md#permission-tiers) session on an added Console login | `scheduler: login lgn-…: an Isolated session cannot use a Console login: it is a whole directory the session could change for later sessions; launch it at Default, or on another login` | The session could change the login's directory for later sessions. A Console default login runs Isolated as before. |
 | Session VMs (`session-runtime vm`) | `scheduler: session VMs cannot verify an added login's mounts yet, so they do not run on one; launch on the default login` | Cloudfield cannot yet check a VM's mounts. |
 
@@ -594,9 +612,13 @@ limit](https://support.claude.com/en/articles/11145838), and say [you can belong
 to several Team or Enterprise
 organizations](https://support.claude.com/en/articles/13566435), while the
 [Usage Policy](https://www.anthropic.com/legal/aup) rules out creating multiple
-accounts to "circumvent product guardrails" and [Claude Code's legal
-page](https://code.claude.com/docs/en/legal-and-compliance) says advertised
-limits "assume ordinary, individual usage"; none of them says whether moving
+accounts to "circumvent product guardrails", [Claude Code's legal
+page](https://code.claude.com/docs/en/legal-and-compliance) says "Advertised
+usage limits for Pro, Max, and Ultra plans assume ordinary, individual usage",
+and, on sharing a login with teammates, the [consumer
+terms](https://www.anthropic.com/legal/consumer-terms) say "You may not share
+your Account login information, Anthropic API key, or Account credentials with
+anyone else"; none of them says whether moving
 between two of your own subscriptions at a usage limit is allowed or
 forbidden.
 

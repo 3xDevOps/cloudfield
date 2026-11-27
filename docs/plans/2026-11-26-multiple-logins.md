@@ -478,7 +478,8 @@ when no usage read gave one.
     forged signal (section 3).
 - **A member's own sessions are not walled from each other.** They share
   the home, so code a session plants there runs in the next container,
-  and a session with sudo can unmount what covers the default login. A
+  and root in a session whose container runtime grants `CAP_SYS_ADMIN` may
+  unmount what covers the default login. A
   compromised or prompt-injected session can therefore reach, in time,
   every login Cloudfield will put that member's sessions on. That is
   today's exposure of the default login, multiplied by the logins marked

@@ -574,9 +574,11 @@ after the key and value of `config set`.
 | `conflict-coordination` | on | Let overlapping sessions message each other ([coordination.md](coordination.md)). |
 
 API keys for key-based agents go in `/etc/aether/aether-server.env`, which the
-unit loads; subscription logins live in each member's home
-([harnesses.md](harnesses.md)). The unit runs the server as root, since Docker
-access is root-equivalent anyway. Its header comment explains how to run
+unit loads. A member's agent logins live in their home
+([harnesses.md](harnesses.md)), except the Claude Code logins they add, which
+live under `logins/` in the [data directory](#what-lives-in-the-data-directory).
+The unit runs the server as root, since Docker access is root-equivalent
+anyway. Its header comment explains how to run
 unprivileged; then every image needs a root user and self-update is off.
 
 ### Keep the server reachable under load
@@ -1144,7 +1146,7 @@ The server keeps all its state in `/var/lib/aether`, or the `data-dir` you set.
 | `repos/` | One bare git repository per workspace. |
 | `checkouts/` | One git worktree per session, and each session's recorded diff history in `<run-id>.diffsnap/`. With `session-runtime vm`, `<run-id>/` holds the session's checkout disk instead of a worktree. |
 | `transcripts/` | Terminal recordings and Enhanced conversation logs, kept until you delete the session. |
-| `homes/<member>/` | Each member's persistent home: installed agents, agent logins, uploaded configuration, and their GitHub token. |
+| `homes/<member>/` | Each member's persistent home: installed agents, agent logins other than added ones, uploaded configuration, and their GitHub token. |
 | `logins/<member-id>/<agent>/<login-id>/` | Each Claude Code login a member added beside the one in their home: its sign-in, and what Claude Code recorded at sign-in ([privacy.md](privacy.md#agent-logins)). |
 | `signing-keys/` | Each member's private commit signing key, which no container mounts. Without a backup, each member runs `cloudfield github connect` again for a new key. |
 | `linear/` | Each member's personal Linear API key, `<member-id>.key`, readable only by the server's user and never mounted into a container ([linear.md](linear.md#where-the-key-is-stored)). Without a backup, each member saves a new key. |
