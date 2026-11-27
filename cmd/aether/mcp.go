@@ -61,8 +61,8 @@ func olderServer(err error) error {
 }
 
 // mcpOverview prints how to add a connector and the caller's connectors.
-// When no code can be minted it still prints the connectors, with what
-// the edge says about their addresses, before the error.
+// When no code can be minted and the edge says something about the
+// address of one of them, it still prints the connectors before the error.
 func mcpOverview(w io.Writer, call func(method string, params, result any) error, now time.Time) error {
 	var list protocol.ConnectorListResult
 	if err := call(protocol.MethodConnectorList, struct{}{}, &list); err != nil {
@@ -72,6 +72,9 @@ func mcpOverview(w io.Writer, call func(method string, params, result any) error
 	if !list.SignIn {
 		code = &protocol.ConnectorCodeResult{}
 		if err := call(protocol.MethodConnectorCode, struct{}{}, code); err != nil {
+			if !slices.ContainsFunc(list.Connectors, func(c protocol.Connector) bool { return c.Notice != nil }) {
+				return olderServer(err)
+			}
 			if perr := printConnected(w, list, "", false, now); perr != nil {
 				return perr
 			}
@@ -158,7 +161,7 @@ func printConnected(w io.Writer, list protocol.ConnectorListResult, connectorURL
 // noticeLine is what the edge says about the address connector c was
 // added at, and what to do.
 func noticeLine(c protocol.Connector) string {
-	revoke := "cloudfield mcp revoke " + c.ID
+	revoke := "aether mcp revoke " + c.ID
 	if c.Notice.State == edgeproto.NoticeRetired {
 		if c.Notice.URL == "" {
 			return "retired: remove it in the app, then: " + revoke
@@ -170,7 +173,7 @@ func noticeLine(c protocol.Connector) string {
 		on = " on " + c.Notice.Date
 	}
 	if c.Notice.URL == "" {
-		return "retiring" + on + ": this server does not take connectors at the new address yet; ask its admin where to add it again"
+		return "retiring" + on + ": ask this server's admin where to add it again"
 	}
 	return "retiring" + on + ": add it again at " + c.Notice.URL + ", check it works, remove the old one in the app, then: " + revoke
 }

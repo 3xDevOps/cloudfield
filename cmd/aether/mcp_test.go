@@ -108,9 +108,9 @@ Remove one: aether mcp revoke <id>
   No code: on the page that opens, sign in to the edge with GitHub, pick this server and select Allow
 Connected:
   con-1  Claude (claude.ai)  scopes read  added 2026-11-26  never used  universal URL
-    retiring on 2027-03-01: add it again at https://relay-new.example.test/mcp, check it works, remove the old one in the app, then: cloudfield mcp revoke con-1
+    retiring on 2027-03-01: add it again at https://relay-new.example.test/mcp, check it works, remove the old one in the app, then: aether mcp revoke con-1
   con-2  Claude (claude.ai)  scopes read  added 2026-11-26  never used  at https://relay-old.example.test/mcp/abc
-    retiring on 2027-03-01: add it again at https://relay-new.example.test/mcp/abc, check it works, remove the old one in the app, then: cloudfield mcp revoke con-2
+    retiring on 2027-03-01: add it again at https://relay-new.example.test/mcp/abc, check it works, remove the old one in the app, then: aether mcp revoke con-2
   con-3  Claude (claude.ai)  scopes read  added 2026-11-26  never used  universal URL
 Reconnecting one at the server's own URL asks for a code: aether mcp code
 Remove one: aether mcp revoke <id>
@@ -123,7 +123,7 @@ Remove one: aether mcp revoke <id>
   Code  ABCD-EFGH   one use, expires in 10 minutes; paste it on the page that opens when you connect, if it asks
 Connected:
   con-2  Claude (claude.ai)  scopes read  added 2026-11-26  never used  at https://relay-old.example.test/mcp/abc
-    retiring: add it again at https://relay-new.example.test/mcp/abc, check it works, remove the old one in the app, then: cloudfield mcp revoke con-2
+    retiring: add it again at https://relay-new.example.test/mcp/abc, check it works, remove the old one in the app, then: aether mcp revoke con-2
 Remove one: aether mcp revoke <id>
 `},
 		{"enrolled at the replacement of a retired address", protocol.ConnectorListResult{Connectors: []protocol.Connector{
@@ -135,9 +135,9 @@ Remove one: aether mcp revoke <id>
   No code: on the page that opens, sign in to the edge with GitHub, pick this server and select Allow
 Connected:
   con-1  Claude (claude.ai)  scopes read  added 2026-11-26  never used  at https://relay-old.example.test/mcp
-    retired: add it again at https://relay-new.example.test/mcp if you still use it, remove the old one in the app, then: cloudfield mcp revoke con-1
+    retired: add it again at https://relay-new.example.test/mcp if you still use it, remove the old one in the app, then: aether mcp revoke con-1
   con-2  Claude (claude.ai)  scopes read  added 2026-11-26  never used  at https://relay-old.example.test/mcp/abc
-    retired: remove it in the app, then: cloudfield mcp revoke con-2
+    retired: remove it in the app, then: aether mcp revoke con-2
 Remove one: aether mcp revoke <id>
 `},
 		{"no URL the server takes yet", protocol.ConnectorListResult{Connectors: []protocol.Connector{
@@ -148,7 +148,7 @@ Remove one: aether mcp revoke <id>
   No code: on the page that opens, sign in to the edge with GitHub, pick this server and select Allow
 Connected:
   con-1  Claude (claude.ai)  scopes read  added 2026-11-26  never used  universal URL
-    retiring on 2027-03-01: this server does not take connectors at the new address yet; ask its admin where to add it again
+    retiring on 2027-03-01: ask this server's admin where to add it again
 Remove one: aether mcp revoke <id>
 `},
 		{"own URL at a retiring address, signing in elsewhere", protocol.ConnectorListResult{Connectors: []protocol.Connector{
@@ -159,7 +159,7 @@ Remove one: aether mcp revoke <id>
   No code: on the page that opens, sign in to the edge with GitHub, pick this server and select Allow
 Connected:
   con-2  Claude (claude.ai)  scopes read  added 2026-11-26  never used  at https://relay-old.example.test/mcp/abc
-    retiring: add it again at https://relay-new.example.test/mcp/abc, check it works, remove the old one in the app, then: cloudfield mcp revoke con-2
+    retiring: add it again at https://relay-new.example.test/mcp/abc, check it works, remove the old one in the app, then: aether mcp revoke con-2
 Reconnecting one at the server's own URL asks for a code: aether mcp code
 Remove one: aether mcp revoke <id>
 `},
@@ -191,9 +191,22 @@ func TestMCPOverviewWithoutACode(t *testing.T) {
 	if err := mcpOverview(&out, call, now); err == nil || err.Error() != refused.Error() {
 		t.Fatalf("error %v, want %v", err, refused)
 	}
+	unmarked := list
+	unmarked.Connectors = []protocol.Connector{list.Connectors[0]}
+	unmarked.Connectors[0].Notice = nil
+	var none strings.Builder
+	if err := mcpOverview(&none, func(method string, _, result any) error {
+		if method == protocol.MethodConnectorList {
+			*result.(*protocol.ConnectorListResult) = unmarked
+			return nil
+		}
+		return refused
+	}, now); err == nil || err.Error() != refused.Error() || none.Len() != 0 {
+		t.Fatalf("with no notice: error %v, output %q, want %v and no output", err, none.String(), refused)
+	}
 	if want := `Connected:
   con-1  Claude (claude.ai)  scopes read  added 2026-11-26  never used  at https://relay-old.example.test/mcp/abc
-    retiring on 2027-03-01: this server does not take connectors at the new address yet; ask its admin where to add it again
+    retiring on 2027-03-01: ask this server's admin where to add it again
 Remove one: aether mcp revoke <id>
 `; out.String() != want {
 		t.Errorf("output:\n%s\nwant:\n%s", out.String(), want)
