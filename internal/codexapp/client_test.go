@@ -152,7 +152,7 @@ func TestSendStartsATurnOrSteersTheRunningOne(t *testing.T) {
 			t.Fatalf("Send(%q): %v", text, err)
 		}
 	}
-	srv.EndTurn("main")
+	srv.EndTurn("main", "completed")
 	if err := c.Send(ctx, "next"); err != nil {
 		t.Fatal(err)
 	}
@@ -168,6 +168,42 @@ func TestSendStartsATurnOrSteersTheRunningOne(t *testing.T) {
 	}
 	if err := json.Unmarshal(steers[0], &steer); err != nil || steer.ExpectedTurnID != "turn-1" {
 		t.Fatalf("steer = %s, want expectedTurnId turn-1", steers[0])
+	}
+}
+
+// The last message is a completed turn's last agent message: a turn cut off
+// with Esc has none and reads as interrupted, and a list the app-server
+// refuses is an error. It is read from the thread asked for, whichever one
+// the terminal shows.
+func TestLastMessageNeedsACompletedTurn(t *testing.T) {
+	srv := codexmock.New()
+	c, _ := dial(t, srv, "")
+	srv.StartThread("main", false, "")
+	waitThread(t, c)
+	ctx := t.Context()
+	if got, _, err := c.LastMessage(ctx, "main"); err == nil {
+		t.Fatalf("last message before any turn = %q, want the app-server's refusal", got)
+	}
+	for _, tc := range []struct {
+		status, want string
+		interrupted  bool
+	}{{"interrupted", "", true}, {"completed", "done", false}} {
+		if err := c.Send(ctx, "go"); err != nil {
+			t.Fatal(err)
+		}
+		srv.EndTurn("main", tc.status, "looking", "done")
+		if got, interrupted, err := c.LastMessage(ctx, "main"); err != nil || got != tc.want || interrupted != tc.interrupted {
+			t.Fatalf("last message of a turn that %s = %q, interrupted %v, %v; want %q, %v", tc.status, got, interrupted, err, tc.want, tc.interrupted)
+		}
+	}
+	srv.StartThread("second", false, "")
+	for deadline := time.Now().Add(5 * time.Second); c.Thread() != "second"; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the client never followed the terminal's new thread")
+		}
+	}
+	if got, _, err := c.LastMessage(ctx, "main"); err != nil || got != "done" {
+		t.Fatalf("last message of the thread the terminal left = %q, %v; want done", got, err)
 	}
 }
 

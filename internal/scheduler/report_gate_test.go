@@ -157,11 +157,11 @@ func TestStandardTurnIsHeldOnceAndEndsWhenTheHookGoesQuiet(t *testing.T) {
 		}
 	}
 	start()
-	reminder, err := e.sched.HoldTurnEnd(t.Context(), run.ID)
+	reminder, err := e.sched.HoldTurnEnd(t.Context(), run.ID, "")
 	if err != nil || !strings.HasPrefix(reminder, reminderPrefix) {
 		t.Fatalf("HoldTurnEnd = %q, %v; want the reminder", reminder, err)
 	}
-	if again, err := e.sched.HoldTurnEnd(t.Context(), run.ID); err != nil || again != "" {
+	if again, err := e.sched.HoldTurnEnd(t.Context(), run.ID, ""); err != nil || again != "" {
 		t.Fatalf("second HoldTurnEnd of the turn = %q, %v; want none", again, err)
 	}
 	if got := e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention); got.Reason != turnEndedReason {
@@ -171,11 +171,11 @@ func TestStandardTurnIsHeldOnceAndEndsWhenTheHookGoesQuiet(t *testing.T) {
 	// Claude Code can start the held stop's continuation as a new turn; it
 	// is not held again before a stop is applied.
 	start()
-	if reminder, err := e.sched.HoldTurnEnd(t.Context(), run.ID); err != nil || reminder == "" {
+	if reminder, err := e.sched.HoldTurnEnd(t.Context(), run.ID, ""); err != nil || reminder == "" {
 		t.Fatalf("HoldTurnEnd of the next turn = %q, %v; want the reminder", reminder, err)
 	}
 	start()
-	if again, err := e.sched.HoldTurnEnd(t.Context(), run.ID); err != nil || again != "" {
+	if again, err := e.sched.HoldTurnEnd(t.Context(), run.ID, ""); err != nil || again != "" {
 		t.Fatalf("HoldTurnEnd of the held stop's continuation = %q, %v; want none", again, err)
 	}
 	if err := e.sched.ReportAgentState(t.Context(), run.ID, agentstatus.Report{State: agentstatus.Idle, Reason: agentstatus.ReasonIdle}); err != nil {
@@ -187,7 +187,7 @@ func TestStandardTurnIsHeldOnceAndEndsWhenTheHookGoesQuiet(t *testing.T) {
 	if _, err := e.db.RecordCoordStateReport(t.Context(), receipt); err != nil {
 		t.Fatal(err)
 	}
-	if reminder, err := e.sched.HoldTurnEnd(t.Context(), run.ID); err != nil || reminder != "" {
+	if reminder, err := e.sched.HoldTurnEnd(t.Context(), run.ID, ""); err != nil || reminder != "" {
 		t.Fatalf("HoldTurnEnd of a reported turn = %q, %v; want none", reminder, err)
 	}
 }
@@ -232,19 +232,39 @@ func TestEnhancedTurnQueuedBehindTheReminderIsReminded(t *testing.T) {
 	}
 }
 
-// A taskless Standard launch loads no idle-wake hook, so its reminder never
-// offers waiting.
-func TestStandardTasklessReminderOffersNoWaiting(t *testing.T) {
+// A Standard launch's reminder offers waiting only when the launch loaded an
+// idle wake, whatever its task, and a server restart keeps that. The fake
+// agent has none.
+func TestStandardReminderOffersWaitingOnlyWithAnIdleWake(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t, withServerBinary(fakeServerBinary(t, "#!/bin/sh\necho aether\n")))
-	withCoordination(t, e)
-	run, _ := e.launchFake(t, "")
-	if err := e.sched.ReportAgentState(t.Context(), run.ID, agentstatus.Report{State: agentstatus.Working, TurnStart: true}); err != nil {
-		t.Fatal(err)
-	}
-	reminder, err := e.sched.HoldTurnEnd(t.Context(), run.ID)
-	if err != nil || reminder != reminderPrefix+" (answered, needs-input, blocked, success or failure) before ending the turn." {
-		t.Fatalf("HoldTurnEnd = %q, %v; want a reminder without waiting", reminder, err)
+	for _, tc := range []struct{ agent, task, outcomes string }{
+		{"claude", "", "answered, waiting, needs-input, blocked, success or failure"},
+		{"fake", "fix the bug", "answered, needs-input, blocked, success or failure"},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			t.Parallel()
+			e := newTestEnv(t, withServerBinary(fakeServerBinary(t, "#!/bin/sh\necho aether\n")))
+			coord, binDir := withCoordination(t, e)
+			run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, tc.task, tc.agent, domain.LaunchTUI)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = e.sched.Close(); err != nil {
+				t.Fatal(err)
+			}
+			s2 := e.newScheduler(t, e.rt, newFakePTY())
+			s2.UseCoordination(coord, binDir)
+			if err = s2.recoverRuns(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if err = s2.ReportAgentState(t.Context(), run.ID, agentstatus.Report{State: agentstatus.Working, TurnStart: true}); err != nil {
+				t.Fatal(err)
+			}
+			reminder, err := s2.HoldTurnEnd(t.Context(), run.ID, "")
+			if err != nil || reminder != reminderPrefix+" ("+tc.outcomes+") before ending the turn." {
+				t.Fatalf("HoldTurnEnd = %q, %v; want the outcomes %s", reminder, err, tc.outcomes)
+			}
+		})
 	}
 }
 

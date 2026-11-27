@@ -39,6 +39,7 @@ async function readBack(workspaceID: string, floor: number): Promise<void> {
       const page = await api.workspaceTimeline({
         workspace_id: workspaceID,
         types: laneEventTypes,
+        no_rereads: true,
         newest: true,
         before_seq: history.olderSeq,
         limit: pageSize,
@@ -47,11 +48,19 @@ async function readBack(workspaceID: string, floor: number): Promise<void> {
       if (!latest || !owns() || !same()) return
       // Live events past the budget dropped the oldest held events during this read, so the page no longer meets them.
       if (latest.olderSeq !== history.olderSeq) continue
-      const oldest = page.events[0] ? Date.parse(page.events[0].time) : history.floor
+      const room = historyBudget - latest.events.length
+      // Live events filled the budget during the read; only the news that nothing older exists still applies.
+      if (room <= 0 && (page.more || page.events.length > 0)) continue
+      // A smaller limit would shrink the server's scan with it, so the page is a full one and only its newest that fit are kept.
+      const events = page.events.slice(-room)
+      const cut = events.length < page.events.length
+      // A server that filters rereads out says how far back it read; an older one's first event is that far.
+      const reached = cut ? events[0].time : (page.older_time ?? page.events[0]?.time)
+      const oldest = reached ? Date.parse(reached) : history.floor
       setLaneHistory(
         workspaceID,
-        { olderSeq: page.more ? page.older_seq : undefined, floor: page.more ? Math.min(history.floor, oldest) : -Infinity },
-        page.events,
+        { olderSeq: cut ? events[0].seq : page.more ? page.older_seq : undefined, floor: cut || page.more ? Math.min(history.floor, oldest) : -Infinity },
+        events,
       )
     }
     setLaneHistory(workspaceID, { loading: false })

@@ -23,6 +23,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/agentstatus"
 	"github.com/3xDevOps/cloudfield/internal/control"
 	"github.com/3xDevOps/cloudfield/internal/coordtransport"
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/disk"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
@@ -476,7 +477,7 @@ type supervised struct {
 	// lifecycleMu serializes close, relaunch, expiry and steering admission for
 	// this container. It is separate from Scheduler.mu: runtime and git calls
 	// must not run under the scheduler lock.
-	lifecycleMu sync.Mutex
+	lifecycleMu ctxlock.Mutex
 	// runUser is the resolved "uid:gid" for the container and ownership pass;
 	// empty means root (no ownership pass).
 	runUser string
@@ -520,10 +521,13 @@ type supervised struct {
 	spendMu   sync.Mutex
 	uncharged events.RunCostPayload
 	// appServer marks a Standard run whose terminal is attached to the
-	// agent's app-server (appServerDriver). serverTurn marks a turn mail
-	// started there, which does not answer a shown question.
+	// agent's app-server (appServerDriver). serverTurn marks a turn mail or
+	// a report reminder started there, which does not answer a shown question.
 	appServer  bool
 	serverTurn bool
+	// idleWake marks a Standard run whose terminal loads an idle wake
+	// (harness.NativeLaunch.IdleWake).
+	idleWake bool
 	// switching is the mode a mode switch is moving the run to, empty when
 	// none is in flight. The switch holds lifecycleMu throughout.
 	switching    domain.LaunchMode
@@ -555,9 +559,11 @@ type supervised struct {
 	turnStartedAt time.Time
 	// reportAsked is the turnStartedAt of the last turn whose end was held
 	// for a missing report (HoldTurnEnd), and stopHeld marks a Standard run
-	// whose held stop no idle report has followed yet.
+	// whose held stop no idle report has followed yet. heldMessage is the
+	// agent's last message at that stop, until a turn starts.
 	reportAsked time.Time
 	stopHeld    bool
+	heldMessage string
 	// relaunchedAt is when the last relaunch reopened the run; a report
 	// finalized before it belongs to the launch that relaunch ended.
 	relaunchedAt time.Time
@@ -606,15 +612,25 @@ type supervised struct {
 	sleepGen    uint64
 	waking      chan struct{}
 	wakeErr     error
+	// abortSleep, set while a sleep saves or pauses a VM that still
+	// answers, makes it give up if its guest has yet to be paused.
+	// wakeWaits is set once a wake waits for the sleep, which a sleep that
+	// has yet to set abortSleep reads instead.
+	abortSleep context.CancelFunc
+	wakeWaits  bool
 	// asleepSaved is set while a sleeping VM holds its saved memory, which
 	// a wake restores with every process. saveFailedAt is the last failed
 	// save, which the sleep sweep waits a full sleep delay after.
 	// memorySaving counts the saves running that sleeping does not mark: one
 	// the memory guard or an admission started, also once heldSave stopped
 	// waiting for it, and the save again after a failed wake.
-	asleepSaved  bool
-	saveFailedAt time.Time
-	memorySaving int
+	asleepSaved bool
+	// asleepResident is set while a sleeping VM is paused in the host's
+	// memory, where the sleep sweep left it, until the memory guard saves
+	// it or it stops.
+	asleepResident bool
+	saveFailedAt   time.Time
+	memorySaving   int
 	// frozenNotedAt is when the timeline last said the memory brake froze
 	// the session's VM. frozenSave is set while the memory guard saves the
 	// VM frozen, and admitting while a wake holding the lifecycle lock

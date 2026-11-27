@@ -31,7 +31,7 @@ func inbox(ctx context.Context, cfg Config, args []string) (int, error) {
 		*ack = string(last)
 	}
 	var out protocol.CoordInboxResult
-	if err := coordtransport.Call(ctx, cfg.Socket, protocol.MethodCoordInbox, protocol.CoordInboxParams{AckToken: *ack, WaitSeconds: *wait}, &out); err != nil {
+	if err := coordtransport.Call(ctx, cfg.Socket, protocol.MethodCoordInbox, protocol.CoordInboxParams{AckToken: *ack, WaitSeconds: *wait, ReportBodies: true}, &out); err != nil {
 		return fail(cfg.Out, errorCode(err), err.Error())
 	}
 	if out.Messages == nil {

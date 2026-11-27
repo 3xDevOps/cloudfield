@@ -124,6 +124,8 @@ type CoordReport struct {
 	FinalizedAt       *time.Time
 	PublishedAt       *time.Time
 	SupersededAt      *time.Time
+	// Body is the report's full result beside its summary; empty for none.
+	Body string
 	// OutcomeNote is not stored: FinalizeCoordReport sets it to the outcome
 	// note the report wrote.
 	OutcomeNote OutcomeNote
@@ -216,6 +218,7 @@ type MessageStore interface {
 	// RetireRunMessages retires a released run's unread inbound mail.
 	RetireRunMessages(ctx context.Context, to domain.RunID) error
 	CoordReportedSince(ctx context.Context, run domain.RunID, since time.Time) (bool, error)
+	CoordStateReportedSince(ctx context.Context, run domain.RunID, since time.Time) (string, error)
 	RetireProvisionalReports(ctx context.Context, from, to domain.RunID, cutoff time.Time) error
 	ReserveCoordReport(ctx context.Context, report *CoordReport) (bool, error)
 	FinalizeCoordReport(ctx context.Context, report *CoordReport) (bool, error)
@@ -242,7 +245,7 @@ const runMessageCols = `id, workspace_id, from_run, to_run, body, kind, correlat
 
 const unreadMessage = `acked_at IS NULL AND retired_at IS NULL`
 
-const coordReportCols = `id, workspace_id, run_id, outcome, summary, next_action, evidence_refs, input_evidence_refs, idempotency_key, state, created_at, finalized_at, published_at, superseded_at`
+const coordReportCols = `id, workspace_id, run_id, outcome, summary, next_action, evidence_refs, input_evidence_refs, idempotency_key, state, created_at, finalized_at, published_at, superseded_at, body`
 
 func (d *DB) AppendRunMessage(ctx context.Context, m *RunMessage, maxUnacked int) error {
 	_, err := d.AppendRunMessageCreated(ctx, m, maxUnacked)
@@ -544,7 +547,11 @@ func (d *DB) DeliverRunMessages(ctx context.Context, to domain.RunID, ackToken s
 		}
 		// A batch an earlier server stamped can exceed the bound; its
 		// tail goes back to wait for a later batch, unacknowledged.
-		if fit := batchFit(msgs); fit < len(msgs) {
+		fit, ferr := batchFit(ctx, tx, msgs)
+		if ferr != nil {
+			return nil, "", false, ferr
+		}
+		if fit < len(msgs) {
 			args := make([]any, 0, len(msgs)-fit)
 			for _, m := range msgs[fit:] {
 				args = append(args, m.ID)
@@ -568,7 +575,11 @@ func (d *DB) DeliverRunMessages(ctx context.Context, to domain.RunID, ackToken s
 	if len(msgs) == 0 {
 		return nil, "", acked, commitBatch(tx)
 	}
-	msgs = msgs[:batchFit(msgs)]
+	fit, err := batchFit(ctx, tx, msgs)
+	if err != nil {
+		return nil, "", false, err
+	}
+	msgs = msgs[:fit]
 	token, err := newID("ack")
 	if err != nil {
 		return nil, "", false, err
@@ -612,17 +623,31 @@ func (d *DB) RetireRunMessages(ctx context.Context, to domain.RunID) error {
 const RunMessageBatchBytes = 16 << 10
 
 // batchFit is how many of msgs, oldest first and at least one, fit in
-// RunMessageBatchBytes. 120 bytes covers each message's field names, kind
-// and timestamp.
-func batchFit(msgs []*RunMessage) int {
-	size := 0
+// RunMessageBatchBytes. 256 bytes cover the read's own fields and 120 each
+// message's field names, kind and timestamp; a report's message is printed
+// with its outcome and its body, which count with 64 more.
+func batchFit(ctx context.Context, tx *sql.Tx, msgs []*RunMessage) (int, error) {
+	size := 256
 	for i, m := range msgs {
 		body, _ := json.Marshal(m.Body)
-		if size += len(body) + len(m.ID) + len(m.FromRun) + len(m.CorrelationID) + 120; i > 0 && size > RunMessageBatchBytes {
-			return i
+		size += len(body) + len(m.ID) + len(m.FromRun) + len(m.CorrelationID) + 120
+		if m.Kind == RunMessageKindMessage && m.CorrelationID != "" {
+			var reportBody string
+			err := tx.QueryRowContext(ctx, `SELECT body FROM coord_reports WHERE id = ? AND run_id = ?`, m.CorrelationID, m.FromRun).Scan(&reportBody)
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+			case err != nil:
+				return 0, fmt.Errorf("store: size a report's body for its message batch: %w", err)
+			default:
+				printed, _ := json.Marshal(reportBody)
+				size += len(printed) + 64
+			}
+		}
+		if i > 0 && size > RunMessageBatchBytes {
+			return i, nil
 		}
 	}
-	return len(msgs)
+	return len(msgs), nil
 }
 
 func outstandingToken(ctx context.Context, tx *sql.Tx, to domain.RunID) (string, error) {
@@ -697,6 +722,7 @@ func (d *DB) AppendCoordReport(ctx context.Context, report *CoordReport) error {
 
 const (
 	maxCoordReportSummaryBytes     = 4 << 10
+	maxCoordReportBodyBytes        = 12 << 10
 	maxCoordReportNextActionBytes  = 512
 	maxCoordReportEvidenceRefs     = 32
 	maxCoordReportEvidenceRefBytes = 512
@@ -713,6 +739,9 @@ func validateCoordReport(report *CoordReport) error {
 	if len([]byte(report.Summary)) > maxCoordReportSummaryBytes ||
 		len([]byte(report.NextAction)) > maxCoordReportNextActionBytes {
 		return errors.New("store: coord report: summary or next action is too long")
+	}
+	if len([]byte(report.Body)) > maxCoordReportBodyBytes {
+		return errors.New("store: coord report: body is too long")
 	}
 	if err := validateCoordReportRefs(report.EvidenceRefs); err != nil {
 		return err
@@ -787,14 +816,14 @@ func (d *DB) ReserveCoordReport(ctx context.Context, report *CoordReport) (bool,
 		return false, fmt.Errorf("store: reserve coord report: supersede previous: %w", err)
 	}
 	res, err := tx.ExecContext(ctx, `INSERT INTO coord_reports (`+coordReportCols+`)
-		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?
 		WHERE NOT EXISTS (
 			SELECT 1 FROM coord_reports
 			WHERE run_id = ? AND outcome IN ('success', 'failure') AND superseded_at IS NULL)
 		ON CONFLICT (run_id, idempotency_key) DO NOTHING`,
 		id, report.WorkspaceID, report.RunID, report.Outcome, report.Summary,
 		report.NextAction, refs, inputRefsJSON, report.IdempotencyKey, CoordReportPending, createdAt,
-		report.RunID)
+		report.Body, report.RunID)
 	if err != nil {
 		return false, fmt.Errorf("store: reserve coord report: %w", mapConstraint(err, ErrNotFound))
 	}
@@ -815,7 +844,7 @@ func (d *DB) ReserveCoordReport(ctx context.Context, report *CoordReport) (bool,
 		if prior.SupersededAt != nil {
 			return false, fmt.Errorf("%w: session %s, idempotency key %q", ErrCoordReportSuperseded, report.RunID, report.IdempotencyKey)
 		}
-		if prior.Outcome != report.Outcome || prior.Summary != report.Summary ||
+		if prior.Outcome != report.Outcome || prior.Summary != report.Summary || prior.Body != report.Body ||
 			prior.NextAction != report.NextAction ||
 			!equalStringSlices(prior.InputEvidenceRefs, report.InputEvidenceRefs) {
 			return false, fmt.Errorf("%w: session %s", ErrCoordReportIdempotencyConflict, report.RunID)
@@ -1174,7 +1203,7 @@ func scanCoordReport(row interface{ Scan(...any) error }) (*CoordReport, error) 
 	)
 	if err := row.Scan(&report.ID, &report.WorkspaceID, &report.RunID, &report.Outcome,
 		&report.Summary, &report.NextAction, &refs, &inputRefs, &report.IdempotencyKey, &state,
-		&createdAt, &finalizedAt, &publishedAt, &supersededAt); err != nil {
+		&createdAt, &finalizedAt, &publishedAt, &supersededAt, &report.Body); err != nil {
 		return nil, err
 	}
 	if refs == "" {

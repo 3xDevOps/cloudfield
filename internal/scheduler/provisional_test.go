@@ -4,12 +4,15 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/acphost/acpmock"
+	"github.com/3xDevOps/cloudfield/internal/agentstatus"
+	"github.com/3xDevOps/cloudfield/internal/coordtransport"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/store"
 )
@@ -20,12 +23,12 @@ func shortProvisionalGrace(t *testing.T) {
 	t.Cleanup(func() { provisionalGrace = grace })
 }
 
-func launchChildRun(t *testing.T, e *testEnv, parent *domain.Run, harness string, mode domain.LaunchMode, key string) *domain.Run {
+func launchChildRun(t *testing.T, e *testEnv, parent *domain.Run, harness string, mode domain.LaunchMode) *domain.Run {
 	t.Helper()
 	reserved, _, err := e.db.ReserveChild(t.Context(), &domain.ChildReservation{
 		ParentRunID: parent.ID, RootRunID: parent.ID, TreeKey: string(parent.ID), WorkspaceID: e.ws.ID,
 		OwnerID: e.member.ID, AccountID: e.member.ID, Harness: harness, Mode: mode,
-		Purpose: "say pong", Task: "say pong", IdempotencyKey: key, RequestHash: "h",
+		Purpose: "say pong", Task: "say pong", IdempotencyKey: "k", RequestHash: "h",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +59,7 @@ func TestEnhancedChildWokenWithinTheGraceForwardsOnlyItsLastTurn(t *testing.T) {
 			}()
 		})
 	}
-	run := launchChildRun(t, e, parent, "fake", domain.LaunchACP, "k")
+	run := launchChildRun(t, e, parent, "fake", domain.LaunchACP)
 	waitItems(t, e.sched, run.ID, "both turns", turnEnded("end_turn", 2))
 	waitFor(t, "a provisional report", func() bool { return len(c.provisionalReports()) > 0 })
 	e.sched.mu.Lock()
@@ -72,7 +75,7 @@ func TestEnhancedChildRunForwardsItsLastMessageToItsParent(t *testing.T) {
 	e, _ := newACPEnv(t)
 	c, _ := withCoordination(t, e)
 	parent := e.launchACP(t, "parent")
-	child := launchChildRun(t, e, parent, "fake", domain.LaunchACP, "k")
+	child := launchChildRun(t, e, parent, "fake", domain.LaunchACP)
 	waitFor(t, "the child's last message", func() bool {
 		for _, call := range c.provisionalReports() {
 			if call.run == child.ID && strings.Contains(call.message, "pong") {
@@ -81,6 +84,86 @@ func TestEnhancedChildRunForwardsItsLastMessageToItsParent(t *testing.T) {
 		}
 		return false
 	})
+	e.waitStoreStatus(t, child.ID, domain.RunNeedsAttention)
+	time.Sleep(provisionalGrace / 2)
+	if calls := c.provisionalReports(); len(calls) != 1 {
+		t.Fatalf("provisional reports %+v, want the turn forwarded once", calls)
+	}
+}
+
+// A Standard subsession's container is marked as one, and its turn end is
+// forwarded once, with the agent's last message: that of the stop held for a
+// report when one was held. A session with no parent forwards nothing, and
+// neither does a session's end.
+func TestStandardChildRunForwardsItsTurnEndToItsParent(t *testing.T) {
+	shortProvisionalGrace(t)
+	e := newTestEnv(t, withServerBinary(fakeServerBinary(t, "#!/bin/sh\necho aether\n")))
+	c, _ := withCoordination(t, e)
+	parent, parentContainer := e.launchFake(t, "parent")
+	child := launchChildRun(t, e, parent, "fake", domain.LaunchTUI)
+	if own, sub := parentContainer.spec.Env[coordtransport.SubsessionEnv], e.rt.byName(string(child.ID)).spec.Env[coordtransport.SubsessionEnv]; own != "" || sub != "1" {
+		t.Fatalf("%s is %q in the parent and %q in the subsession, want unset and 1", coordtransport.SubsessionEnv, own, sub)
+	}
+	report := func(run domain.RunID, report agentstatus.Report) {
+		t.Helper()
+		if err := e.sched.ReportAgentState(t.Context(), run, report); err != nil {
+			t.Fatal(err)
+		}
+	}
+	working := agentstatus.Report{State: agentstatus.Working, TurnStart: true}
+	idle := func(message string) agentstatus.Report {
+		return agentstatus.Report{State: agentstatus.Idle, Reason: agentstatus.ReasonIdle, LastMessage: message}
+	}
+	sessionEnd := agentstatus.Report{State: agentstatus.Idle, Reason: agentstatus.ReasonIdle, SessionEnd: true}
+	forwarded := func() []string {
+		var messages []string
+		for _, call := range c.provisionalReports() {
+			if call.run != child.ID {
+				t.Fatalf("provisional report from %s, want only the subsession %s", call.run, child.ID)
+			}
+			messages = append(messages, call.message)
+		}
+		return messages
+	}
+
+	hold := func(message string) {
+		t.Helper()
+		if reminder, err := e.sched.HoldTurnEnd(t.Context(), child.ID, message); err != nil || reminder == "" {
+			t.Fatalf("HoldTurnEnd = %q, %v; want the reminder", reminder, err)
+		}
+	}
+
+	report(parent.ID, working)
+	report(parent.ID, idle("the parent's own"))
+	report(child.ID, working)
+	hold("pong")
+	report(child.ID, idle("I have nothing to report"))
+	// pi and omp repeat the idle report with every input update.
+	report(child.ID, idle(""))
+	waitFor(t, "the held stop's message", func() bool { return len(forwarded()) == 1 })
+
+	// A prompt typed into a held stop's continuation, or after Esc ended it
+	// with no report, starts a turn that forwards its own message.
+	report(child.ID, working)
+	hold("cut off")
+	report(child.ID, working)
+	report(child.ID, idle("ping"))
+	waitFor(t, "the message of the turn after a held stop", func() bool { return len(forwarded()) == 2 })
+
+	// A turn that starts within the grace keeps the one before it back.
+	report(child.ID, working)
+	report(child.ID, idle("kept back"))
+	report(child.ID, working)
+	report(child.ID, idle("pang"))
+	waitFor(t, "the last turn's message", func() bool { return len(forwarded()) == 3 })
+
+	// Esc sends no stop, so the session's end after it is no turn end.
+	report(child.ID, working)
+	report(child.ID, sessionEnd)
+	time.Sleep(provisionalGrace * 3 / 2)
+	if got := forwarded(); !slices.Equal(got, []string{"pong", "ping", "pang"}) {
+		t.Fatalf("forwarded %q, want each turn's message once", got)
+	}
 }
 
 func TestEnhancedChildRunForwardsATurnItsKeeperEndedDuringARestart(t *testing.T) {
@@ -88,7 +171,7 @@ func TestEnhancedChildRunForwardsATurnItsKeeperEndedDuringARestart(t *testing.T)
 	e, _ := newACPEnv(t)
 	c, binDir := withCoordination(t, e)
 	parent := e.launchACP(t, "parent")
-	child := launchChildRun(t, e, parent, "fake", domain.LaunchACP, "k")
+	child := launchChildRun(t, e, parent, "fake", domain.LaunchACP)
 	waitItems(t, e.sched, child.ID, "the child's first turn", turnEnded("end_turn", 1))
 	release := filepath.Join(t.TempDir(), "release")
 	prompt := acpmock.PromptRunPrefix + "while [ ! -e " + release + " ]; do sleep 0.02; done; echo replayed"

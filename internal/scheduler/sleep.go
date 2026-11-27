@@ -41,11 +41,13 @@ const (
 var ErrClosedAsleep = fmt.Errorf("%w: the session is closed and its container is asleep; reopen it", ErrInvalidTransition)
 
 // SleepState is a live run's idle sleep: when its container was stopped or
-// its VM saved, whether the saved VM keeps every process, whether a wake is
-// starting it, and the last wake's failure.
+// its VM paused or saved, whether the VM keeps every process, whether it is
+// only paused in the host's memory, whether a wake is starting it, and the
+// last wake's failure.
 type SleepState struct {
 	AsleepSince *time.Time
 	Saved       bool
+	InMemory    bool
 	Waking      bool
 	WakeError   string
 }
@@ -60,7 +62,7 @@ func (s *Scheduler) Sleep(run domain.RunID) SleepState {
 		return SleepState{}
 	}
 	since := entry.asleepSince
-	state := SleepState{AsleepSince: &since, Saved: entry.asleepSaved, Waking: entry.waking != nil}
+	state := SleepState{AsleepSince: &since, Saved: entry.asleepSaved || entry.asleepResident, InMemory: entry.asleepResident, Waking: entry.waking != nil}
 	if entry.wakeErr != nil {
 		state.WakeError = entry.wakeErr.Error()
 	}
@@ -183,6 +185,7 @@ func (s *Scheduler) holdAwake(ctx context.Context, run domain.RunID) (release fu
 // wake starts entry's stopped container, once however many callers ask at
 // the same time: the first runs the wake and the others wait for its result.
 func (s *Scheduler) wake(ctx context.Context, entry *supervised) error {
+	timed := runtime.WithSteps(s.superCtx)
 	for {
 		s.mu.Lock()
 		switch {
@@ -191,6 +194,11 @@ func (s *Scheduler) wake(ctx context.Context, entry *supervised) error {
 			return fmt.Errorf("%w: the session ended while it was asleep", ErrNoLiveEnvironment)
 		case entry.sleeping:
 			done := entry.sleepDone
+			entry.wakeWaits = true
+			// A shutdown lets a save finish, so the VM survives it.
+			if entry.abortSleep != nil && s.superCtx.Err() == nil {
+				entry.abortSleep()
+			}
 			s.mu.Unlock()
 			select {
 			case <-done:
@@ -232,7 +240,8 @@ func (s *Scheduler) wake(ctx context.Context, entry *supervised) error {
 			saved, _ := saver.SavedMemory(cid)
 			limit += time.Duration(saved/restoreRate) * time.Second
 		}
-		wakeCtx, cancel := context.WithTimeout(s.superCtx, limit)
+		wakeCtx, cancel := context.WithTimeout(timed, limit)
+		runtime.Step(wakeCtx, "wait_for_save")
 		how, err := s.wakeLive(wakeCtx, entry)
 		cancel()
 		if err != nil {
@@ -257,6 +266,7 @@ func (s *Scheduler) wake(ctx context.Context, entry *supervised) error {
 			slog.Warn("scheduler: wake a sleeping session", "run", entry.runID, "error", err)
 			return err
 		}
+		runtime.LogSteps(wakeCtx, "scheduler: wake steps", "run", entry.runID)
 		s.noteWake(ctx, entry.runID, how)
 		return nil
 	}
@@ -286,7 +296,9 @@ func (s *Scheduler) noteWake(ctx context.Context, run domain.RunID, how woke) {
 // agent again, as Relaunch reopens a closed one. A failure puts the run back
 // to sleep, with nothing half started.
 func (s *Scheduler) wakeLive(ctx context.Context, entry *supervised) (woke, error) {
-	entry.lifecycleMu.Lock()
+	if err := entry.lockLifecycle(ctx); err != nil {
+		return woke{}, err
+	}
 	defer entry.lifecycleMu.Unlock()
 	s.mu.Lock()
 	if s.runs[entry.runID] != entry || entry.asleepSince.IsZero() || entry.finalizing || entry.killRequested || entry.retained || entry.destroyPending {
@@ -294,10 +306,20 @@ func (s *Scheduler) wakeLive(ctx context.Context, entry *supervised) (woke, erro
 		return woke{}, fmt.Errorf("%w: the session is ending", ErrNoLiveEnvironment)
 	}
 	cid := entry.containerID
+	resident := entry.asleepResident
 	entry.admitting = true
 	s.mu.Unlock()
 
-	release, err := s.reserveWake(ctx, cid)
+	// A VM paused in memory holds what it wakes with, unless it stopped
+	// meanwhile: that one starts from its disks and must be admitted.
+	release, err := func() {}, error(nil)
+	if resident {
+		info, inspectErr := s.cfg.Runtime.Inspect(ctx, cid)
+		resident = inspectErr == nil && !info.Exited
+	}
+	if !resident {
+		release, err = s.reserveWake(ctx, cid)
+	}
 	if err == nil {
 		defer release()
 		defer s.needGuest(cid)()
@@ -308,6 +330,7 @@ func (s *Scheduler) wakeLive(ctx context.Context, entry *supervised) (woke, erro
 	if err != nil {
 		return woke{}, err
 	}
+	runtime.Step(ctx, "admission")
 	how, err := s.startAsleep(ctx, entry)
 	if err != nil {
 		if errors.Is(err, runtime.ErrNotFound) {
@@ -319,6 +342,7 @@ func (s *Scheduler) wakeLive(ctx context.Context, entry *supervised) (woke, erro
 	}
 	up, stop := s.untilExit(ctx, cid)
 	err = s.reattach(up, entry, how.restored)
+	runtime.Step(ctx, "reattach")
 	exited := context.Cause(up)
 	stop()
 	if err != nil {
@@ -397,7 +421,7 @@ func (s *Scheduler) startAsleep(ctx context.Context, entry *supervised) (woke, e
 	if err := s.cfg.Runtime.Start(ctx, cid); err != nil {
 		return woke{}, err
 	}
-	s.superviseWoken(entry)
+	s.superviseWoken(entry, false)
 	return how, nil
 }
 
@@ -430,7 +454,7 @@ func (s *Scheduler) publishSleep(entry *supervised) {
 	s.publish(context.Background(), events.Event{
 		WorkspaceID: entry.workspaceID,
 		RunID:       entry.runID,
-		Payload:     events.RunSleepPayload{AsleepSince: state.AsleepSince, AsleepSaved: state.Saved, Waking: state.Waking, WakeError: state.WakeError},
+		Payload:     events.RunSleepPayload{AsleepSince: state.AsleepSince, AsleepSaved: state.Saved, AsleepInMemory: state.InMemory, Waking: state.Waking, WakeError: state.WakeError},
 	})
 }
 
@@ -546,6 +570,7 @@ func (s *Scheduler) sessionFacts(run domain.RunID, enhanced, saving bool, f idle
 // every closed one retained that long, each in its own goroutine: Enhanced
 // runs in containers, and Standard and Enhanced runs in session VMs.
 func (s *Scheduler) sleepIdle(ctx context.Context) {
+	s.saveLongPaused(ctx)
 	if s.cfg.RunSleepAfter <= 0 && s.cfg.VMSleepAfter <= 0 {
 		return
 	}
@@ -755,7 +780,12 @@ func (s *Scheduler) sleepLive(ctx context.Context, entry *supervised) error {
 		return err
 	}
 	if saving {
-		return s.saveLive(ctx, entry, saver)
+		// The guard could not take back the memory of a paused VM that does
+		// not fit on the data disk, so that one is saved now, and disk
+		// reclaim makes its room.
+		memory := s.vmMemoryUse(ctx)[cid]
+		park := memory == 0 || s.saveFits(memoryCandidate{e: entry, memory: memory}, 0, false)
+		return s.saveLive(ctx, entry, saver, park)
 	}
 	undo := func(cause error) error {
 		undoCtx := context.WithoutCancel(ctx)
@@ -846,7 +876,7 @@ func (s *Scheduler) markAsleep(entry *supervised) error {
 	defer s.mu.Unlock()
 	entry.asleepSince = time.Now().UTC()
 	entry.wakeErr = nil
-	entry.asleepSaved = false
+	entry.asleepSaved, entry.asleepResident = false, false
 	entry.memorySaved = 0
 	if err := s.writeSidecar(entry.sidecar()); err != nil {
 		entry.asleepSince = time.Time{}
@@ -893,7 +923,7 @@ func (s *Scheduler) stopSleeping(ctx context.Context, entry *supervised) error {
 // sleeping run paused.
 func (s *Scheduler) endSleep(entry *supervised, asleep bool) {
 	s.mu.Lock()
-	entry.sleeping = false
+	entry.sleeping, entry.abortSleep, entry.wakeWaits = false, nil, false
 	if asleep {
 		entry.paused = true
 	}
@@ -916,6 +946,11 @@ func (s *Scheduler) recoverAsleep(ctx context.Context, r *domain.Run, sc sidecar
 	if errors.Is(err, runtime.ErrNotFound) {
 		return false
 	}
+	// A VM that stopped while paused in memory, as with its host, sleeps
+	// on its disks.
+	if err != nil || info.Exited {
+		sc.AsleepResident = false
+	}
 	// Installed without waiting on or attaching to the container.
 	var entry *supervised
 	s.mu.Lock()
@@ -930,8 +965,8 @@ func (s *Scheduler) recoverAsleep(ctx context.Context, r *domain.Run, sc sidecar
 	// restart interrupted: this process holds none of its streams. A VM the
 	// memory guard marked to wake, one it was saving or the brake left
 	// frozen, is the guard's to save frozen or wake: a save here would let
-	// it run first.
-	if entry != nil && err == nil && !info.Exited && sc.MemorySaved == 0 {
+	// it run first. One the sleep sweep paused in memory stays there.
+	if entry != nil && err == nil && !info.Exited && sc.MemorySaved == 0 && !sc.AsleepResident {
 		s.stopRecoveredAsleep(ctx, entry)
 	}
 	return true

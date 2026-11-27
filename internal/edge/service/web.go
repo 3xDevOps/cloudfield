@@ -84,8 +84,35 @@ func (s *Service) pageHeaders(csp string, next http.Handler) http.Handler {
 		if hsts {
 			h.Set("Strict-Transport-Security", "max-age=63072000")
 		}
+		if b := s.banner(r); b != nil {
+			w = bannerWriter{w, b}
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// banner is what a page of a retiring pair says: the replacement's origin
+// of the same kind as the page's host, and the date when set.
+type banner struct {
+	Address, Date string
+	SignIn        bool
+}
+
+func (s *Service) banner(r *http.Request) *banner {
+	p := s.pair(r)
+	if p.retiring == nil {
+		return nil
+	}
+	if edgeproto.RequestHost(r) == p.relayHost {
+		return &banner{Address: p.retiring.relay, Date: p.retiring.date}
+	}
+	return &banner{Address: p.retiring.signin, Date: p.retiring.date, SignIn: true}
+}
+
+// bannerWriter carries a page's banner from pageHeaders to render.
+type bannerWriter struct {
+	http.ResponseWriter
+	banner *banner
 }
 
 func setCookie(w http.ResponseWriter, name, value string, maxAge int) {
@@ -202,11 +229,12 @@ func errorStatus(err error) int {
 
 // view is what every page template receives.
 type view struct {
-	Title   string
-	Account *edgeproto.AccountInfo
-	CSRF    string
-	Error   string
-	Data    any
+	Title    string
+	Account  *edgeproto.AccountInfo
+	CSRF     string
+	Error    string
+	Data     any
+	Retiring *banner
 }
 
 func (s *Service) view(v *visitor, title string, data any) view {
@@ -218,6 +246,9 @@ func (s *Service) view(v *visitor, title string, data any) view {
 }
 
 func (s *Service) render(w http.ResponseWriter, status int, name string, data view) {
+	if b, ok := w.(bannerWriter); ok {
+		data.Retiring = b.banner
+	}
 	var buf bytes.Buffer
 	if err := s.pages.ExecuteTemplate(&buf, name, data); err != nil {
 		slog.Error("edge: render page", "page", name, "error", err)

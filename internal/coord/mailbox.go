@@ -495,6 +495,14 @@ func (s *Service) Inbox(ctx context.Context, run domain.RunID, p protocol.CoordI
 			}
 			if rerr == nil && report.RunID == m.FromRun {
 				item.Kind, item.Outcome = protocol.CoordMessageKindReport, string(report.Outcome)
+				// A caller from before report bodies prints body alone.
+				switch {
+				case report.Body == "":
+				case p.ReportBodies:
+					item.ReportBody = report.Body
+				default:
+					item.Body += "\n\n" + report.Body
+				}
 			}
 		}
 		out = append(out, item)
@@ -566,6 +574,14 @@ func (s *Service) CoordReport(ctx context.Context, run domain.RunID, p protocol.
 	if summary == "" {
 		return protocol.CoordReportResult{}, invalidParams(method, "summary is required")
 	}
+	final := p.Outcome == protocol.CoordOutcomeSuccess || p.Outcome == protocol.CoordOutcomeFailure || p.Outcome == protocol.CoordOutcomeBlocked
+	if p.Body != "" && !final {
+		return protocol.CoordReportResult{}, invalidParams(method, "body is only valid with the \"success\", \"failure\" or \"blocked\" outcome")
+	}
+	if err := protocol.ValidateReportBody(summary, p.Body); err != nil {
+		return protocol.CoordReportResult{}, invalidParams(method, err.Error())
+	}
+	body := strings.ReplaceAll(p.Body, "\r\n", "\n")
 	specs, problem := parseUntil(p.Outcome, p.Until)
 	if problem != "" {
 		return protocol.CoordReportResult{}, invalidParams(method, problem)
@@ -633,7 +649,7 @@ func (s *Service) CoordReport(ctx context.Context, run domain.RunID, p protocol.
 	}
 	report := &store.CoordReport{
 		WorkspaceID: self.WorkspaceID, RunID: run, Outcome: store.CoordOutcome(p.Outcome),
-		Summary: summary, NextAction: nextAction, EvidenceRefs: refs, IdempotencyKey: p.IdempotencyKey,
+		Summary: summary, NextAction: nextAction, EvidenceRefs: refs, IdempotencyKey: p.IdempotencyKey, Body: body,
 	}
 	supersededMessage := fmt.Sprintf("%s: the report under idempotency_key %q was superseded; report again with a new idempotency key", method, p.IdempotencyKey)
 	if _, err := s.cfg.Mail.GetCoordStateReport(ctx, run, p.IdempotencyKey); err == nil {
@@ -753,7 +769,7 @@ func coordReportResult(report *store.CoordReport) protocol.CoordReportResult {
 	return protocol.CoordReportResult{
 		ReportID: report.ID, Outcome: string(report.Outcome), Summary: report.Summary,
 		NextAction: report.NextAction, EvidenceRef: lastEvidenceRef(report.EvidenceRefs),
-		EvidenceRefs: append([]string(nil), report.EvidenceRefs...),
+		EvidenceRefs: append([]string(nil), report.EvidenceRefs...), BodyBytes: len(report.Body),
 	}
 }
 func lastEvidenceRef(refs []string) string {

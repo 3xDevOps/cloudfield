@@ -221,6 +221,17 @@ func (r *Relay) forward(w http.ResponseWriter, req *http.Request, serverID strin
 	}
 }
 
+// retiringHeader is edgeproto.HeaderRetiring's value for answers on the
+// relay origin origin, empty unless it is retiring.
+func (r *Relay) retiringHeader(origin string) string {
+	for _, n := range r.notices {
+		if n.State == edgeproto.NoticeRetiring && n.Origin == origin {
+			return edgeproto.FormatRetiring(n.Replacement, n.Date)
+		}
+	}
+	return ""
+}
+
 // connectorUseInterval is the least time between two records of
 // connector requests to one server through one relay origin,
 // connectorRetry the least time before one that failed is tried again,
@@ -322,6 +333,7 @@ func (r *Relay) forwardOnce(w http.ResponseWriter, req *http.Request, serverID s
 	req.ContentLength = int64(len(body))
 	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
 	addr, origin := clientAddr(req.RemoteAddr), r.originOf(client)
+	retiring := r.retiringHeader(origin)
 	var unsent error
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -342,10 +354,14 @@ func (r *Relay) forwardOnce(w http.ResponseWriter, req *http.Request, serverID s
 				unsent = err
 				return
 			}
+			// A 1xx answer before the failure cleared the header map.
+			if retiring != "" {
+				w.Header().Set(edgeproto.HeaderRetiring, retiring)
+			}
 			r.refuseHTTP(w, client, serverID, err)
 		},
 	}
-	proxy.ServeHTTP(&responseFilter{ResponseWriter: w}, req)
+	proxy.ServeHTTP(&responseFilter{ResponseWriter: w, retiring: retiring}, req)
 	return unsent
 }
 
@@ -548,11 +564,13 @@ func (h *httpConn) Close() error {
 }
 
 // responseFilter writes a server's answer with only responseHeaders and
-// the CSP stamp. It drops 1xx responses and trailers, which ReverseProxy
-// writes with whatever headers the server sent.
+// the CSP stamp, and retiring, when set, as edgeproto.HeaderRetiring. It
+// drops 1xx responses and trailers, which ReverseProxy writes with
+// whatever headers the server sent.
 type responseFilter struct {
 	http.ResponseWriter
-	wrote bool
+	retiring string
+	wrote    bool
 }
 
 // Header is a scratch map once the header is written, so nothing set
@@ -576,6 +594,9 @@ func (f *responseFilter) WriteHeader(code int) {
 		}
 	}
 	h.Set("Content-Security-Policy", connectorCSP)
+	if f.retiring != "" {
+		h.Set(edgeproto.HeaderRetiring, f.retiring)
+	}
 	f.ResponseWriter.WriteHeader(code)
 }
 

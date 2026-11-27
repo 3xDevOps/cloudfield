@@ -15,6 +15,7 @@ import (
 	"maps"
 	"net/http"
 	"net/netip"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -92,6 +93,9 @@ type Config struct {
 	// names that origin, whichever origin the client came in on.
 	Origin      string
 	MoreOrigins []string
+	// Notices go into every Ready to a server that sent a notice nonce,
+	// signed for it. Each names two of the relay origins.
+	Notices []edgeproto.Notice
 	// EdgeKey signs grants. Servers pin its public half.
 	EdgeKey   ed25519.PrivateKey
 	Directory Directory
@@ -154,6 +158,7 @@ type Relay struct {
 	// for Ready, nil while the edge has one.
 	origins   map[string]string
 	announced []string
+	notices   []edgeproto.Notice
 	key       ed25519.PrivateKey
 	pub       ed25519.PublicKey
 	dir       Directory
@@ -248,6 +253,20 @@ func New(ctx context.Context, cfg Config) (*Relay, error) {
 	if len(announced) > edgeproto.MaxRelayOrigins {
 		return nil, fmt.Errorf("relay: %d relay origins, limit %d", len(announced), edgeproto.MaxRelayOrigins)
 	}
+	if len(cfg.Notices) > edgeproto.MaxRelayOrigins {
+		return nil, fmt.Errorf("relay: %d notices, limit %d", len(cfg.Notices), edgeproto.MaxRelayOrigins)
+	}
+	for _, n := range cfg.Notices {
+		if !edgeproto.NoticeOrigin(n.Origin) || !edgeproto.NoticeOrigin(n.Replacement) {
+			return nil, fmt.Errorf("relay: the notice for %s names %s; a notice names origins of at most 267 bytes without a leading zero in the port", n.Origin, n.Replacement)
+		}
+		if n.State == edgeproto.NoticeRetired && (slices.Contains(announced, n.Origin) || !slices.Contains(announced, n.Replacement)) {
+			return nil, fmt.Errorf("relay: the retired notice for %s names %s: %s must not be a relay origin of this edge, and %s must be one", n.Origin, n.Replacement, n.Origin, n.Replacement)
+		}
+		if n.State != edgeproto.NoticeRetired && (!slices.Contains(announced, n.Origin) || !slices.Contains(announced, n.Replacement)) {
+			return nil, fmt.Errorf("relay: the notice for %s names %s, and both must be relay origins of this edge", n.Origin, n.Replacement)
+		}
+	}
 	origin := announced[0]
 	if len(announced) == 1 {
 		announced = nil
@@ -269,6 +288,7 @@ func New(ctx context.Context, cfg Config) (*Relay, error) {
 		origin:             origin,
 		origins:            origins,
 		announced:          announced,
+		notices:            cfg.Notices,
 		key:                cfg.EdgeKey,
 		pub:                cfg.EdgeKey.Public().(ed25519.PublicKey),
 		dir:                cfg.Directory,
@@ -313,6 +333,17 @@ func New(ctx context.Context, cfg Config) (*Relay, error) {
 	r.ctx, r.stop = context.WithCancelCause(context.Background())
 	go r.flushLoop()
 	return r, nil
+}
+
+// signNotices returns the relay's notices and their signature for the
+// server serverID, which dialed origin and sent nonce in its hello;
+// nothing when the nonce is not NonceSize bytes, as from a server that
+// does not know notices.
+func (r *Relay) signNotices(serverID, origin string, nonce []byte) (edgeproto.Notices, []byte) {
+	if len(nonce) != edgeproto.NonceSize {
+		return nil, nil
+	}
+	return r.notices, edgeproto.SignNotices(r.key, serverID, origin, nonce, r.notices)
 }
 
 // Register adds the control, data, connect, claim and MCP endpoints to

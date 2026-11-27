@@ -112,7 +112,7 @@ func TestLaunchErrorNamesTheRetryWithTheKey(t *testing.T) {
 	err = launchError(errInterrupted, params, true)
 	var status *exitStatusError
 	if !errors.As(err, &status) || status.code != 130 || !errors.Is(err, errInterrupted) ||
-		!strings.Contains(err.Error(), "the launch continues on the server") || !strings.HasSuffix(err.Error(), "--idempotency-key k-1 -- - < <the same task file>") {
+		!strings.Contains(err.Error(), "a launch the server had already accepted keeps starting") || !strings.HasSuffix(err.Error(), "--idempotency-key k-1 -- - < <the same task file>") {
 		t.Fatalf("interrupted launch error = %v", err)
 	}
 	refused := &protocol.Error{Code: protocol.CodeUnavailable, Message: "scheduler: host capacity unavailable"}
