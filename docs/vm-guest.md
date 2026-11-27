@@ -175,10 +175,15 @@ fault for each 2 MiB it first touches instead of one for each 4 KiB: an
 host instead of 360 MiB (`TestKVMGuestMemoryUsesHugePages`). A page the guest
 frees still goes back alone: the host splits the huge page it is in, and
 memory the guest touches again in a split range comes back in 4 KiB pages.
-After six rounds of filling and freeing 1.5 GiB over 14 minutes the host held
-as much of a guest as it does without huge pages, and 71% of it was still in
-huge pages. With `page_reporting_order=9` the huge pages stay whole, but the
-host then held twice as much of the same guest.
+The server also sets the host's `khugepaged/max_ptes_none` to 0, so the
+kernel's khugepaged merges 4 KiB pages back into a huge page only where all
+512 are in use. At the kernel's 511 it merges any 2 MiB range that holds one
+page and fills the rest with zero pages: a guest that had filled 1 GiB and
+freed all but one page in each 2 MiB went from 421 MiB on the host back to
+1322 MiB, and stayed at 421 MiB with 0
+(`TestKVMReturnedGuestMemoryStaysWithTheHost`). With
+`page_reporting_order=9` the huge pages stay whole, but the host then held
+twice as much of the same guest.
 
 The trim frees no program memory, so the helper also turns on the kernel's
 DAMON_RECLAIM at boot: it pages out memory left untouched for `min_age`, 60
