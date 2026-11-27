@@ -392,8 +392,8 @@ top to bottom:
    (`launch/warm-base.ts`), so a launch right after typing starts from a
    source mirror the server has just refreshed and does not wait for the
    upstream. One call runs at a time, and after one fails the panel makes no
-   more until the workspace changes. Nothing is shown; the launch reports a
-   source that cannot be fetched.
+   more until the workspace changes or the panel is reopened. Nothing is
+   shown; the launch reports a source that cannot be fetched.
 3. **Sessions** (`sidebar-runs.tsx`), a `region` with three groups, **Needs you**,
    **Working** and **Finished** (see [Session state](#session-state)), each an `h2`
    holding an `aria-expanded` disclosure button, a chevron that turns a

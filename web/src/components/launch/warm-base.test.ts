@@ -14,7 +14,7 @@ beforeEach(() => {
 })
 afterEach(() => vi.useRealTimers())
 
-it('refreshes the mirror when a workspace is named, then at most every 5 seconds of edits, one call at a time, until one fails', async () => {
+it('refreshes the mirror when a workspace is named, then at most every 5 seconds of edits, one call at a time, until one fails or the panel reopens', async () => {
   const { rerender } = renderHook(({ workspace, task }) => useWarmBase(workspace, task), { initialProps: { workspace: '', task: '' } })
   expect(api.workspaceMirrorWarm).not.toHaveBeenCalled()
 
@@ -39,6 +39,10 @@ it('refreshes the mirror when a workspace is named, then at most every 5 seconds
   await vi.advanceTimersByTimeAsync(6000)
   rerender({ workspace: 'ws-1', task: 'fix the bug now' })
   expect(api.workspaceMirrorWarm).toHaveBeenCalledTimes(2)
+
+  rerender({ workspace: '', task: 'fix the bug now' })
+  rerender({ workspace: 'ws-1', task: 'fix the bug now' })
+  expect(api.workspaceMirrorWarm).toHaveBeenCalledTimes(3)
 
   rerender({ workspace: 'ws-2', task: 'fix the bug now' })
   expect(vi.mocked(api.workspaceMirrorWarm).mock.calls.at(-1)).toEqual(['ws-2'])
