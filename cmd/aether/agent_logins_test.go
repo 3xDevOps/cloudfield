@@ -15,7 +15,7 @@ func TestPrintLoginsInPriorityOrder(t *testing.T) {
 	var out bytes.Buffer
 	err := printLogins(&out, []loginUsage{
 		{
-			AgentLogin: protocol.AgentLogin{ID: "lgn-test1", Name: "work", Kind: "subscription", Plan: "max", Email: "ada@work.example.test", Automatic: true, Shared: true, Position: 3},
+			AgentLogin: protocol.AgentLogin{ID: "lgn-test1", Name: "work", Kind: "subscription", Plan: "max", Email: "ada@work.example.test", OrganizationID: "org-test1", OrganizationName: "Test Team", Automatic: true, Shared: true, Position: 3},
 			Usage:      &protocol.UsageProvider{Provider: "claude", Status: "stale", Error: "usage endpoint answered 429; showing the last read", Windows: []protocol.UsageWindow{{Label: "5h", UsedPercent: 12}, {Label: "7d", UsedPercent: 40.4}}},
 		},
 		{
@@ -23,17 +23,17 @@ func TestPrintLoginsInPriorityOrder(t *testing.T) {
 			UsageError: "rpc error -32010: account.usage: usage service not configured",
 		},
 		{
-			AgentLogin: protocol.AgentLogin{ID: "lgn-test2", Name: "console", Kind: "console", Email: "ada@org.example.test", PerUse: true, Automatic: false, Shared: true, Position: 5},
+			AgentLogin: protocol.AgentLogin{ID: "lgn-test2", Name: "console", Kind: "console", Email: "ada@org.example.test", OrganizationID: "org-test2", PerUse: true, Automatic: false, Shared: true, Position: 5},
 			Usage:      &protocol.UsageProvider{Provider: "claude", Status: "unavailable", Error: "no usage for a Console login"},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `#  LOGIN    KIND          PLAN  EMAIL                  USAGE           AUTOMATIC  SHARES  BILLED
-1  work     subscription  max   ada@work.example.test  5h 12%, 7d 40%  on         on      -
-2  default  subscription  pro   ada@home.example.test  not read        on         off     -
-3  console  console       -     ada@org.example.test   unavailable     off        on      per use
+	want := `#  LOGIN    KIND          PLAN  EMAIL                  ORGANISATION  USAGE           AUTOMATIC  SHARES  BILLED
+1  work     subscription  max   ada@work.example.test  Test Team     5h 12%, 7d 40%  on         on      -
+2  default  subscription  pro   ada@home.example.test  -             not read        on         off     -
+3  console  console       -     ada@org.example.test   org-test2     unavailable     off        on      per use
 usage of login work: usage endpoint answered 429; showing the last read
 usage of login default: rpc error -32010: account.usage: usage service not configured
 usage of login console: no usage for a Console login

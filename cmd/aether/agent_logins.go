@@ -215,7 +215,7 @@ type loginUsage struct {
 
 func printLogins(w io.Writer, logins []loginUsage) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "#\tLOGIN\tKIND\tPLAN\tEMAIL\tUSAGE\tAUTOMATIC\tSHARES\tBILLED")
+	_, _ = fmt.Fprintln(tw, "#\tLOGIN\tKIND\tPLAN\tEMAIL\tORGANISATION\tUSAGE\tAUTOMATIC\tSHARES\tBILLED")
 	var problems []string
 	for i, l := range logins {
 		usage := "-"
@@ -239,8 +239,8 @@ func printLogins(w io.Writer, logins []loginUsage) error {
 		if l.PerUse {
 			billed = "per use"
 		}
-		_, _ = fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", i+1, l.Name, cmp.Or(l.Kind, "-"), cmp.Or(l.Plan, "-"), cmp.Or(l.Email, "-"),
-			usage, onOff(l.Automatic), onOff(l.Shared), billed)
+		_, _ = fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", i+1, l.Name, cmp.Or(l.Kind, "-"), cmp.Or(l.Plan, "-"), cmp.Or(l.Email, "-"),
+			cmp.Or(l.OrganizationName, l.OrganizationID, "-"), usage, onOff(l.Automatic), onOff(l.Shared), billed)
 	}
 	if err := tw.Flush(); err != nil {
 		return err
