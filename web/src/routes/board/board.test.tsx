@@ -1023,7 +1023,7 @@ describe('lanes view', () => {
     // Another member signs in on this dashboard while the page is on its way.
     const before = useStore.getState().identityKey
     onTestFinished(() => { useStore.setState({ identityKey: before }) })
-    act(() => useStore.getState().setIdentityKey('another member'))
+    act(() => useStore.setState({ identityKey: 'another member' }))
     await act(async () => first({ events: [], next_seq: 0, more: false }))
     // The page was read for the member before: it is not kept, and the view reads for the new one.
     await waitFor(() => expect(api.workspaceTimeline).toHaveBeenCalledTimes(2))

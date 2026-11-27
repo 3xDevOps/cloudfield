@@ -242,6 +242,9 @@ export async function hydrate(
         ignore()
       }
     }
+    // A Lanes view may have started a read for the member before, while the link status was awaited:
+    // its history goes with that identity, so the view reads for this one without waiting for it.
+    if (identityChanged) store.setState({ laneHistory: {} })
     s.setIdentityKey(incomingIdentity)
     noteServerTime(store, info.time)
     s.setInfo(info)
