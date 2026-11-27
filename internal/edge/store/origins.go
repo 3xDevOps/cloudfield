@@ -22,7 +22,9 @@ const OriginsSchema = 2
 const recordingGap = 10 * time.Minute
 
 // RecordPairs records, as of now, that the edge serves each relay origin
-// with the sign-in origin it names and records origins. A relay origin
+// with the sign-in origin it names and records origins. It deletes the
+// device authorizations of a sign-in origin last recorded with another
+// relay origin, which would otherwise complete on the new pair. A relay origin
 // keeps its row after the edge stops serving it, and every pairing ever
 // written to origin_pairs, by any binary, stays in origin_pair_history
 // (Pairings). The recording period
@@ -34,6 +36,13 @@ func (s *Store) RecordPairs(ctx context.Context, relayToSignin map[string]string
 		return fmt.Errorf("edgestore: record origin pairs: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	for relay, signin := range relayToSignin {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM device_authorizations WHERE signin_origin = ?1
+			AND ?2 <> (SELECT relay_origin FROM origin_pairs WHERE signin_origin = ?1 ORDER BY served_at DESC, relay_origin LIMIT 1)`,
+			signin, relay); err != nil {
+			return fmt.Errorf("edgestore: delete the device sign-ins of %s, now paired with %s: %w", signin, relay, err)
+		}
+	}
 	for relay, signin := range relayToSignin {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO origin_pairs (relay_origin, signin_origin, served_at) VALUES (?, ?, ?)
 			ON CONFLICT (relay_origin) DO UPDATE SET signin_origin = excluded.signin_origin, served_at = excluded.served_at`,

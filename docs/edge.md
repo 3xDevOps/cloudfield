@@ -1300,7 +1300,9 @@ the start request) is refused unless that is the relay origin of the pair the
 request arrived at, whatever the options. Binding the pending sign-in to that
 pair needs its recorded origin: while either option is set, it is confirmed,
 polled and redeemed only on the pair it was started at; with neither set, any
-pair confirms and redeems it, as before.
+pair confirms and redeems it, as before. A start that pairs a sign-in origin
+with another relay origin than the one last recorded deletes that sign-in
+origin's pending device sign-ins; the person starts `cloudfield login` again.
 
 ### Firewall
 

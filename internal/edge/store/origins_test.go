@@ -800,3 +800,55 @@ func TestPairingHistoryAcrossUpgrade(t *testing.T) {
 		t.Errorf("Pairings = %v, %v; want %v", got, err, want)
 	}
 }
+
+// TestRepairingDeletesDeviceAuthorizations deletes the device
+// authorizations of a sign-in origin recorded with another relay origin
+// before, and keeps those of a sign-in origin whose relay stays.
+func TestRepairingDeletesDeviceAuthorizations(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	now := time.Unix(1_800_000_000, 0)
+	record := func(pairs map[string]string) {
+		t.Helper()
+		if err := s.RecordPairs(ctx, pairs, now); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(time.Minute)
+	}
+	authorize := func(code, signin string) {
+		t.Helper()
+		if _, err := s.db.Exec(`INSERT INTO device_authorizations (code_hash, user_code_hash, label, public_key, client_addr, status, created_at, expires_at, last_poll_at, signin_origin)
+			VALUES (?, ?, 'laptop', 'key', '127.0.0.1', 'pending', 0, 9000000000000000000, 0, ?)`, code, "user-"+code, signin); err != nil {
+			t.Fatal(err)
+		}
+	}
+	codes := func() []string {
+		t.Helper()
+		rows, err := s.db.Query(`SELECT code_hash FROM device_authorizations ORDER BY 1`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close() //nolint:errcheck // test
+		var out []string
+		for rows.Next() {
+			var c string
+			if err := rows.Scan(&c); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, c)
+		}
+		return out
+	}
+	record(map[string]string{"https://edge1.example.test": "https://auth.example.test", "https://edge2.example.test": "https://auth2.example.test"})
+	authorize("moved", "https://auth.example.test")
+	authorize("stays", "https://auth2.example.test")
+	record(map[string]string{"https://edge3.example.test": "https://auth.example.test", "https://edge2.example.test": "https://auth2.example.test"})
+	if got := codes(); !slices.Equal(got, []string{"stays"}) {
+		t.Fatalf("after re-pairing auth.example.test: %v, want [stays]", got)
+	}
+	authorize("new", "https://auth.example.test")
+	record(map[string]string{"https://edge3.example.test": "https://auth.example.test", "https://edge2.example.test": "https://auth2.example.test"})
+	if got := codes(); !slices.Equal(got, []string{"new", "stays"}) {
+		t.Fatalf("after a restart with the same pairs: %v, want [new stays]", got)
+	}
+}
