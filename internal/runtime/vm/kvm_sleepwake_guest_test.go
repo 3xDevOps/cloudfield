@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -99,13 +100,36 @@ func memcheckMap(size int) ([]byte, error) {
 	return unix.Mmap(-1, 0, size, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
 }
 
+// memcheckHigh counts the pages of mem whose guest physical address is past
+// 4 GiB.
+func memcheckHigh(mem []byte) (int, error) {
+	pagemap, err := os.Open("/proc/self/pagemap")
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = pagemap.Close() }()
+	entries := make([]byte, len(mem)/memcheckPage*8)
+	if _, err = pagemap.ReadAt(entries, int64(uintptr(unsafe.Pointer(unsafe.SliceData(mem)))/memcheckPage*8)); err != nil {
+		return 0, err
+	}
+	high := 0
+	for i := 0; i < len(entries); i += 8 {
+		// Bits 0 to 54 of an entry are the page's frame number.
+		if binary.LittleEndian.Uint64(entries[i:])&(1<<55-1) >= 4<<30/memcheckPage {
+			high++
+		}
+	}
+	return high, nil
+}
+
 // memcheckServe holds mib MiB of locked memory, every page stamped with
 // its index and generation 1, beside a loop that takes, stamps, reads back
 // and frees memcheckChurn. Each connection sends one line:
 //
 //	rewrite <gen> <rem>  stamp every chunk whose index is rem modulo 3
 //	verify               read every page; report each chunk's generation
-//	                     in runs of gen*chunks, and the pages that are bad
+//	                     in runs of gen*chunks, the pages that are bad and
+//	                     the pages past 4 GiB of guest memory
 //
 // Every answer starts with the process, the boot and the loop's rounds.
 func memcheckServe(mib int) error {
@@ -180,7 +204,11 @@ func memcheckServe(mib int) error {
 				}
 				run, n = gen, n+1
 			}
-			answer += fmt.Sprintf(" bad=%d gens=%s%d*%d", bad, runs.String(), run, n)
+			high, err := memcheckHigh(mem)
+			if err != nil {
+				return err
+			}
+			answer += fmt.Sprintf(" bad=%d high=%d gens=%s%d*%d", bad, high, runs.String(), run, n)
 		}
 		_, _ = fmt.Fprintln(conn, answer)
 		_ = conn.Close()

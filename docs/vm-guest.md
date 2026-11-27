@@ -554,8 +554,8 @@ saved bytes. On a hosted runner a host process reads each new process's
 memory through `/proc/<pid>/mem`: of 31 restores of one saved 5 GiB VM
 whose memory file was read from disk, 12 came back with 11 to 419 saved
 pages zeroed at the start of the RAM past 4 GiB, and all 7 such VMs that
-were resumed died by their third wake
-(`TestKVMRepeatedSaveAndWakeKeepsMemoryAndProcesses`).
+were resumed died by their third wake. `TestKVMSleepWakeChain` wakes a
+5 GiB VM twelve times, every other time with its memory file read from disk.
 
 The load gets 60 seconds plus 1 second per 20 MiB of the VM unit's memory
 cap, and the wake around it 1 second per 20 MiB of saved memory beyond its

@@ -34,33 +34,6 @@ const (
 
 var errGeneration = errors.New("a chunk of the pattern holds another generation")
 
-// TestKVMSleepWakeChain saves and wakes one 2 GiB session VM twelve times
-// and checks after every wake that the guest is the one that went to
-// sleep: the same boot and processes, a 1024 MiB pattern in which every
-// page names its index and the generation that last wrote it, the sha256
-// of a file in /dev/shm, a loop that takes and frees memory still turning,
-// and a kernel log with no trouble in it. The host keeps the generation
-// each MiB of the pattern must hold and has a third rewritten after every
-// wake, so a page from an older save cannot pass. On the first, middle and
-// last cycle the saved state is also loaded as a wake loads it and, with
-// the guest still paused, saved again: the two memory files must be equal.
-//
-// Two controls prove the checks can fail. A wake from the save before the
-// last must fail the generation check. A wake from a memory file cut to
-// half its length must fail, or leave a guest that fails the checks:
-// Cloud Hypervisor v54.1 loads such a file, and the guest then crashes.
-//
-// The pattern is half the session's limit, not more: with 1280 MiB the
-// monitor of one run in three was killed mid-save, its unit out of memory
-// from the guest's memory plus the page cache of the file being written.
-func TestKVMSleepWakeChain(t *testing.T) { sleepWakeChain(t, "run-sleepwake", 2048, 1024) }
-
-// TestLargeKVMSleepWakeChain is the chain at 8 GiB, where Cloud Hypervisor
-// maps the guest's memory past 4 GiB apart from the first 3 GiB. Its name
-// keeps it out of the tests make test-kvm runs unless KVM_RUN names it: it
-// takes 15 minutes on a CI runner.
-func TestLargeKVMSleepWakeChain(t *testing.T) { sleepWakeChain(t, "run-sleepwake-large", 8192, 5120) }
-
 type sleepWake struct {
 	t   *testing.T
 	e   *engine
@@ -69,10 +42,32 @@ type sleepWake struct {
 	// written with.
 	gens       []uint64
 	shm, alive string
-	rounds     uint64
 }
 
-func sleepWakeChain(t *testing.T, key string, limitMiB, patternMiB int) {
+// TestKVMSleepWakeChain saves and wakes one 5 GiB session VM twelve times
+// and checks after every wake that the guest is the one that went to
+// sleep: the same boot and processes, a 1024 MiB pattern in which every
+// page names its index and the generation that last wrote it, the sha256
+// of a file in /dev/shm, a loop that takes and frees memory turning again,
+// and a kernel log with no trouble in it. The host keeps the generation
+// each MiB of the pattern must hold and has a third rewritten after every
+// wake, so a page from an older save cannot pass. Most of the pattern must
+// lie past 4 GiB of guest memory, which Cloud Hypervisor maps apart from
+// the first 3 GiB. On the first, middle and last cycle the saved state is
+// also loaded as a wake loads it and, with the guest still paused, saved
+// again: the two memory files must be equal.
+//
+// Two controls prove the checks can fail. A wake from the save before the
+// last must fail the generation check. A wake from a memory file cut to
+// half its length must fail, or leave a guest that fails the checks:
+// Cloud Hypervisor v54.1 loads such a file, and the guest then crashes.
+//
+// What the guest holds stays under half its unit's memory limit: a save
+// counts the guest's memory and the page cache of the file it writes
+// against that limit at once, and a unit over it loses its monitor
+// mid-save.
+func TestKVMSleepWakeChain(t *testing.T) {
+	const key, limitMiB, patternMiB = "run-sleepwake", 5120, 1024
 	e := kvmEngine(t)
 	t.Cleanup(func() { _ = e.destroy(context.Background(), key) })
 	self, err := os.Executable()
@@ -111,8 +106,8 @@ func sleepWakeChain(t *testing.T, key string, limitMiB, patternMiB int) {
 	}
 
 	dir, older := e.path(key, snapshotDir), e.path(key, "snapshot.older")
-	// before is what the guest held at the last save of the chain.
-	var before sleepWake
+	// before is what the pattern held at the last save of the chain.
+	var before []uint64
 	for cycle := 1; cycle <= sleepWakeCycles; cycle++ {
 		start := time.Now()
 		s.save()
@@ -123,13 +118,17 @@ func sleepWakeChain(t *testing.T, key string, limitMiB, patternMiB int) {
 		}
 		if cycle == sleepWakeCycles {
 			s.keep(dir, older)
-			before = sleepWake{gens: slices.Clone(s.gens), rounds: s.rounds}
+			before = slices.Clone(s.gens)
 		}
 		// Every other wake reads its memory from the disk, as after a long
-		// sleep on a busy host; the rest find it in the page cache.
+		// sleep on a busy host; the rest find it in the page cache. The
+		// save synced the file, so the cache can let go of all of it.
 		if cycle%2 == 1 {
-			unix.Sync()
-			if err = os.WriteFile("/proc/sys/vm/drop_caches", []byte("3"), 0); err != nil {
+			var f *os.File
+			if f, err = os.Open(filepath.Join(dir, "memory-ranges")); err == nil {
+				err = errors.Join(unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED), f.Close())
+			}
+			if err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -137,7 +136,19 @@ func sleepWakeChain(t *testing.T, key string, limitMiB, patternMiB int) {
 		if err = e.restore(t.Context(), key); err != nil {
 			t.Fatalf("wake %d: %v", cycle, err)
 		}
-		t.Logf("cycle %d: the save took %s and wrote %d MiB, the wake %s", cycle, saveTook.Round(time.Millisecond), saved>>20, time.Since(start).Round(time.Millisecond))
+		wakeTook := time.Since(start)
+		if _, err = os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("cycle %d: the saved state outlived the wake that used it: %v", cycle, err)
+		}
+		for used := e.path(key, usedSnapshotDir); ; time.Sleep(time.Millisecond) {
+			if _, err = os.Stat(used); errors.Is(err, os.ErrNotExist) {
+				break
+			}
+			if time.Since(start) > wakeTook+time.Minute {
+				t.Fatalf("cycle %d: the saved state the wake used is still on disk a minute later", cycle)
+			}
+		}
+		t.Logf("cycle %d: the save took %s and wrote %d MiB, the wake %s", cycle, saveTook.Round(time.Millisecond), saved>>20, wakeTook.Round(time.Millisecond))
 		if err = s.check(); err != nil {
 			t.Fatalf("after wake %d: %v%s", cycle, err, e.logTail(key))
 		}
@@ -163,7 +174,7 @@ func sleepWakeChain(t *testing.T, key string, limitMiB, patternMiB int) {
 
 	// The wake from a memory file cut to half, saved from that guest and
 	// checked against what it held.
-	s.gens, s.rounds = before.gens, before.rounds
+	s.gens = before
 	s.save()
 	memory := filepath.Join(dir, "memory-ranges")
 	info, err := os.Stat(memory)
@@ -204,8 +215,8 @@ func (s *sleepWake) save() {
 	}
 }
 
-// check compares the guest with what the last check and the rewrites since
-// left. The first one records it.
+// check compares the guest with what the first check recorded and the
+// rewrites since left.
 func (s *sleepWake) check() error {
 	lines, err := s.guest(sleepWakeScript)
 	if err != nil {
@@ -213,13 +224,17 @@ func (s *sleepWake) check() error {
 	}
 	var id, gens string
 	var rounds, torn uint64
-	var bad int
-	if _, err = fmt.Sscanf(lines["MEMCHECK"], "id=%s rounds=%d torn=%d bad=%d gens=%s", &id, &rounds, &torn, &bad, &gens); err != nil {
+	var bad, high int
+	if _, err = fmt.Sscanf(lines["MEMCHECK"], "id=%s rounds=%d torn=%d bad=%d high=%d gens=%s", &id, &rounds, &torn, &bad, &high, &gens); err != nil {
 		return fmt.Errorf("the checker answered %q: %w", lines["MEMCHECK"], err)
 	}
 	alive := id + " " + lines["MAIN"]
 	if s.alive == "" {
 		s.alive, s.shm = alive, lines["SHM"]
+		s.t.Logf("the guest holds %d MiB of the pattern past 4 GiB", high>>8)
+	}
+	if high>>8 < len(s.gens)/2 {
+		return fmt.Errorf("the guest holds %d MiB of the pattern's %d past 4 GiB, want most of it", high>>8, len(s.gens))
 	}
 	if alive != s.alive {
 		return fmt.Errorf("the guest's checker, boot and processes are %q, want %q", alive, s.alive)
@@ -249,7 +264,9 @@ func (s *sleepWake) check() error {
 	if lines["TROUBLE"] != "0" {
 		return fmt.Errorf("the guest's kernel log has %s lines of trouble", lines["TROUBLE"])
 	}
-	for deadline := time.Now().Add(30 * time.Second); rounds <= s.rounds; time.Sleep(100 * time.Millisecond) {
+	// The loop has to turn after this answer: the count in it may be from
+	// before the save.
+	for first, deadline := rounds, time.Now().Add(30*time.Second); rounds <= first; time.Sleep(100 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("the checker's loop stays at round %d", rounds)
 		}
@@ -263,7 +280,6 @@ func (s *sleepWake) check() error {
 	if torn != 0 {
 		return fmt.Errorf("the checker's loop read back %d rounds changed", torn)
 	}
-	s.rounds = rounds
 	return nil
 }
 
