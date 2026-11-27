@@ -99,7 +99,10 @@ func TestMetricsPerOrigin(t *testing.T) {
 		ConnectorRequests: map[relay.ConnectorKey]uint64{
 			{Origin: "https://edge.example.test", Protocol: 5}: 3, {Origin: "https://edge.example.net", Protocol: 0}: 1,
 		},
-	}, 0, map[string]uint64{"https://auth.example.test": 4})
+	}, 0, map[string]uint64{"https://auth.example.test": 4}, nil)
+	if strings.Contains(out.String(), "aether_edge_retired_requests_total") {
+		t.Errorf("metrics without a retired pair name aether_edge_retired_requests_total:\n%s", out.String())
+	}
 	for _, line := range []string{
 		`aether_edge_servers_by_origin{origin="https://edge.example.net"} 0`,
 		`aether_edge_servers_by_origin{origin="https://edge.example.test"} 2`,
@@ -110,5 +113,21 @@ func TestMetricsPerOrigin(t *testing.T) {
 		if !strings.Contains(out.String(), line+"\n") {
 			t.Errorf("metrics lack %s:\n%s", line, out.String())
 		}
+	}
+}
+
+func TestMetricsRetired(t *testing.T) {
+	var out bytes.Buffer
+	writeMetrics(&out, relay.Metrics{}, 0, nil, []edge.RetiredRequest{
+		{Origin: "https://auth.example.test", Kind: edge.RetiredBrowser, Count: 2},
+		{Origin: "https://edge.example.test", Kind: edge.RetiredServer, Count: 1},
+	})
+	want := `# HELP aether_edge_retired_requests_total Requests since the edge started to a host of a retired pair, by that host's origin and the kind of path: server, client, connector or browser.
+# TYPE aether_edge_retired_requests_total counter
+aether_edge_retired_requests_total{origin="https://auth.example.test",kind="browser"} 2
+aether_edge_retired_requests_total{origin="https://edge.example.test",kind="server"} 1
+`
+	if !strings.HasSuffix(out.String(), want) {
+		t.Errorf("metrics end with:\n%s\nwant\n%s", out.String(), want)
 	}
 }
