@@ -594,7 +594,7 @@ function EdgeChoice({
           return (
             <label key={e.edge} htmlFor={`${id}-${i}`} className="flex min-h-7 min-w-0 cursor-pointer items-center gap-2 coarse:min-h-11">
               <Radio id={`${id}-${i}`} value={e.edge} />
-              <span className="min-w-0 break-all">
+              <span className="min-w-0 [overflow-wrap:anywhere]">
                 <span className="font-code">{edgeHost(e.edge)}</span> as {accountName(e.account)}
                 {state && <span className="whitespace-nowrap text-muted"> · says it is {state}</span>}
               </span>
