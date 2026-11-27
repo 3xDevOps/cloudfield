@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	goruntime "runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -697,5 +698,84 @@ func TestAContinuationIsSentOnlyOnceItsRecordIsDurable(t *testing.T) {
 	}
 	if got, sending := e.marker(entry); got != swap || sending || len(sentPrompts(t, rt.all()[0])) != 0 {
 		t.Fatalf("marker %+v, sending %v, prompts %q; want the continuation owed and unsent", got, sending, sentPrompts(t, rt.all()[0]))
+	}
+}
+
+// Mail that wakes the replacement as its conversation is restored, after a
+// move or after a restart that found the continuation owed, waits for the
+// continuation: the agent is told of the move first and gets the mail after
+// that turn, and no notice says the conversation went on without it.
+func TestMailWaitsForTheContinuation(t *testing.T) {
+	t.Parallel()
+	server := withServerBinary(fakeServerBinary(t, "#!/bin/sh\necho aether\n"))
+	for _, after := range []string{"move", "restart"} {
+		t.Run(after, func(t *testing.T) {
+			t.Parallel()
+			e, rt, _, _, _ := newLoginMoveEnv(t, func(cfg *Config) {
+				enhancedClaude(cfg)
+				server(cfg)
+			})
+			coord, binDir := withCoordination(t, e.testEnv)
+			// The first prompt carries the session's instructions.
+			run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "say pong", "claude", domain.LaunchACP)
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+			sched, continuation := e.sched, continuedOnSecond
+			if after == "restart" {
+				if err = e.sched.Close(); err != nil {
+					t.Fatal(err)
+				}
+				sc, scErr := e.sched.readSidecar(run.ID)
+				if scErr != nil {
+					t.Fatal(scErr)
+				}
+				continuation = "Continue on the restarted server."
+				sc.AccountSwap = &accountSwap{From: e.member.ID, To: e.member.ID, Continuation: continuation, Container: sc.ContainerID}
+				if err = e.sched.writeSidecar(sc); err != nil {
+					t.Fatal(err)
+				}
+				cfg := e.cfg
+				cfg.PTY = newFakePTY()
+				cfg.PTY.(*fakePTY).logDir = e.pty.logDir
+				if sched, err = New(cfg); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = sched.Close() })
+			}
+			before := len(rt.all())
+			// Coordination wakes an idle session whenever mail arrives. Idle
+			// is read before the marker, which only the move's end clears.
+			var early atomic.Bool
+			go func() {
+				for t.Context().Err() == nil {
+					if len(rt.all()) > before && sched.IdleEnhanced(run.ID) {
+						sched.mu.Lock()
+						swap := sched.runs[run.ID].accountSwap
+						early.Store(swap != nil && swap.Continuation != "")
+						sched.mu.Unlock()
+						_ = sched.WakeEnhanced(context.Background(), run.ID, "unread mail")
+						return
+					}
+					goruntime.Gosched()
+				}
+			}()
+			if after == "restart" {
+				sched.UseCoordination(coord, binDir)
+				startScheduler(t, sched)
+			} else {
+				_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+			}
+			waitFor(t, "the continuation, then the mail", func() bool {
+				execs := rt.all()
+				return len(execs) > before && len(sentPrompts(t, execs[len(execs)-1])) == 2
+			})
+			execs := rt.all()
+			log, err := os.ReadFile(e.pty.ItemLogPath(run.ID))
+			if got := sentPrompts(t, execs[len(execs)-1]); !slices.Equal(got, []string{continuation, "unread mail"}) || early.Load() || err != nil || strings.Contains(string(log), "went on without it") {
+				t.Fatalf("the replacement was prompted %q, idle while owed %v (log read: %v); want the continuation, then the mail, and no skipped continuation", got, early.Load(), err)
+			}
+		})
 	}
 }

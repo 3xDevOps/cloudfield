@@ -52,6 +52,8 @@ func (d *acpDriver) sendContinuation(entry *supervised, swap *accountSwap) {
 		return
 	}
 	d.s.clearAccountSwap(entry, swap)
+	// Mail held back for the continuation waits on no later turn end.
+	d.wakeIdle(entry.runID)
 	switch {
 	case err == nil && !started:
 		d.continuationSkipped(sess, entry, swap)

@@ -184,6 +184,7 @@ func (d *acpDriver) Resume(ctx context.Context, entry *supervised, att runtime.A
 		// replaced, and nothing is sent.
 		d.connect(ctx, entry, openSent)
 		d.s.clearAccountSwap(entry, swap)
+		d.wakeIdle(entry.runID)
 	case owed:
 		d.connect(ctx, entry, openContinue)
 		d.sendContinuation(entry, swap)
