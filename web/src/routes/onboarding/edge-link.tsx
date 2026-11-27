@@ -276,7 +276,16 @@ export function EdgeSignIn({
       )}
       {phase.name === 'signed-in' &&
         phase.edges.map(
-          (e) => e.retiring && <RetiringNotice key={e.edge} edge={e.edge} notice={e.retiring} signIn={signIn} />,
+          (e) =>
+            e.retiring && (
+              <RetiringNotice
+                key={e.edge}
+                edge={e.edge}
+                notice={e.retiring}
+                signedInThere={phase.edges.some((o) => sameOrigin(o.edge, e.retiring!.replacement))}
+                signIn={signIn}
+              />
+            ),
         )}
       {picked && (
         <ServerPicker
@@ -468,7 +477,17 @@ function sameOrigin(a: string, b: string): boolean {
 /** What an edge address says of itself. Nothing authenticates it, so the
  * new address is filled in only when this computer, or the linked server's
  * verified notice, already names it; signing in stays the person's step. */
-export function RetiringNotice({ edge, notice, signIn }: { edge: string; notice: EdgeStatusNotice; signIn: SignIn }) {
+export function RetiringNotice({
+  edge,
+  notice,
+  signedInThere,
+  signIn,
+}: {
+  edge: string
+  notice: EdgeStatusNotice
+  signedInThere: boolean
+  signIn: SignIn
+}) {
   const server = useStore((s) => s.edge)
   const known = notice.known || serverConfirms(server, edge, notice)
   const [target, setTarget] = useState('')
@@ -483,30 +502,34 @@ export function RetiringNotice({ edge, notice, signIn }: { edge: string; notice:
         <span className="break-words font-code">{notice.replacement}</span>.
       </p>
       <p className="text-muted">
-        {known
-          ? 'Sign in at the new address, then link your server again there.'
-          : 'Confirm that address with whoever runs the edge before you sign in there.'}
+        {signedInThere
+          ? 'You are signed in there too: choose it above and link your server again through it.'
+          : known
+            ? 'Sign in at the new address, then link your server again there.'
+            : 'Confirm that address with whoever runs the edge before you sign in there.'}
       </p>
-      <form
-        className="mt-1 flex min-w-0 flex-wrap items-end gap-2"
-        onSubmit={(e) => {
-          e.preventDefault()
-          void signIn.signIn(target.trim())
-        }}
-      >
-        <FormField className="min-w-0 flex-1 basis-56" label="Sign in at">
-          <Input
-            className="font-code"
-            autoComplete="off"
-            placeholder="https://"
-            value={target}
-            onChange={(e) => setTarget(e.target.value)}
-          />
-        </FormField>
-        <Button type="submit" size="sm" variant="secondary" disabled={!target.trim() || signIn.starting}>
-          {signIn.starting ? 'Signing in…' : 'Sign in'}
-        </Button>
-      </form>
+      {!signedInThere && (
+        <form
+          className="mt-1 flex min-w-0 flex-wrap items-end gap-2"
+          onSubmit={(e) => {
+            e.preventDefault()
+            void signIn.signIn(target.trim())
+          }}
+        >
+          <FormField className="min-w-0 flex-1 basis-56" label="Sign in at">
+            <Input
+              className="font-code"
+              autoComplete="off"
+              placeholder="https://"
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+            />
+          </FormField>
+          <Button type="submit" size="sm" variant="secondary" disabled={!target.trim() || signIn.starting}>
+            {signIn.starting ? 'Signing in…' : 'Sign in'}
+          </Button>
+        </form>
+      )}
     </Callout>
   )
 }

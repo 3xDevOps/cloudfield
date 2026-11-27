@@ -44,8 +44,8 @@ function seed(server: ServerEdge | null = null) {
   })
 }
 
-async function open(retiring?: EdgeStatusNotice) {
-  const status: EdgeStatus = { edges: [{ edge, account, retiring }] }
+async function open(retiring?: EdgeStatusNotice, alsoAt: string[] = []) {
+  const status: EdgeStatus = { edges: [{ edge, account, retiring }, ...alsoAt.map((e) => ({ edge: e, account }))] }
   const client = fakeApi({
     localLinkStatus: vi.fn(async () => unlinked),
     localEdgeStatus: vi.fn(async () => status),
@@ -56,7 +56,8 @@ async function open(retiring?: EdgeStatusNotice) {
   })
   render(<OnboardingRoute params={{}} client={client} />)
   fireEvent.click(await screen.findByRole('radio', { name: 'Cloudfield relay' }))
-  await vi.waitFor(() => expect(client.localEdgeServers).toHaveBeenCalled())
+  if (alsoAt.length === 0) await vi.waitFor(() => expect(client.localEdgeServers).toHaveBeenCalled())
+  else await vi.waitFor(() => expect(noticeText()).not.toBeNull())
   return client
 }
 
@@ -100,6 +101,13 @@ describe('a signed-in edge that says its address is retiring', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
     expect(client.localEdgeLogin).toHaveBeenCalledWith(next)
     expect(await screen.findByText('WDJB-MJHT')).toBeDefined()
+  })
+
+  it('offers no sign-in at a replacement this computer is already signed in at', async () => {
+    seed()
+    await open({ state: 'retiring', replacement: next, known: true }, [next])
+    expect(screen.getByText('You are signed in there too: choose it above and link your server again through it.')).toBeDefined()
+    expect(screen.queryByLabelText('Sign in at')).toBeNull()
   })
 
   it('says a retired address is retired', async () => {
