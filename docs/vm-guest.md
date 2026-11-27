@@ -503,19 +503,17 @@ and swap more than that command. It adds about 0.2 ms to a command. What
 Claude Code starts without its prefix keeps the agent's score: exec-form
 hooks, the language servers of its plugins, and the `rg` and `git` it runs
 for itself. A language server that grows large is then killed after the
-agent's commands.
-A command can lower its own score back to `-500`, so this orders accidents,
-not a hostile command. The keeper leaves everything as it was when the
-session's environment already sets `CLAUDE_CODE_SHELL_PREFIX`, when `bash`
-is not on the `PATH` or `zsh` is, since Claude Code may then build its
-commands for zsh, or when it may not lower its score, as in a Docker
-session. A prefix set in Claude Code's own `settings.json` replaces the
-keeper's inside Claude Code: the agent's commands then keep the agent's
+agent's commands. A command can lower its own score back to `-500`, so this
+orders accidents, not a hostile command. The keeper leaves everything as it
+was when the session's environment already sets `CLAUDE_CODE_SHELL_PREFIX`,
+when `bash` is not on the `PATH` or `zsh` is, since Claude Code may then
+build its commands for zsh, or when it may not lower its score, as in a
+Docker session. A prefix set in Claude Code's own `settings.json` replaces
+the keeper's inside Claude Code: the agent's commands then keep the agent's
 score, and the kernel kills other session processes, such as a terminal's,
-before them. No other
-agent has a way to tell its commands apart, so no other agent's score
-changes: its commands would inherit the lower score with it. A Standard
-session has no keeper and is unchanged.
+before them. No other agent has a way to tell its commands apart, so no
+other agent's score changes: its commands would inherit the lower score with
+it. A Standard session has no keeper and is unchanged.
 
 `Stats` reports CPU time outside idle and I/O wait from `/proc/stat`, and
 from the session cgroup its OOM kills less the development browser's, its
