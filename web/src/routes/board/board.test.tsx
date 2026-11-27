@@ -989,6 +989,29 @@ describe('lanes view', () => {
     expect(history.events[0].seq).toBe(501)
   })
 
+  it('keeps none of a page that live events left no room for', async () => {
+    seed([working])
+    const start = Date.now() - 30 * 60_000
+    const mail = (seq: number): Event => ({
+      id: `evt_${seq}`, seq, time: new Date(start + seq).toISOString(), workspace_id: workspace.id,
+      run_id: working.id, actor_id: '', type: 'coord.message', payload: {},
+    })
+    const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => mail(from + i))
+    let older!: (page: TimelinePage) => void
+    vi.mocked(api.workspaceTimeline)
+      .mockResolvedValueOnce({ events: range(1001, historyBudget + 999), next_seq: 0, more: true, older_seq: 1001 })
+      .mockImplementationOnce(() => new Promise((resolve) => { older = resolve }))
+    await openLanes()
+    await waitFor(() => expect(api.workspaceTimeline).toHaveBeenCalledTimes(2))
+    act(() => useStore.getState().appendLaneEvent(mail(historyBudget + 1000)))
+    await act(async () => older({ events: range(991, 1000), next_seq: 0, more: true, older_seq: 991 }))
+    expect(await screen.findByText('Older history not loaded')).toBeDefined()
+    const history = useStore.getState().laneHistory[workspace.id]
+    expect(history.events).toHaveLength(historyBudget)
+    expect(history.events[0].seq).toBe(1001)
+    expect(history.floor).toBe(Date.parse(mail(1001).time))
+  })
+
   it('drops an older history page read while live events trimmed held history, so no gap reads as loaded', async () => {
     seed([working])
     const start = Date.now() - 30 * 60_000

@@ -49,7 +49,8 @@ async function readBack(workspaceID: string, floor: number): Promise<void> {
       // Live events past the budget dropped the oldest held events during this read, so the page no longer meets them.
       if (latest.olderSeq !== history.olderSeq) continue
       const room = historyBudget - latest.events.length
-      if (room <= 0) continue
+      // Live events filled the budget during the read; only the news that nothing older exists still applies.
+      if (room <= 0 && (page.more || page.events.length > 0)) continue
       // A smaller limit would shrink the server's scan with it, so the page is a full one and only its newest that fit are kept.
       const events = page.events.slice(-room)
       const cut = events.length < page.events.length

@@ -2100,10 +2100,10 @@ the view is mounted and reads `workspace.timeline` backward with
 `types: ["run.status", "coord.message", "coord.message.acked"]` and
 `no_rereads: true`, 1000 a page,
 until it passes the window's start, the log's start or 5000 events per
-workspace; "Older history not loaded" marks the last case. Of a page
-that would pass the budget only the newest events that fit are kept. History counts as read back to
-the page's `older_time` (how far the server read, rereads included), or to
-its first event when a server does not send one. `sync.ts` appends
+workspace; "Older history not loaded" marks the last case. History counts as read back to the page's `older_time` (how far the server
+read, rereads included), or to its first event when a server does not send
+one. Of a page that would pass the budget only the newest events that fit
+are kept, and history then counts as read back to the oldest of those. `sync.ts` appends
 live events of those types, rereads left out, to held history, which keeps a workspace's newest
 5000 and moves its loaded boundary past what it drops; the last view to leave
 drops it, and a server switch or a new signed-in member clears it for a fresh

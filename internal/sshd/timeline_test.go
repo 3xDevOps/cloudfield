@@ -363,7 +363,7 @@ func TestWorkspaceTimelineSaysHowFarBackAFilteredPageRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("older_time %q: %v", page.OlderTime, err)
 	}
-	// The event the read stopped on, a reread, and no earlier one.
+	// The time must be that of the event the read stopped on.
 	var stopped string
 	for _, ev := range readTimeline(t, controlClient(t, e), protocol.WorkspaceTimelineParams{WorkspaceID: string(e.ws.ID), Types: []string{string(events.TypeRunStatus)}}) {
 		if ev.Seq == page.OlderSeq {
