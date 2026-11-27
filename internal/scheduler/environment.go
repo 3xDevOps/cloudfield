@@ -26,6 +26,10 @@ type subpathAPIChecker interface {
 	CheckSubpathAPI(context.Context) error
 }
 
+type subpathVolumeRemover interface {
+	RemoveSubpathVolume(ctx context.Context, hostPath string) error
+}
+
 type imageCacheEnvironmentResolver interface {
 	ImageCacheEnvironment(context.Context, string) (map[string]string, error)
 }

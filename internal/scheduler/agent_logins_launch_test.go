@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -669,4 +670,28 @@ func TestARefusalOnAnAddedLoginIsKeyedByThatLogin(t *testing.T) {
 	if refusedOn() {
 		t.Fatal("a turn that worked on work left its refusal")
 	}
+}
+
+// The configuration copy of a session on an added login is mounted through
+// a volume of its own, which removing the container leaves: it goes with
+// the copy once the session's container does.
+func TestAnAddedLoginSessionsConfigVolumeGoesWithItsContainer(t *testing.T) {
+	e := newLoginShareEnv(t)
+	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	run, err := e.launchOn(t, work, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the session's container", func() bool { return e.rt.byName(string(run.ID)) != nil })
+	dir := filepath.Join(e.sched.accountConfigRoot(), string(run.ID))
+	if err := e.sched.Kill(t.Context(), run.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the configuration copy and its volume removed", func() bool {
+		e.rt.mu.Lock()
+		removed := slices.Contains(e.rt.removedVolumes, dir)
+		e.rt.mu.Unlock()
+		_, statErr := os.Lstat(dir)
+		return removed && errors.Is(statErr, fs.ErrNotExist)
+	})
 }

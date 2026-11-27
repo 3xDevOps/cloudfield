@@ -411,10 +411,9 @@ func requireSubpathAPI(engine, sent string) error {
 // a bind would follow a symlink another container planted in the base after
 // validation, while the engine refuses a volume subpath that leaves it.
 func subpathMount(m Mount) mount.Mount {
-	sum := sha256.Sum256([]byte(m.HostPath))
 	return mount.Mount{
 		Type:     mount.TypeVolume,
-		Source:   "aether-home-" + hex.EncodeToString(sum[:])[:32],
+		Source:   subpathVolumeName(m.HostPath),
 		Target:   m.ContainerPath,
 		ReadOnly: m.ReadOnly,
 		VolumeOptions: &mount.VolumeOptions{
@@ -428,6 +427,22 @@ func subpathMount(m Mount) mount.Mount {
 			},
 		},
 	}
+}
+
+// subpathVolumeName names the volume a subpath mount of hostPath comes from:
+// one per base directory, which removing a container leaves.
+func subpathVolumeName(hostPath string) string {
+	sum := sha256.Sum256([]byte(hostPath))
+	return "aether-home-" + hex.EncodeToString(sum[:])[:32]
+}
+
+// RemoveSubpathVolume removes the volume subpath mounts of hostPath come
+// from, once no container uses it; one that is gone already is no error.
+func (d *Docker) RemoveSubpathVolume(ctx context.Context, hostPath string) error {
+	if _, err := d.cli.VolumeRemove(ctx, subpathVolumeName(hostPath), client.VolumeRemoveOptions{}); err != nil && !cerrdefs.IsNotFound(err) {
+		return fmt.Errorf("runtime: remove the volume of %s: %w", hostPath, err)
+	}
+	return nil
 }
 
 // overlayMount is an anonymous local volume, so Docker mounts the overlay
