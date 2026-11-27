@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/cli"
+	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 )
 
@@ -386,6 +387,28 @@ func loginID(logins []protocol.AgentLogin, name string) (string, error) {
 		return logins[i].ID, nil
 	}
 	return "", fmt.Errorf("you have no login named %q; cloudfield agent logins lists yours", name)
+}
+
+var loginIDForm = regexp.MustCompile(`^` + loginIDText.String() + `$`)
+
+// launchLogin is the login run.launch names for the --login value. An id
+// goes as given, so the retry a launch printed still names its login after
+// a rename or a removal; so does a value on a teammate's account, which
+// only its owner names and the server refuses. A name of one of the
+// caller's own logins resolves here.
+func launchLogin(c *protocol.Client, me, agent, account, value string) (string, error) {
+	if value == string(domain.DefaultLogin) || loginIDForm.MatchString(value) || (account != "" && account != me) {
+		return value, nil
+	}
+	logins, err := listLogins(c, agent)
+	if err != nil {
+		return "", err
+	}
+	id, err := loginID(logins, value)
+	if err != nil {
+		return "", fmt.Errorf("--login: %w", err)
+	}
+	return id, nil
 }
 
 // withLogins runs fn with the caller's logins of Claude Code.

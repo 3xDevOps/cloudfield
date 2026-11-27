@@ -383,3 +383,27 @@ func TestSessionRefusesALoginItWouldNotUse(t *testing.T) {
 		}
 	}
 }
+
+func TestLaunchLoginSendsAnIDAsGiven(t *testing.T) {
+	noList := fakeControlMethods(t, map[string]*fakeReply{})
+	for _, tc := range []struct{ agent, account, value string }{
+		{"codex", "", "default"},
+		{"claude", "", "default"},
+		{"claude", "", "lgn-gone1"},
+		{"claude", "m-ada", "lgn-gone1"},
+		{"claude", "m-bo", "work"},
+	} {
+		if id, err := launchLogin(noList, "m-ada", tc.agent, tc.account, tc.value); err != nil || id != tc.value {
+			t.Errorf("launchLogin(%+v) = %q, %v; want it sent as given without agent.login.list", tc, id, err)
+		}
+	}
+	list := fakeControlMethods(t, map[string]*fakeReply{protocol.MethodAgentLoginList: {result: protocol.AgentLoginListResult{
+		Agent: "claude", Logins: []protocol.AgentLogin{{ID: "default", Name: "default"}, {ID: "lgn-test1", Name: "work"}},
+	}}})
+	if id, err := launchLogin(list, "m-ada", "claude", "m-ada", "work"); err != nil || id != "lgn-test1" {
+		t.Errorf("launchLogin(work) = %q, %v; want its id", id, err)
+	}
+	if _, err := launchLogin(list, "m-ada", "claude", "", "nope"); err == nil || err.Error() != `--login: you have no login named "nope"; cloudfield agent logins lists yours` {
+		t.Errorf("launchLogin(nope) = %v", err)
+	}
+}

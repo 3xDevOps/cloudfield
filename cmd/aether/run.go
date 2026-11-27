@@ -47,7 +47,7 @@ func runRun(args []string) error {
 	permission := fs.String("permission", "", "root, default or isolated: root lets sudo run without asking, default asks you before each sudo, isolated keeps every change outside the checkout to the session (default: default)")
 	workspace := fs.String("workspace", "", "workspace ID or name (default: the only workspace)")
 	account := fs.String("account", "", "member ID whose shared agent account to use")
-	login := fs.String("login", "", "one of your own logins of the agent to launch on, by name; default is the login in your home, and cloudfield agent logins lists the others (default: your first login the order and its switches allow)")
+	login := fs.String("login", "", "one of your own logins of the agent to launch on, by name or id; default is the login in your home, and cloudfield agent logins lists the others (default: your first login the order and its switches allow)")
 	template := fs.String("template", "", "launch a saved task template instead of a prompt")
 	cachedBase := fs.String("cached-base", "", "retry a launch from an exact accepted base commit")
 	fallbackOrder := fs.String("fallback", "", fallbackHelp)
@@ -144,16 +144,9 @@ func runRun(args []string) error {
 		var res protocol.RunLaunchResult
 		params := launchParams(wsID, task, *agent, *mode, *model, *effort, *account, *cachedBase)
 		params.FallbackAccountMemberIDs, params.NoFallback = fallbacks, *noFallback
-		// Only a login's owner names it, so a login named on a teammate's
-		// account goes as given, for the server to refuse.
-		params.Login = *login
-		if *login != "" && (*account == "" || *account == info.Member.ID) {
-			logins, err := listLogins(c, *agent)
-			if err != nil {
+		if *login != "" {
+			if params.Login, err = launchLogin(c, info.Member.ID, *agent, *account, *login); err != nil {
 				return err
-			}
-			if params.Login, err = loginID(logins, *login); err != nil {
-				return fmt.Errorf("--login: %w", err)
 			}
 		}
 		params.Children = *children
