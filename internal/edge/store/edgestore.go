@@ -294,28 +294,33 @@ CREATE TABLE origin_pair_history (
 	signin_origin   TEXT NOT NULL,
 	first_served_at INTEGER NOT NULL,
 	served_at       INTEGER NOT NULL,
+	seq             INTEGER NOT NULL,
 	PRIMARY KEY (relay_origin, signin_origin)
 ) WITHOUT ROWID;
 
 ALTER TABLE device_authorizations ADD COLUMN relay_origin TEXT;
 
-INSERT INTO origin_pair_history (relay_origin, signin_origin, first_served_at, served_at)
-	SELECT relay_origin, signin_origin, served_at, served_at FROM origin_pairs;
+INSERT INTO origin_pair_history (relay_origin, signin_origin, first_served_at, served_at, seq)
+	SELECT relay_origin, signin_origin, served_at, served_at, ROW_NUMBER() OVER (ORDER BY served_at, relay_origin) FROM origin_pairs;
 
 CREATE TRIGGER origin_pair_history_insert AFTER INSERT ON origin_pairs BEGIN
-	UPDATE origin_pair_history SET served_at = NEW.served_at
+	UPDATE origin_pair_history SET served_at = NEW.served_at,
+		seq = (SELECT COALESCE(MAX(seq), 0) + 1 FROM origin_pair_history)
 		WHERE relay_origin = NEW.relay_origin AND signin_origin = NEW.signin_origin;
-	INSERT INTO origin_pair_history (relay_origin, signin_origin, first_served_at, served_at)
-		SELECT NEW.relay_origin, NEW.signin_origin, NEW.served_at, NEW.served_at
+	INSERT INTO origin_pair_history (relay_origin, signin_origin, first_served_at, served_at, seq)
+		SELECT NEW.relay_origin, NEW.signin_origin, NEW.served_at, NEW.served_at,
+			(SELECT COALESCE(MAX(seq), 0) + 1 FROM origin_pair_history)
 		WHERE NOT EXISTS (SELECT 1 FROM origin_pair_history
 			WHERE relay_origin = NEW.relay_origin AND signin_origin = NEW.signin_origin);
 END;
 
 CREATE TRIGGER origin_pair_history_update AFTER UPDATE ON origin_pairs BEGIN
-	UPDATE origin_pair_history SET served_at = NEW.served_at
+	UPDATE origin_pair_history SET served_at = NEW.served_at,
+		seq = (SELECT COALESCE(MAX(seq), 0) + 1 FROM origin_pair_history)
 		WHERE relay_origin = NEW.relay_origin AND signin_origin = NEW.signin_origin;
-	INSERT INTO origin_pair_history (relay_origin, signin_origin, first_served_at, served_at)
-		SELECT NEW.relay_origin, NEW.signin_origin, NEW.served_at, NEW.served_at
+	INSERT INTO origin_pair_history (relay_origin, signin_origin, first_served_at, served_at, seq)
+		SELECT NEW.relay_origin, NEW.signin_origin, NEW.served_at, NEW.served_at,
+			(SELECT COALESCE(MAX(seq), 0) + 1 FROM origin_pair_history)
 		WHERE NOT EXISTS (SELECT 1 FROM origin_pair_history
 			WHERE relay_origin = NEW.relay_origin AND signin_origin = NEW.signin_origin);
 END;

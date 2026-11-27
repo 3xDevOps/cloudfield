@@ -153,7 +153,7 @@ func (s *Service) retiredSignIns(ctx context.Context, retired []Retired, pairing
 	lastAs := map[role]edgestore.Pairing{}
 	for _, p := range pairings {
 		for _, k := range []role{{originHost(p.RelayOrigin), true}, {originHost(p.SigninOrigin), false}} {
-			if l, ok := lastAs[k]; !ok || p.ServedAt.After(l.ServedAt) {
+			if l, ok := lastAs[k]; !ok || p.Seq > l.Seq {
 				lastAs[k] = p
 			}
 		}
@@ -164,7 +164,7 @@ func (s *Service) retiredSignIns(ctx context.Context, retired []Retired, pairing
 		signinHosts[signin] = true
 		for _, k := range []role{{relay, false}, {signin, true}} {
 			wrong, ok := lastAs[k]
-			if right, rightOK := lastAs[role{k.host, !k.relay}]; ok && (!rightOK || wrong.ServedAt.After(right.ServedAt)) {
+			if right, rightOK := lastAs[role{k.host, !k.relay}]; ok && (!rightOK || wrong.Seq > right.Seq) {
 				return nil, fmt.Errorf("edge: --retired-pairs names %s as a sign-in origin and %s as a relay origin, but the edge last served them the other way round, "+
 					"in the pair %s %s: write <sign-in origin> <relay origin> <replacement relay origin>", r.SigninOrigin, r.RelayOrigin, wrong.SigninOrigin, wrong.RelayOrigin)
 			}

@@ -587,11 +587,12 @@ func TestRetiredContradictsRecordedPair(t *testing.T) {
 
 // TestRetiredHostChangedRole retires a pair whose relay host was, before
 // it served as that relay, the sign-in host of a relay the edge no longer
-// serves: the newer pairing decides.
+// serves: the newer pairing decides, also when the clock stepped back
+// between the two.
 func TestRetiredHostChangedRole(t *testing.T) {
 	h := newRecordingHarness(t)
-	for _, pairs := range []map[string]string{{"https://relayx.example.test": "https://relay9.example.test"}, {"https://relay9.example.test": "https://signin9.example.test"}} {
-		h.clock.Advance(time.Minute)
+	for i, pairs := range []map[string]string{{"https://relayx.example.test": "https://relay9.example.test"}, {"https://relay9.example.test": "https://signin9.example.test"}} {
+		h.clock.Advance(time.Duration(1-2*i) * time.Hour)
 		if _, err := h.svc.store.RecordPairs(context.Background(), edgestore.Run{Pairs: pairs}, h.clock.Now()); err != nil {
 			t.Fatal(err)
 		}

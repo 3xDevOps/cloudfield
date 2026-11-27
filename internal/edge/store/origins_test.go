@@ -760,8 +760,8 @@ func TestRecordingPeriodClockStep(t *testing.T) {
 }
 
 // TestPairingsKeepEarlierSigninOrigins pairs one relay origin with two
-// sign-in origins in turn: Pairings lists both, and a pairing recorded
-// before origin_pair_history existed, which only origin_pairs holds.
+// sign-in origins in turn: Pairings lists both, and a pairing written to
+// origin_pairs by a binary that does not know the history.
 func TestPairingsKeepEarlierSigninOrigins(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()
@@ -777,7 +777,7 @@ func TestPairingsKeepEarlierSigninOrigins(t *testing.T) {
 	}
 	got, err := s.Pairings(ctx)
 	for i := range got {
-		got[i].ServedAt = time.Time{}
+		got[i].Seq = 0
 	}
 	want := []Pairing{
 		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth-early.example.test"},
@@ -791,7 +791,8 @@ func TestPairingsKeepEarlierSigninOrigins(t *testing.T) {
 
 // TestPairingHistoryAcrossUpgrade keeps a pairing that only origin_pairs
 // held when the database is migrated to origin_pair_history, and one that
-// a binary without it writes afterwards, as after a rollback.
+// a binary without it writes afterwards, as after a rollback, with a
+// clock stepped back: Seq orders them as they were written.
 func TestPairingHistoryAcrossUpgrade(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "edge.db")
 	old := openSteps(t, path, migrations[:2])
@@ -808,13 +809,10 @@ func TestPairingHistoryAcrossUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := s.Pairings(context.Background())
-	for i := range got {
-		got[i].ServedAt = time.Time{}
-	}
 	want := []Pairing{
-		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth1.example.test"},
-		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth2.example.test"},
-		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth3.example.test"},
+		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth1.example.test", Seq: 1},
+		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth2.example.test", Seq: 2},
+		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth3.example.test", Seq: 3},
 	}
 	if err != nil || !slices.Equal(got, want) {
 		t.Errorf("Pairings = %v, %v; want %v", got, err, want)

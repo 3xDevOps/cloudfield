@@ -163,19 +163,17 @@ func (s *Store) SignInOrigins(ctx context.Context) ([]string, error) {
 }
 
 // Pairing is a relay origin and a sign-in origin the edge recorded
-// serving together, last at ServedAt.
+// serving together. Seq orders pairings by when the edge last recorded
+// them, whatever the clock said.
 type Pairing struct {
 	RelayOrigin, SigninOrigin string
-	ServedAt                  time.Time
+	Seq                       int64
 }
 
 // Pairings lists every pairing the edge recorded serving, current and
-// earlier. origin_pairs also holds a pairing written to a database
-// restored from before origin_pair_history existed.
+// earlier.
 func (s *Store) Pairings(ctx context.Context) ([]Pairing, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT h.relay_origin, h.signin_origin, MAX(h.served_at)
-		FROM (SELECT relay_origin, signin_origin, served_at FROM origin_pair_history
-			UNION ALL SELECT relay_origin, signin_origin, served_at FROM origin_pairs) h GROUP BY 1, 2 ORDER BY 1, 2`)
+	rows, err := s.db.QueryContext(ctx, `SELECT relay_origin, signin_origin, seq FROM origin_pair_history ORDER BY 1, 2`)
 	if err != nil {
 		return nil, fmt.Errorf("edgestore: list origin pairings: %w", err)
 	}
@@ -183,11 +181,9 @@ func (s *Store) Pairings(ctx context.Context) ([]Pairing, error) {
 	var out []Pairing
 	for rows.Next() {
 		var p Pairing
-		var servedAt int64
-		if err := rows.Scan(&p.RelayOrigin, &p.SigninOrigin, &servedAt); err != nil {
+		if err := rows.Scan(&p.RelayOrigin, &p.SigninOrigin, &p.Seq); err != nil {
 			return nil, fmt.Errorf("edgestore: list origin pairings: %w", err)
 		}
-		p.ServedAt = fromUnix(servedAt)
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {
