@@ -294,6 +294,36 @@ func TestConnectorListAtRetiringAddress(t *testing.T) {
 					t.Errorf("connector at %s: notice %s, want %s", ids[c.ID], got, wantJSON)
 				}
 			}
+			// The wire leaves out notice, url and date when they are empty.
+			var raw struct {
+				Connectors []map[string]json.RawMessage `json:"connectors"`
+			}
+			if err := e.device.Call(protocol.MethodConnectorList, struct{}{}, &raw); err != nil {
+				t.Fatal(err)
+			}
+			for _, c := range raw.Connectors {
+				var id string
+				_ = json.Unmarshal(c["id"], &id)
+				want := tt.want.notices[ids[id]]
+				n, has := c["notice"]
+				if has != (want != nil) {
+					t.Errorf("connector at %s: notice key present %v, want %v", ids[id], has, want != nil)
+					continue
+				}
+				if !has {
+					continue
+				}
+				var keys map[string]json.RawMessage
+				if err := json.Unmarshal(n, &keys); err != nil {
+					t.Fatal(err)
+				}
+				if _, url := keys["url"]; url != (want.URL != "") {
+					t.Errorf("connector at %s: url key present %v in %s", ids[id], url, n)
+				}
+				if _, date := keys["date"]; date != (want.Date != "") {
+					t.Errorf("connector at %s: date key present %v in %s", ids[id], date, n)
+				}
+			}
 			if tt.version == 0 {
 				return
 			}
@@ -571,5 +601,61 @@ func TestToolResultWithoutANoteReadsNoticesOncePerMinute(t *testing.T) {
 	call()
 	if got := e.edge.reads.Load() - before; got != 2 {
 		t.Fatalf("read the notices %d times after a minute, want 2", got)
+	}
+}
+
+func TestNoNoteMarkIsPerConnector(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	ada, err := e.db.GetMemberByIdentity(ctx, "github", "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bea := &domain.Member{DisplayName: "Bea", TailnetLogin: "bea@example.test", Color: "#3cb44b", Role: domain.RoleCollaborator}
+	if err := e.db.CreateMember(ctx, bea); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.db.BindIdentity(ctx, &domain.Identity{Member: bea.ID, Provider: "github", Subject: "2", Login: "bea"}); err != nil {
+		t.Fatal(err)
+	}
+	universal := e.origin + edgeproto.PathUniversalMCP
+	now := time.Now()
+	// at is a session of a connector of member added at the universal URL.
+	at := func(member domain.MemberID, token string) *mcp.ClientSession {
+		t.Helper()
+		c := &store.Connector{Member: member, ClientID: e.clientID, ClientName: "Test client", RedirectHost: e.clientHost,
+			Resource: universal, Scopes: []string{"read"}, CreatedAt: now}
+		if err := e.db.CreateConnector(ctx, c, store.ConnectorTokens{Access: tokenHash(token), AccessExpiresAt: now.Add(time.Hour),
+			Refresh: tokenHash(token + "r"), RefreshExpiresAt: now.Add(time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+		client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
+		httpClient := &http.Client{Transport: &oauth2.Transport{Source: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})}}
+		cs, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: universal, HTTPClient: httpClient, DisableStandaloneSSE: true}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = cs.Close() })
+		return cs
+	}
+	blocks := func(cs *mcp.ClientSession) int {
+		t.Helper()
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "aether_list_workspaces"})
+		if err != nil || res.IsError {
+			t.Fatalf("aether_list_workspaces = %+v %v", res, err)
+		}
+		return len(res.Content)
+	}
+	unlinked, linked := at(ada.ID, "universal-ada"), at(bea.ID, "universal-bea")
+	if _, err := e.db.UnlinkIdentity(ctx, ada.ID, "github", "1"); err != nil {
+		t.Fatal(err)
+	}
+	e.edge.version.Store(int64(edgeproto.VersionRelayOrigin))
+	e.edge.set([]string{e.origin, newRelay}, stored(false, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay}))
+	if n := blocks(unlinked); n != 1 {
+		t.Fatalf("a member without GitHub got %d content blocks, want 1", n)
+	}
+	if n := blocks(linked); n != 2 {
+		t.Fatalf("another member's connector at the same URL got %d content blocks within the minute, want 2", n)
 	}
 }
