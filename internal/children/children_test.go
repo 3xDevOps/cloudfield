@@ -1123,14 +1123,27 @@ func TestSubsessionInheritsTheParentsLinearIssue(t *testing.T) {
 	}
 }
 
-// A subsession that will run on its parent's added login is not refused
-// because the account's default login is signed out.
+// A subsession that will run on its parent's added login is not refused,
+// nor listed as not signed in, because the account's default login is
+// signed out.
 func TestASubsessionOnAnAddedLoginIgnoresASignedOutDefault(t *testing.T) {
 	h := newHarness(t)
 	h.agents.missing[h.ada.ID] = true
 	parent := &domain.Run{WorkspaceID: h.ws.ID, MemberID: h.ada.ID, AccountMemberID: h.ada.ID, AccountLogin: "lgn-work000000", Task: "parent", Harness: "claude", Mode: domain.LaunchACP, Status: domain.RunRunning}
 	if err := h.db.CreateRun(h.ctx, parent); err != nil {
 		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(protocol.ChildOptionsParams{})
+	out, err := h.svc.HandleAgent(h.ctx, parent.ID, protocol.MethodChildOptions, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]string{}
+	for _, c := range out.(protocol.ChildOptionsResult).Choices {
+		listed[c.Harness] = c.Status
+	}
+	if listed["claude"] != choiceReady || listed["codex"] != choiceNotSignedIn {
+		t.Fatalf("options = %v; want claude ready on the parent's login, codex not signed in", listed)
 	}
 	h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "claude", Task: "on work"})
 	if _, err := h.start(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "on the default"}); code(err) != protocol.CodeDenied || !strings.Contains(err.Error(), "Ada is not signed in to codex") {
