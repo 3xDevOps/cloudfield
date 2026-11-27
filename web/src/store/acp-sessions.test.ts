@@ -11,6 +11,14 @@ const frames = (...items: SessionItem[]) => items.map((it) => ({ seq: it.seq, it
 beforeEach(resetItems)
 
 describe('enhanced sessions in the store', () => {
+  it('marks a session whose agent is still starting until an ack finds it live', () => {
+    const store = createRootStore()
+    store.getState().acpAck('run_1', { ok: true, seq: 0, replay: 0, epoch: 0, live: false, starting: true, has_control: false })
+    expect(store.getState().acpSessions.run_1!.starting).toBe(true)
+    store.getState().acpAck('run_1', { ok: true, seq: 0, replay: 0, epoch: 0, live: true, has_control: false, state: state() })
+    expect(store.getState().acpSessions.run_1).toMatchObject({ live: true, starting: false })
+  })
+
   it('applies the ack and frames, skips duplicates and keeps requests and options current', () => {
     const store = createRootStore()
     const request = { id: 'q', kind: 'permission' as const, title: 'go test', status: 'pending' as const }

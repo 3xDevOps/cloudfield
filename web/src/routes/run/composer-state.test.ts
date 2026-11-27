@@ -78,6 +78,7 @@ describe('the Enhanced composer gate', () => {
     canReopen: true,
     refused: undefined,
     sessionLive: true,
+    starting: false,
     pending: 0,
     hasLease: true,
   }
@@ -97,6 +98,11 @@ describe('the Enhanced composer gate', () => {
       expect(composerBlock({ ...parked, status: 'abandoned', container_retained_until: until }, true, true))
         .toBe(`This session has finished. Relaunch it before ${new Date(until).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })} to continue the chat and files.`)
     }
+  })
+
+  it('takes a message while the launched agent is still starting', () => {
+    expect(enhancedBlock({ ...open, sessionLive: false })?.reason).toBe('The agent is not running.')
+    expect(enhancedBlock({ ...open, sessionLive: false, starting: true })).toBeNull()
   })
 
   it('keeps Interrupt for the lease holder while a request waits', () => {

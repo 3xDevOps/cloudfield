@@ -55,6 +55,8 @@ export interface AcpSession {
   stateSeq: number
   pending: SessionRequest[]
   live: boolean
+  /** The ack's `starting`. */
+  starting: boolean
   stream: StreamState
   streamError?: string
   control?: ControlMetadata
@@ -121,6 +123,7 @@ const emptySession: AcpSession = {
   stateSeq: 0,
   pending: [],
   live: false,
+  starting: false,
   stream: 'connecting',
   olderLoading: false,
   touched: 0,
@@ -230,7 +233,7 @@ export const createSessionsSlice: SliceCreator<SessionsSlice> = (set, get) => ({
       const base = restart
         ? { turns: [], agents: noAgents, seq: 0, oldestSeq: 0, more: (ack.oldest_seq ?? 0) > 1, historyGeneration: held.historyGeneration + 1, olderLoading: false, olderError: undefined }
         : {}
-      return patchSession(s, runID, { ...base, truncatedBefore: ack.truncated_before ?? (ack.epoch === held.epoch && held.truncatedBefore), epoch: ack.epoch, live: ack.live, state: ack.state ?? null, stateSeq: ack.seq, pending: ack.state?.pending ?? [] })
+      return patchSession(s, runID, { ...base, truncatedBefore: ack.truncated_before ?? (ack.epoch === held.epoch && held.truncatedBefore), epoch: ack.epoch, live: ack.live, starting: ack.starting ?? false, state: ack.state ?? null, stateSeq: ack.seq, pending: ack.state?.pending ?? [] })
     }),
   acpFrames: (runID, frames) =>
     set((s) => {

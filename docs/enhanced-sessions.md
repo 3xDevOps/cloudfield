@@ -178,6 +178,10 @@ Reloading the page discards it. While the agent reconnects, the composer keeps
 its shape and Send stays disabled until it is back; an empty box and Send's
 tooltip say why.
 
+A launched session opens before its agent has started. Until it has, the empty
+box reads **Message the agent while it starts**, and a message you send shows
+**Queued** until the agent takes it.
+
 Steering, answering, interrupting and changing options need control of the session.
 The owner's desktop tab takes it when it first shows Chat and nobody holds
 it. Without control you still get **Send**, and the message waits for the
