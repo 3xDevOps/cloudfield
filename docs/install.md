@@ -826,10 +826,16 @@ aether         /usr/local/bin/aether  v0.8.7-beta.13
 
 With `session-runtime vm`, `sudo cloudfield-server update` has the new binary run
 `cloudfield-server vm install` before the restart, and prints its steps, so new VMs
-boot the release's Cloud Hypervisor and guest kernel. Running VMs keep theirs,
-and their helper disk, until they stop, and a VM saved to disk wakes on the
-new Cloud Hypervisor: v55.0 wakes a VM that v54.1 saved. Ctrl-C during that
-step undoes the update. Before it starts any VM, a server started by its systemd unit also
+boot the release's Cloud Hypervisor and guest kernel; Ctrl-C during that step
+undoes the update. Running VMs keep theirs,
+and their helper disk, until they stop. A VM saved to disk wakes on the Cloud
+Hypervisor in place at its wake, and an older one may not load what a newer
+one saved: v54.1 exits on a VM saved by v55.0 with
+`Error deserialising: trailing characters`. After a rollback across such a
+change, each VM saved since the update fails its restore, and its session
+either starts again from its disk without its processes or stays asleep
+until the newer release is back
+([failure-handling.md](failure-handling.md#sessions-in-vms)). Before it starts any VM, a server started by its systemd unit also
 runs the `/dev/kvm` check and then puts
 its release's Cloud Hypervisor and kernel in place, downloading the kernel only
 when the one there came from another release. That covers an update from a
