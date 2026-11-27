@@ -22,6 +22,7 @@ import type { RoomMessage } from '@/lib/types'
 import { modeLabel } from '@/routes/run/agent-name'
 import type { AgentTerminal } from '@/routes/run/agent-terminal'
 import { ChildRuns } from '@/routes/run/child-runs'
+import { RetryRead } from '@/routes/run/retry-read'
 import { usePrimaryAction, type RunNavigation } from '@/routes/run/header'
 import { RunLinearIssue } from '@/routes/run/linear-issue'
 import { NoteComposer } from '@/routes/run/note-composer'
@@ -101,7 +102,7 @@ function AgentMessages({ run, inset }: { run: RunRecord; inset: boolean }) {
       {error && (
         <div role="alert" className="flex items-center gap-2 text-ui-sm text-state-failed">
           <span className="min-w-0 flex-1 break-words">{errorSentence(error)}</span>
-          <Button size="sm" variant="quiet" disabled={retrying} onClick={() => void retry()}>{retrying ? 'Retrying…' : 'Retry'}</Button>
+          <RetryRead retrying={retrying} onRetry={() => void retry()} />
         </div>
       )}
       {all && olderCursor && (

@@ -13,6 +13,7 @@ import { memberName } from '@/lib/member-name'
 import { runLabel } from '@/lib/status'
 import type { Child, ChildState, ChildUsage, RunChildrenResult } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { RetryRead } from '@/routes/run/retry-read'
 import { limitsText } from '@/routes/settings/children'
 import { useStore } from '@/store'
 import { useChildTouches } from '@/store/child-touches'
@@ -201,7 +202,7 @@ export function ChildRuns({ run, inset, client = api }: { run: RunRecord; inset:
       {error && (
         <div role="alert" className="flex items-center gap-2 text-ui-sm text-state-failed">
           <span className="min-w-0 flex-1 break-words">{error}</span>
-          <Button size="sm" variant="quiet" disabled={retrying} onClick={retry}>{retrying ? 'Retrying…' : 'Retry'}</Button>
+          <RetryRead retrying={retrying} onRetry={retry} />
         </div>
       )}
       {result && (
