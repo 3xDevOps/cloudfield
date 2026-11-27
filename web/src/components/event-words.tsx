@@ -277,7 +277,7 @@ const describers: Record<EventType, (p: Payload, event: Event) => ReactNode> = {
     const added = (id: unknown) => text(id) !== '' && text(id) !== 'default'
     const logins = added(p.login) || added(p.previous_login)
     const login = (id: unknown, name: unknown) => `login ${text(name) || (added(id) ? text(id) : 'default')}`
-    const perUse = p.per_use === true && <PerUseBadge className="ml-1.5 align-middle" />
+    const perUse = p.per_use === true && <PerUseBadge className="ml-1.5 align-middle" title={`Billed per use to ${login(p.login, p.login_name)}`} />
     if (logins && text(p.account_member_id) === text(p.previous_account_member_id)) {
       return <>Moved from {login(p.previous_login, p.previous_login_name)} to {login(p.login, p.login_name)}{perUse}</>
     }

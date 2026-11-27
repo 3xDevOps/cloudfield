@@ -116,7 +116,46 @@ describe('run frame', () => {
   it('names the login a run is on, and badges it when it is billed per use', async () => {
     open({ account_member_id: alice.id, account_login: 'lgn-console0001', account_login_name: 'console', account_login_per_use: true })
     await waitFor(() => expect(screen.getByRole('banner').textContent).toContain('On your account, login console'))
-    expect(within(screen.getByRole('banner')).getByText('Billed per use').dataset.slot).toBe('badge')
+    expect(within(screen.getByRole('banner')).getByTitle('Billed per use to your account, login console').dataset.slot).toBe('badge')
+  })
+
+  it("keeps whose account and which login a teammate's session pays with in a wide header, before the mode drops", async () => {
+    open({ account_member_id: bob.id, account_login: 'lgn-console0001', account_login_name: 'console', account_login_per_use: true })
+    const banner = await screen.findByRole('banner')
+    const line = await within(banner).findByText("On Bob's account, login console")
+    // Outside the parts that wrap out of sight, so a long reason or a narrow row cannot hide it.
+    expect(line.closest('.flex-wrap')).toBeNull()
+    expect(line.title).toBe("On Bob's account, login console")
+    const badge = within(banner).getByTitle("Billed per use to Bob's account, login console")
+    expect(within(badge).getByText('Billed per use')).toBeDefined()
+  })
+
+  it('names who pays in the badge itself in a narrow tile, for a teammate and for the owner', async () => {
+    const measure = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.dataset.slot === 'pane-header' ? DOMRect.fromRect({ width: 420, height: 32 }) : measure.call(this)
+    })
+    const view = open({ account_member_id: bob.id, account_login: 'lgn-console0001', account_login_name: 'console', account_login_per_use: true })
+    let badge = await within(screen.getByRole('banner')).findByTitle("Billed per use to Bob's account, login console")
+    expect(within(badge).getByText('Billed per use · Bob')).toBeDefined()
+    expect(within(badge).getByText("Billed per use to Bob's account, login console").className).toContain('sr-only')
+    expect(screen.queryByText("On Bob's account, login console")).toBeNull()
+    expect(screen.getByRole('banner').textContent).not.toContain('Standard')
+    view.unmount()
+
+    open({ account_member_id: alice.id, account_login: 'lgn-console0001', account_login_name: 'console', account_login_per_use: true })
+    badge = await within(screen.getByRole('banner')).findByTitle('Billed per use to your account, login console')
+    expect(within(badge).getByText('Billed per use · your account')).toBeDefined()
+  })
+
+  it("keeps a teammate's account and login in a narrow tile when the login is not billed per use", async () => {
+    const measure = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.dataset.slot === 'pane-header' ? DOMRect.fromRect({ width: 420, height: 32 }) : measure.call(this)
+    })
+    open({ account_member_id: bob.id, account_login: 'lgn-work0000001', account_login_name: 'work' })
+    expect(await within(screen.getByRole('banner')).findByText("On Bob's account, login work")).toBeDefined()
+    expect(screen.getByRole('banner').textContent).not.toContain('Standard')
   })
 
   it('names a removed login by its id, as the activity line does', async () => {
@@ -134,7 +173,7 @@ describe('run frame', () => {
     open({ account_member_id: alice.id, account_login: 'lgn-console0001', account_login_name: 'console', account_login_per_use: true })
     const line = (await screen.findByText(/^On your account, login console/)).closest('p')!
     expect(line.className).not.toContain('truncate')
-    expect(within(line).getByText('Billed per use').dataset.slot).toBe('badge')
+    expect(within(line).getByTitle('Billed per use to your account, login console').dataset.slot).toBe('badge')
     expect(screen.getByRole('banner').textContent).not.toContain('console')
   })
 

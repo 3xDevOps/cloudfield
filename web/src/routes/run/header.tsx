@@ -15,7 +15,7 @@ import { TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip } from '@/components/ui/tooltip'
 import { StatusDot } from '@/components/ui/status-dot'
 import { useIsMobile } from '@/lib/breakpoints'
-import { useRunAccountWords } from '@/lib/run-account'
+import { useRunAccountOwner, useRunAccountWords, useRunPayer } from '@/lib/run-account'
 import { extraRepoCount, repoLabel } from '@/lib/repos'
 import { isSudo } from '@/lib/run-requests'
 import type { AgentInfo } from '@/lib/types'
@@ -123,8 +123,11 @@ function WaitLine({ run }: { run: RunRecord }) {
   )
 }
 
-/** The state's dot and label, for which `chip` stands in, then on a wide row the reason and what the session runs as. */
-function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord; agentName: string; narrow: boolean; controls: boolean; chip?: React.ReactNode }) {
+/**
+ * The state's dot and label, for which `chip` stands in, then on a wide row the reason and what the session runs as.
+ * `compact` is a row whose views show as icons, where the per-use badge names who pays instead of the account line.
+ */
+function StateLine({ run, agentName, narrow, compact, controls, chip }: { run: RunRecord; agentName: string; narrow: boolean; compact: boolean; controls: boolean; chip?: React.ReactNode }) {
   const presented = useRunPresentation(run)
   const asks = useNeedsYouRuns([run.id]).has(run.id)
   const presentation = run.switching
@@ -146,6 +149,10 @@ function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord;
     .filter(Boolean)
     .join(' · ')
   const account = useRunAccountWords(run)
+  const payer = useRunPayer(run)
+  const teammate = useRunAccountOwner(run) !== null
+  // Whose account pays stays in sight at every width: the parts that wrap out of sight go first.
+  const pinned = account !== null && (payer !== null || teammate)
   const mode = modeLabel[run.mode] ?? run.mode
   const watch = useStore((s) => runWatch(s, run.id))
   const navigate = useStore((s) => s.navigate)
@@ -192,6 +199,12 @@ function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord;
                 <span className="min-w-0 truncate" title={run.repos!.map((repo) => repo.name).join(', ')}>{repoLabel(run.repos![0]!.name, run)}</span>
               </span>
             )}
+            {account && !pinned && (
+              <span className={part}>
+                <span aria-hidden>·</span>
+                <span className="min-w-0 truncate">{account}</span>
+              </span>
+            )}
             <span className={part}>
               <span aria-hidden>·</span>
               <span className="min-w-0 truncate" title={[agentName, mode, run.model, run.effort].filter(Boolean).join(' · ')}>
@@ -199,12 +212,6 @@ function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord;
                 {mode}
               </span>
             </span>
-            {account && (
-              <span className={part}>
-                <span aria-hidden>·</span>
-                <span className="min-w-0 truncate">{account}</span>
-              </span>
-            )}
             {run.via && (
               <span className={part}>
                 <span aria-hidden>·</span>
@@ -214,8 +221,11 @@ function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord;
           </>
         )}
       </div>
+      {pinned && !(compact && payer) && (
+        <span className="min-w-0 truncate text-ui-sm text-muted" title={account}>{account}</span>
+      )}
       {/* What the session costs stays when every other part has gone. */}
-      {run.account_login_per_use && <PerUseBadge className="shrink-0" />}
+      {payer && <PerUseBadge className="shrink-0" payer={compact ? payer.payer : undefined} title={payer.title} />}
       {!narrow && run.permission && run.permission !== 'default' && (
         <Badge tone={run.permission === 'root' ? 'needs-you' : 'neutral'} className="shrink-0" title={permissions.find((p) => p.value === run.permission)?.detail}>{permissionLabel(run.permission)}</Badge>
       )}
@@ -422,7 +432,7 @@ export function RunHeader({
       <header ref={rowRef} data-slot="pane-header" className="@container/views relative flex h-8 shrink-0 items-center gap-1.5 border-b border-seam px-2 coarse:h-11">
         <Heading tabIndex={-1} className="sr-only">{runLabel(run)}</Heading>
         <ViewSwitch runId={run.id} view={view} views={views} go={nav.go} arrows={arrows} onArrow={onArrow} icons={icons} />
-        <StateLine run={run} agentName={agentName} narrow={narrow} controls={controls} chip={controls && !narrow ? workflow : undefined} />
+        <StateLine run={run} agentName={agentName} narrow={narrow} compact={icons} controls={controls} chip={controls && !narrow ? workflow : undefined} />
         {controls && (
           <div role="toolbar" aria-label="Session actions" className="flex shrink-0 items-center gap-1">
             {!narrow && pullRequest.status}

@@ -10,7 +10,7 @@ import { StatusDot } from '@/components/ui/status-dot'
 import { TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { coarsePointer, useMediaQuery } from '@/lib/hooks'
 import { useKeyboardUp } from '@/lib/keyboard-inset'
-import { useRunAccountLine } from '@/lib/run-account'
+import { useRunAccountLine, useRunPayer } from '@/lib/run-account'
 import { cn } from '@/lib/utils'
 import { runLabel, stateName, toneOf } from '@/lib/status'
 import { historyDepth, redirectRoute, sessionEntry } from '@/lib/url-state'
@@ -78,6 +78,7 @@ export function PhoneRunHeader({ run, view, views, nav, agentName, keyboard, pri
   ]
   const state = run.switching ? `Switching to ${modeLabel[run.switching] ?? run.switching}…` : stateName(shown)
   const account = useRunAccountLine(run)
+  const payer = useRunPayer(run)
 
   return (
     <>
@@ -102,7 +103,7 @@ export function PhoneRunHeader({ run, view, views, nav, agentName, keyboard, pri
         {primary && !keyboard && <Button size="sm" variant={asking && view === 'session' ? 'secondary' : 'primary'} onClick={primary.act}>{primary.label}</Button>}
         <RunActions run={run} compact views={[...elsewhere, ...panels]} extra={extra} />
       </header>
-      {account && !keyboard && <p className="break-words pr-3 pb-1 pl-9 text-ui-sm text-muted coarse:pl-13">{account}{run.account_login_per_use && <PerUseBadge className="ml-1.5" />}</p>}
+      {account && !keyboard && <p className="break-words pr-3 pb-1 pl-9 text-ui-sm text-muted coarse:pl-13">{account}{payer && <PerUseBadge className="ml-1.5" title={payer.title} />}</p>}
       {/* Folded, the tabs stay mounted out of sight: each view's panel is labelled by its tab. */}
       <div className={keyboard ? 'sr-only' : 'flex h-11 shrink-0 items-stretch border-b border-seam'}>
         <TabsList aria-label="Session views" className="h-11 min-w-0 flex-1 gap-0 coarse:h-11">
