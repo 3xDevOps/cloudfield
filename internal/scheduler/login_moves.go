@@ -3,12 +3,14 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/fallback"
+	"github.com/3xDevOps/cloudfield/internal/ptyhost"
 	"github.com/3xDevOps/cloudfield/internal/quota"
 )
 
@@ -145,4 +147,40 @@ func (s *Scheduler) triedLogins(ctx context.Context, f *UsageFallback, run *doma
 		usable = first.UTC().Format(time.RFC3339)
 	}
 	return "; logins tried: " + strings.Join(names, ", ") + "; the first is usable again at " + usable
+}
+
+// billedPerUse says that account's login is billed per use, when it is an
+// added Console login.
+func (s *Scheduler) billedPerUse(ctx context.Context, account domain.Account, agent string) (string, bool) {
+	if !account.Login.Added() || s.cfg.Logins == nil {
+		return "", false
+	}
+	identity, err := s.cfg.Logins.Identity(account.Member, agent, account.Login)
+	if err != nil || !identity.PerUse() {
+		return "", false
+	}
+	return s.accountLabel(ctx, account, agent) + "'s account is billed per use.", true
+}
+
+// annotateRun writes text to the run's terminal transcript.
+func (s *Scheduler) annotateRun(ctx context.Context, run domain.RunID, text string) {
+	if err := s.cfg.PTY.Annotate(context.WithoutCancel(ctx), ptyhost.RunSession(run), "Cloudfield", "", text); err != nil {
+		slog.Warn("scheduler: note in the session's terminal", "run", run, "error", err)
+	}
+}
+
+// notePerUse says in a session that launched on a login billed per use, in
+// its log and its room, that it is billed per use. An Enhanced session's
+// notice was written before its agent started.
+func (s *Scheduler) notePerUse(ctx context.Context, run *domain.Run, billed string) {
+	if !run.ACP {
+		s.annotateRun(ctx, run.ID, billed)
+	}
+	f := s.usageFallbackSeam()
+	if f == nil || f.Note == nil {
+		return
+	}
+	if err := f.Note(ctx, run, billed, string(run.ID)+":per-use"); err != nil {
+		slog.Warn("scheduler: post the login billed per use to the room", "run", run.ID, "error", err)
+	}
 }

@@ -910,8 +910,13 @@ func (s *Scheduler) replaceContainer(ctx context.Context, entry *supervised, f *
 	if err != nil {
 		return failed(err)
 	}
+	billed, perUse := s.billedPerUse(ctx, to, run.Harness)
 	if run.ACP {
-		s.acp.switchNotice(run.ID, "info", "Continued on "+toName+"'s account", m.because(fromName)+".")
+		description := m.because(fromName) + "."
+		if perUse {
+			description += " " + billed
+		}
+		s.acp.switchNotice(run.ID, "info", "Continued on "+toName+"'s account", description)
 	}
 
 	ws, err := s.cfg.Store.GetWorkspace(ctx, run.WorkspaceID)
@@ -986,8 +991,14 @@ func (s *Scheduler) replaceContainer(ctx context.Context, entry *supervised, f *
 			return usageNoFallback, fmt.Sprintf("%sthe session is on %s's account and its conversation could not be restored: %v", m.stopped(fromName), toName, err)
 		}
 	}
+	if perUse && !run.ACP {
+		s.annotateRun(ctx, run.ID, billed)
+	}
 	if f.Note != nil {
 		body := fmt.Sprintf("Continued on %s's account because %s.", toName, m.because(fromName))
+		if perUse {
+			body += " " + billed
+		}
 		if err := f.Note(ctx, run, body, fmt.Sprintf("%s:account:%d", run.ID, seq)); err != nil {
 			slog.Warn("scheduler: post the account move to the room", "run", run.ID, "error", err)
 		}

@@ -14,6 +14,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/acphost/acpmock"
 	"github.com/3xDevOps/cloudfield/internal/agentstatus"
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/events"
 	"github.com/3xDevOps/cloudfield/internal/memberhome"
 	"github.com/3xDevOps/cloudfield/internal/quota"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
@@ -375,6 +376,82 @@ func TestATeammatesSignalMovesOnlyOnAFreshRead(t *testing.T) {
 			if usage.freshReads(work) == 0 {
 				t.Fatal("the move did not read the work login afresh")
 			}
+		})
+	}
+}
+
+// A session that lands on a login billed per use says so in its log, its
+// room and its run.account event: at launch, and when a move takes it
+// there, Enhanced and Standard.
+func TestALoginBilledPerUseIsSaidSo(t *testing.T) {
+	t.Parallel()
+	const billed = "Ada (console)'s account is billed per use."
+	for _, how := range []string{"launch", "move", "standard move"} {
+		t.Run(how, func(t *testing.T) {
+			t.Parallel()
+			logins, err := memberhome.NewLogins(filepath.Join(t.TempDir(), "logins"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			standard := how == "standard move"
+			fe, _, notes := newFallbackEnv(t, func(cfg *Config) {
+				cfg.Logins = logins
+				if standard {
+					delete(cfg.Harnesses, "claude")
+				} else {
+					enhancedClaude(cfg)
+				}
+			})
+			e := &loginShareEnv{shareEnv: fe, logins: logins}
+			console := e.addLogin(t, e.member.ID, "lgn-console000", "console", "")
+			e.sched.UseUsageFallback(UsageFallback{Usage: newLoginUsage(nil), AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+			sub, err := e.bus.Subscribe(t.Context(), events.SubscribeOptions{Filter: events.Filter{Types: []events.Type{events.TypeRunAccount}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = sub.Close() }()
+			opts, mode := domain.LaunchOptions{}, domain.LaunchACP
+			switch how {
+			case "launch":
+				opts.AccountLogin = console.Login
+			case "standard move":
+				mode = domain.LaunchTUI
+			}
+			run, err := e.sched.LaunchWithOptions(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "fix it", "claude", mode, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			note := billed
+			switch how {
+			case "move":
+				waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+				_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+			case "standard move":
+				e.waitStoreStatus(t, run.ID, domain.RunRunning)
+				e.report(t, run.ID, agentstatus.Report{State: agentstatus.Working, SessionID: "sess-1"})
+				e.report(t, run.ID, standardLimit(t))
+			}
+			if how != "launch" {
+				note = "Continued on Ada (console)'s account because Ada's usage ran out. " + billed
+				select {
+				case ev := <-sub.Events():
+					if p, ok := ev.Payload.(events.RunAccountPayload); !ok || !p.PerUse || p.Login != console.Login {
+						t.Fatalf("run.account = %+v; want the console login, billed per use", ev.Payload)
+					}
+				case <-time.After(30 * time.Second):
+					t.Fatal("no run.account event")
+				}
+			}
+			waitFor(t, "the room note", func() bool { return slices.Equal(notes.all(), []string{note}) })
+			waitFor(t, "the log line", func() bool {
+				if standard {
+					e.pty.mu.Lock()
+					defer e.pty.mu.Unlock()
+					return slices.ContainsFunc(e.pty.annotations, func(a fakeInject) bool { return a.run == run.ID && a.message == billed })
+				}
+				log, readErr := os.ReadFile(e.pty.ItemLogPath(run.ID))
+				return readErr == nil && strings.Contains(string(log), billed)
+			})
 		})
 	}
 }
