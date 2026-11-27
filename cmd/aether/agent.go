@@ -21,7 +21,7 @@ func init() {
 		short: "manage agents: add, list, models, login, logins, remove",
 		usage: "cloudfield agent list [--json]\n" +
 			"cloudfield agent models <name> [--account <member-id>] [--refresh] [--json]\n" +
-			"cloudfield agent login <name> [--as <login>]\n" +
+			"cloudfield agent login <name> [--as <login> | --attach <login-id>]\n" +
 			"cloudfield agent logins [<agent>] [--json]\n" +
 			"cloudfield agent logins rename <login> <new-name>\n" +
 			"cloudfield agent logins remove <login>\n" +

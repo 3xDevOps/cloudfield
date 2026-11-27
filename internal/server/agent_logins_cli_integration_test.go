@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -125,6 +126,19 @@ func (u *cliUser) cli(args ...string) (stdout, stderr string, code int) {
 // each prompt in answers with its reply once it appears, and returns all
 // the terminal showed, without carriage returns.
 func (u *cliUser) onTerminal(answers map[string]string, args ...string) (string, int) {
+	u.t.Helper()
+	return u.terminal(answers, "", args...)
+}
+
+// closedAt runs the CLI on a terminal and kills it once it shows prompt,
+// as closing the terminal window would, and returns what it showed.
+func (u *cliUser) closedAt(prompt string, args ...string) string {
+	u.t.Helper()
+	shown, _ := u.terminal(nil, prompt, args...)
+	return shown
+}
+
+func (u *cliUser) terminal(answers map[string]string, closeAt string, args ...string) (string, int) {
 	t := u.t
 	t.Helper()
 	master, err := os.OpenFile("/dev/ptmx", os.O_RDWR|syscall.O_NOCTTY, 0)
@@ -170,6 +184,9 @@ func (u *cliUser) onTerminal(answers map[string]string, args ...string) (string,
 					answered[prompt] = true
 					_, _ = io.WriteString(master, reply)
 				}
+			}
+			if closeAt != "" && strings.Contains(text, closeAt) {
+				_ = cmd.Process.Kill()
 			}
 			if rerr != nil {
 				return
@@ -370,6 +387,31 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 	}
 	if got := rows(); len(got) != 0 {
 		t.Fatalf("rows after removing the last added login: %+v", got)
+	}
+
+	// A terminal closed during the sign-in: the line printed before it
+	// opened names the command that returns to it, and a second add is
+	// refused with the server's words and how the first one ends.
+	rt.mu.Lock()
+	rt.signIn = saveAs("ada@later.example.test", "org-later")
+	rt.mu.Unlock()
+	shown = ada.closedAt("Paste code here", "agent", "login", "claude", "--as", "later")
+	t.Logf("$ cloudfield agent login claude --as later   (terminal closed at the prompt)\n%s", shown)
+	attach := regexp.MustCompile(`return to it with: (cloudfield agent login claude --attach (lgn-[a-z0-9]+))\n`).FindStringSubmatch(shown)
+	if attach == nil {
+		t.Fatalf("agent login claude --as later printed no command to return to the sign-in:\n%s", shown)
+	}
+	shown, code = ada.onTerminal(nil, "agent", "login", "claude", "--as", "other")
+	t.Logf("$ cloudfield agent login claude --as other\n%s", shown)
+	if code == 0 || !strings.Contains(shown, `the sign-in of login "later" is still running; finish it first`+"\n"+
+		"that sign-in ends by itself 15 minutes after its terminal opened, or 10 minutes after it started if none did; "+
+		"to finish it sooner, run the cloudfield agent login claude --attach <login-id> line it printed when it started\n") {
+		t.Fatalf("a second add while one runs = %d:\n%s", code, shown)
+	}
+	shown, code = ada.onTerminal(map[string]string{"Paste code here": "test-code\r"}, "agent", "login", "claude", "--attach", attach[2])
+	t.Logf("$ %s\n%s", attach[1], shown)
+	if code != 0 || !strings.Contains(shown, "added login later: subscription, plan max, ada@later.example.test, organisation Test Org\n") {
+		t.Fatalf("%s = %d:\n%s", attach[1], code, shown)
 	}
 }
 

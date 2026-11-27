@@ -162,11 +162,16 @@ var errInterrupted = errors.New("interrupted")
 // The server finishes a call the user interrupts, so callInterruptibly
 // does not wait for it.
 func callInterruptibly(c *protocol.Client, method string, params, result any) error {
+	return interruptibly(func() error { return c.Call(method, params, result) })
+}
+
+// interruptibly returns errInterrupted on Ctrl-C without waiting for fn.
+func interruptibly(fn func() error) error {
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(interrupt)
 	done := make(chan error, 1)
-	go func() { done <- c.Call(method, params, result) }()
+	go func() { done <- fn() }()
 	select {
 	case err := <-done:
 		return err

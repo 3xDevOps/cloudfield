@@ -22,6 +22,38 @@ const addedLoginsAgent = "claude"
 // addLogin reserves the login, runs its sign-in in the terminal the server
 // opens for it, and prints the login the server added or its refusal.
 func addLogin(out io.Writer, agent protocol.AgentInfo, name string) error {
+	return withSignIn(func(conn *cli.Conn, c *protocol.Client) error {
+		var added protocol.AgentLoginAddResult
+		if err := c.Call(protocol.MethodAgentLoginAdd, protocol.AgentLoginAddParams{Agent: agent.Name, Name: name}, &added); err != nil {
+			return addRefused(olderServer(err), agent.Name)
+		}
+		if _, err := fmt.Fprintf(out, "adding login %s as %s: %s runs in a container of its own; follow its prompts\n"+
+			"if this terminal goes before the sign-in ends, return to it with: %s\n",
+			name, added.LoginID, agent.LoginCommand, attachCommand(agent.Name, added.LoginID)); err != nil {
+			return err
+		}
+		return signIn(out, conn, c, agent.Name, added.LoginID)
+	})
+}
+
+// attachLogin reopens the terminal of a sign-in addLogin started.
+func attachLogin(out io.Writer, agent protocol.AgentInfo, id string) error {
+	return withSignIn(func(conn *cli.Conn, c *protocol.Client) error {
+		if _, err := fmt.Fprintf(out, "returning to the sign-in of login %s: %s runs in a container of its own; follow its prompts\n", id, agent.LoginCommand); err != nil {
+			return err
+		}
+		return signIn(out, conn, c, agent.Name, id)
+	})
+}
+
+func attachCommand(agent, id string) string {
+	return "cloudfield agent login " + agent + " --attach " + id
+}
+
+// withSignIn runs fn on a connection and its control channel. An
+// interrupted call may be stuck writing to SSH, so the connection closes
+// before the channel.
+func withSignIn(fn func(conn *cli.Conn, c *protocol.Client) error) error {
 	cfg, err := cli.Load()
 	if err != nil {
 		return err
@@ -35,28 +67,59 @@ func addLogin(out io.Writer, agent protocol.AgentInfo, name string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = c.Close() }()
-	var added protocol.AgentLoginAddResult
-	if err := c.Call(protocol.MethodAgentLoginAdd, protocol.AgentLoginAddParams{Agent: agent.Name, Name: name}, &added); err != nil {
-		return olderServer(err)
+	err = fn(conn, c)
+	if errors.Is(err, errInterrupted) {
+		_ = conn.Close()
 	}
-	if _, err := fmt.Fprintf(out, "adding login %s: %s runs in a container of its own; follow its prompts\n", name, agent.LoginCommand); err != nil {
-		return err
-	}
+	_ = c.Close()
+	return err
+}
+
+// signIn opens the sign-in terminal of login id, then prints the login
+// the server added. Whenever the sign-in may still be running, the error
+// names the command that returns to it.
+func signIn(out io.Writer, conn *cli.Conn, c *protocol.Client, agent, id string) error {
 	cols, rows := termSize()
-	stream, _, err := conn.TerminalStream(protocol.TerminalRequest{AgentLogin: added.LoginID, Cols: cols, Rows: rows})
-	if err != nil {
+	var stream *cli.TerminalStream
+	err := interruptibly(func() (err error) {
+		stream, _, err = conn.TerminalStream(protocol.TerminalRequest{AgentLogin: id, Cols: cols, Rows: rows})
 		return err
+	})
+	if err == nil {
+		err = describeTerminalEnd(copyRaw(stream, 0))
 	}
-	if err := describeTerminalEnd(copyRaw(stream, 0)); err != nil {
-		return err
+	if err != nil {
+		return mayStillRun(err, agent, id)
 	}
 	var login protocol.AgentLogin
-	if err := c.Call(protocol.MethodAgentLoginResult, protocol.AgentLoginParams{Agent: agent.Name, LoginID: added.LoginID}, &login); err != nil {
-		return err
+	if err := callInterruptibly(c, protocol.MethodAgentLoginResult, protocol.AgentLoginParams{Agent: agent, LoginID: id}, &login); err != nil {
+		var rpc *protocol.Error
+		if errors.As(err, &rpc) {
+			return err
+		}
+		return mayStillRun(err, agent, id)
 	}
 	_, err = fmt.Fprintf(out, "added login %s\n", describeLogin(login))
 	return err
+}
+
+func mayStillRun(err error, agent, id string) error {
+	err = fmt.Errorf("%w\nthe sign-in of login %s may still be running on the server; return to it with:\n  %s", err, id, attachCommand(agent, id))
+	if errors.Is(err, errInterrupted) {
+		return &exitStatusError{code: 130, err: err}
+	}
+	return err
+}
+
+// addRefused adds to the refusal of a second sign-in how the first one
+// ends: the server names the running sign-in, not its id.
+func addRefused(err error, agent string) error {
+	var rpc *protocol.Error
+	if !errors.As(err, &rpc) || rpc.Code != protocol.CodeConflict || !strings.Contains(rpc.Message, "is still running") {
+		return err
+	}
+	return fmt.Errorf("%w\nthat sign-in ends by itself 15 minutes after its terminal opened, or 10 minutes after it started if none did; "+
+		"to finish it sooner, run the %s line it printed when it started", err, attachCommand(agent, "<login-id>"))
 }
 
 // describeLogin is a login's name and what Claude Code recorded at sign-in.

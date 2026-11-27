@@ -22,9 +22,10 @@ const loginExitMark = "aether-login-exit"
 var loginExitLine = regexp.MustCompile(`^` + loginExitMark + ` ([0-9]+)$`)
 
 func agentLogin(args []string) error {
-	const usage = "usage: cloudfield agent login <name> [--as <login>]"
+	const usage = "usage: cloudfield agent login <name> [--as <login> | --attach <login-id>]"
 	fs := newFlagSet("agent login")
 	as := fs.String("as", "", "add another login of the agent under this name instead of signing in its default login (Claude Code only; cloudfield agent logins lists them)")
+	attach := fs.String("attach", "", "return to the sign-in of a login --as started and did not finish, by the login id it printed")
 	name := ""
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		name, args = args[0], args[1:]
@@ -35,10 +36,16 @@ func agentLogin(args []string) error {
 	if name == "" || fs.NArg() > 0 {
 		return errors.New(usage)
 	}
-	adding := false
-	fs.Visit(func(f *flag.Flag) { adding = adding || f.Name == "as" })
-	if adding && *as == "" {
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+	adding, attaching := given["as"], given["attach"]
+	switch {
+	case adding && attaching:
+		return errors.New("--as starts a sign-in and --attach returns to one; give one of them")
+	case adding && *as == "":
 		return errors.New("--as needs a name: cloudfield agent login " + name + " --as <name>")
+	case attaching && *attach == "":
+		return errors.New("--attach needs the login id cloudfield agent login " + name + " --as printed")
 	}
 	var agent protocol.AgentInfo
 	found := false
@@ -57,10 +64,16 @@ func agentLogin(args []string) error {
 	case !agent.Installed:
 		return fmt.Errorf("agent %s is not installed in your environment; run aether agent add %s first", agent.Name, agent.Name)
 	}
-	if adding {
+	if adding || attaching {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
-			return fmt.Errorf("%s signs in with %s, which needs typed input, so it needs a terminal. The human runs this in their own terminal:\n"+
-				"  cloudfield agent login %s --as %s", agent.Name, agent.LoginCommand, agent.Name, *as)
+			command := "cloudfield agent login " + agent.Name + " --as " + *as
+			if attaching {
+				command = attachCommand(agent.Name, *attach)
+			}
+			return fmt.Errorf("%s signs in with %s, which needs typed input, so it needs a terminal. The human runs this in their own terminal:\n  %s", agent.Name, agent.LoginCommand, command)
+		}
+		if attaching {
+			return attachLogin(os.Stdout, agent, *attach)
 		}
 		return addLogin(os.Stdout, agent, *as)
 	}
