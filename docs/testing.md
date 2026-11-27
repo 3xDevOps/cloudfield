@@ -991,7 +991,7 @@ runs every package that has them:
 | --- | --- | --- |
 | `internal/vmimage` | `TestKVMStandardImageRunsDocker` | The standard image from store disks, with Docker inside ([The guest kernel](#the-guest-kernel)) |
 | `internal/guest/helper` | `TestKVMHelper` | The helper as PID 1, driven through its client ([The VM helper](#the-vm-helper)) |
-| `internal/runtime/vm` | `TestKVM...` in each `kvm_*_test.go` | Sessions through the engine, with real systemd units and the server binary as monitor and helper: lifecycle, six saves and wakes of one VM, a guest reboot, the home, the checkout, the helper keeping the console and outliving connections hung up at birth, a redialing client noticing the helper before one left to its backoff, the network, Save environment, cold memory returning to the host, the memory a wake loads back, a freeze stopping VMs that fill their memory at once, a shutdown letting go of a frozen VM's agent keeper |
+| `internal/runtime/vm` | `TestKVM...` in each `kvm_*_test.go` | Sessions through the engine, with real systemd units and the server binary as monitor and helper: lifecycle, six saves and wakes of one VM, a guest reboot, the home, the checkout, the helper keeping the console and outliving connections hung up at birth, a redialing client noticing the helper before one left to its backoff, the network, Save environment, cold memory returning to the host, a boot on huge pages, returned memory staying with the host while khugepaged walks it, the memory a wake loads back, a freeze stopping VMs that fill their memory at once, a shutdown letting go of a frozen VM's agent keeper |
 
 It needs root on a Linux x86-64 host with `/dev/kvm`, `cloud-hypervisor`,
 `qemu-img`, `mkfs.ext4`, `virtiofsd` at `/usr/libexec/virtiofsd`, systemd,
@@ -1000,7 +1000,11 @@ iptables and network access to pull images. `sudo cloudfield-server vm install
 as CI's `kvm` job does. `make test-kvm` fails, naming what is missing,
 rather than skip. It runs only the tests named `TestKVM...`: the
 unit tests already run in `make test`, and the helper's reap every child of
-the test binary, the VM monitor's too. Build the kernel first:
+the test binary, the VM monitor's too. The `internal/runtime/vm` tests write
+the host's huge page settings as a server does
+([install.md](install.md#hosts-for-vm-sessions)) and leave them so until a
+reboot: `shmem_enabled` at `advise`, whatever it read, and
+`khugepaged/max_ptes_none` at 0. Build the kernel first:
 
 ```sh
 make kernel

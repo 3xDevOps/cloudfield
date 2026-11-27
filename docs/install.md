@@ -118,10 +118,13 @@ Every start with `session-runtime vm` also sets
 2 MiB pages ([vm-guest.md](vm-guest.md#memory-the-guest-returns)). Under
 `advise` only shared memory that asks for huge pages gets them. Any other
 value is left as it is, so write `deny` there to keep guest memory on 4 KiB
-pages. Unless it reads `deny`, the start also writes `0` to
-`khugepaged/max_ptes_none` in that directory, for every process on the host:
-the kernel then merges 4 KiB pages into a huge page only where all 512 are
-in use, so it does not refill memory a guest returned. Both settings last
+pages. `deny` is the kernel's emergency setting: it also turns huge pages off
+on every tmpfs mount of the host, those mounted with `huge=` included. Unless
+it reads `deny`, the start also writes `0` to `khugepaged/max_ptes_none` in
+that directory, for every process on the host, and logs the value it
+replaced, one set by hand included: the kernel then merges 4 KiB pages into a
+huge page only where all 512 are in use, so it does not refill memory a guest
+returned. Both settings last
 until the host reboots, as does a `deny` written by hand: write it again
 before the server starts after each boot. Read the two values, the first
 between brackets, with:

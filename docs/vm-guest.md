@@ -563,11 +563,15 @@ default mode, which writes every saved page into the guest's memory before
 the VM can be resumed.
 
 Before it does, the engine sets `memory.thp` to `false` in the saved
-`config.json`, so the woken guest's memory is in 4 KiB pages. Loaded into
-huge pages, every saved range takes whole 2 MiB pages: a guest that had
-filled and freed memory for 7 minutes woke 2.2 times faster that way (514 ms
-instead of 1153 ms) but held 1580 MiB of the host instead of the 1012 MiB it
-had saved, and its next save wrote 1500 MiB instead of 990 MiB.
+`config.json`, so under the host policy `advise` the woken guest's memory is
+in 4 KiB pages. Under `always`, `within_size` or `force` the kernel gives
+shared memory huge pages unasked, a woken guest's too. Loaded into huge
+pages, every saved range takes whole 2 MiB pages: a guest that had filled
+and freed memory for 7 minutes woke 2.2 times faster that way (514 ms
+instead of 1153 ms), then read 600 MiB back in 79 ms instead of 1343 ms and
+touched 1.5 GiB of new memory in 0.8 s instead of 4.9 s, but held 1580 MiB
+of the host instead of the 1012 MiB it had saved, and its next save wrote
+1500 MiB instead of 990 MiB.
 
 Cloud Hypervisor v54.1 can load that memory on demand instead
 (`memory_restore_mode=ondemand`): it resumes at once and copies each page in
