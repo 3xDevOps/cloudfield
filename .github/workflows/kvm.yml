@@ -24,6 +24,8 @@ on:
         default: '10'
       n:
         default: '10'
+      mincore_thp:
+        default: 'false'
       sections:
         default: chain,timing,idle,baseline,frag,mincore,direct,chcow
 
@@ -84,4 +86,5 @@ jobs:
           FCLAZY_CHURN_MIN: ${{ inputs.churn_min }}
           FCLAZY_N: ${{ inputs.n }}
           FCLAZY_SECTIONS: ${{ inputs.sections }}
-        run: sudo env "PATH=$PATH" "HOME=$HOME" FCLAZY_MEM="$FCLAZY_MEM" FCLAZY_FS="$FCLAZY_FS" FCLAZY_CYCLES="$FCLAZY_CYCLES" FCLAZY_MINCORE_CYCLES="$FCLAZY_MINCORE_CYCLES" FCLAZY_CHURN_MIN="$FCLAZY_CHURN_MIN" FCLAZY_N="$FCLAZY_N" FCLAZY_SECTIONS="$FCLAZY_SECTIONS" bash scratch/fclazy/run.sh
+          FCLAZY_MINCORE_THP: ${{ inputs.mincore_thp }}
+        run: sudo env "PATH=$PATH" "HOME=$HOME" FCLAZY_MEM="$FCLAZY_MEM" FCLAZY_FS="$FCLAZY_FS" FCLAZY_CYCLES="$FCLAZY_CYCLES" FCLAZY_MINCORE_CYCLES="$FCLAZY_MINCORE_CYCLES" FCLAZY_CHURN_MIN="$FCLAZY_CHURN_MIN" FCLAZY_N="$FCLAZY_N" FCLAZY_SECTIONS="$FCLAZY_SECTIONS" FCLAZY_MINCORE_THP="$FCLAZY_MINCORE_THP" bash scratch/fclazy/run.sh

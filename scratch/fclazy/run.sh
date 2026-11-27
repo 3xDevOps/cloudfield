@@ -86,7 +86,7 @@ merge=inplace
 "$top/bin/fclazy" -fc "$top/bin/firecracker" -editor "$top/bin/snapshot-editor" -kernel "$kernel" \
 	-rootfs "$work/rootfs.ext4" -data "$work/data.raw" -work "$work" -fs "$FS" -merge "$merge" -mem "$MEM" -tap "$tap" \
 	-cycles "${FCLAZY_CYCLES:-12}" -mincore-cycles "${FCLAZY_MINCORE_CYCLES:-12}" -churn-min "${FCLAZY_CHURN_MIN:-10}" -n "${FCLAZY_N:-10}" \
-	-direct-cycles "${FCLAZY_DIRECT_CYCLES:-4}" -sections "${FCLAZY_SECTIONS:-chain,timing,idle,baseline,frag,mincore,direct,chcow}"
+	-direct-cycles "${FCLAZY_DIRECT_CYCLES:-4}" -mincore-thp="${FCLAZY_MINCORE_THP:-false}" -sections "${FCLAZY_SECTIONS:-chain,timing,idle,baseline,frag,mincore,direct,chcow}"
 status=$?
 echo "FCLAZY-ENV harness_exit=$status"
 df -h "$work" | tail -1 | sed 's/^/FCLAZY-ENV df_end: /'

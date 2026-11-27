@@ -29,6 +29,7 @@ var (
 	cycles   = flag.Int("cycles", 12, "")
 	mcCycles = flag.Int("mincore-cycles", 12, "")
 	dCycles  = flag.Int("direct-cycles", 4, "")
+	mcTHP    = flag.Bool("mincore-thp", false, "wake the mincore chain with huge_pages Transparent")
 	churnMin = flag.Int("churn-min", 10, "")
 	n        = flag.Int("n", 10, "wake timing samples per state")
 	tap      = flag.String("tap", "fctap0", "")
@@ -220,9 +221,9 @@ func maxMapCount() int {
 // rebases it onto the file), reflink (onto a reflink copy that then replaces
 // the file) or direct (Firecracker writes the Diff into the file itself, or
 // into a reflink copy of it where -merge is reflink).
-func chain(name string, track bool, cycles int, churn time.Duration, mode string) (*saved, bool) {
-	cfg := vmConfig{hv: "fc", mem: *mem, track: track}
-	id := fmt.Sprintf("chain=%s mem=%d fs=%s track=%t merge=%s", name, *mem, *fsName, track, mode)
+func chain(name string, track, thp bool, cycles int, churn time.Duration, mode string) (*saved, bool) {
+	cfg := vmConfig{hv: "fc", mem: *mem, track: track, thp: thp}
+	id := fmt.Sprintf("chain=%s mem=%d fs=%s track=%t thp=%t merge=%s", name, *mem, *fsName, track, thp, mode)
 	if mode == "direct" && *merge == "reflink" {
 		id += "+reflink"
 	}
@@ -470,10 +471,10 @@ func chain(name string, track bool, cycles int, churn time.Duration, mode string
 func timing(s *saved) {
 	for i := 0; i < *n; i++ {
 		for _, cache := range []string{"cold", "warm"} {
-			for _, track := range []bool{true, false} {
+			for _, v := range []struct{ track, thp bool }{{true, false}, {false, false}, {false, true}, {true, true}} {
 				cfg := s.cfg
-				cfg.track = track
-				id := fmt.Sprintf("hv=fc-file mem=%d fs=%s track=%t cache=%s", *mem, *fsName, track, cache)
+				cfg.track, cfg.thp = v.track, v.thp
+				id := fmt.Sprintf("hv=fc-file mem=%d fs=%s track=%t thp=%t cache=%s", *mem, *fsName, v.track, v.thp, cache)
 				if err := setCache(cache, s.base, s.state); err != nil {
 					fmt.Printf("FCLAZY TIMING %s i=%d FAIL %v\n", id, i, err)
 					continue
@@ -519,7 +520,7 @@ func timeOps(m *vm, id string, i int, w wakeTimes) {
 // idle wakes the saved VM from a cold file and samples the monitor's memory
 // while the guest does nothing.
 func idle(s *saved) {
-	id := fmt.Sprintf("mem=%d fs=%s track=%t", *mem, *fsName, s.cfg.track)
+	id := fmt.Sprintf("mem=%d fs=%s track=%t thp=%t", *mem, *fsName, s.cfg.track, s.cfg.thp)
 	if err := setCache("cold", s.base, s.state); err != nil {
 		fmt.Printf("FCLAZY IDLE %s FAIL %v\n", id, err)
 		return
@@ -687,7 +688,7 @@ func frag(s *saved) {
 		return
 	}
 	defer m.kill()
-	size := (*mem - shmMiB()) * 80 / 100
+	size := *mem - shmMiB() - 400
 	for _, step := range []string{fmt.Sprintf("free %d", stableID), fmt.Sprintf("free %d", heapID), fmt.Sprintf("frag 3 %d", size)} {
 		if _, err = m.guest("%s", step); err != nil {
 			fmt.Printf("FCLAZY FRAG %s step=%q FAIL %v; alive=%t; %s\n", id, step, err, m.alive(), m.tail())
@@ -819,7 +820,7 @@ func main() {
 		*mem, *fsName, *merge, stableMiB(), heapMiB, shmMiB(), stableMiB()+heapMiB+shmMiB(), *cycles, *mcCycles, *churnMin, *n, maxMapCount())
 	has := func(s string) bool { return strings.Contains(","+*sections+",", ","+s+",") }
 	if has("chain") {
-		s, ok := chain("track", true, *cycles, time.Duration(*churnMin)*time.Minute, *merge)
+		s, ok := chain("track", true, false, *cycles, time.Duration(*churnMin)*time.Minute, *merge)
 		fmt.Printf("FCLAZY CHAIN-DONE chain=track mem=%d fs=%s all_passed=%t\n", *mem, *fsName, ok)
 		if s != nil {
 			if has("timing") {
@@ -838,8 +839,8 @@ func main() {
 		}
 	}
 	if has("mincore") {
-		s, ok := chain("mincore", false, *mcCycles, 0, *merge)
-		fmt.Printf("FCLAZY CHAIN-DONE chain=mincore mem=%d fs=%s all_passed=%t\n", *mem, *fsName, ok)
+		s, ok := chain("mincore", false, *mcTHP, *mcCycles, 0, *merge)
+		fmt.Printf("FCLAZY CHAIN-DONE chain=mincore mem=%d fs=%s thp=%t all_passed=%t\n", *mem, *fsName, *mcTHP, ok)
 		if s != nil {
 			if has("idle") {
 				idle(s)
@@ -848,7 +849,7 @@ func main() {
 		}
 	}
 	if has("direct") {
-		s, ok := chain("direct", true, *dCycles, 0, "direct")
+		s, ok := chain("direct", true, false, *dCycles, 0, "direct")
 		fmt.Printf("FCLAZY CHAIN-DONE chain=direct mem=%d fs=%s all_passed=%t\n", *mem, *fsName, ok)
 		if s != nil {
 			_ = os.RemoveAll(s.dir)

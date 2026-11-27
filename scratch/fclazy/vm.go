@@ -235,6 +235,9 @@ type vmConfig struct {
 	hv    string // fc or ch
 	mem   int
 	track bool
+	// thp loads a snapshot with huge_pages Transparent: Firecracker then
+	// advises huge pages on its private mapping of the memory file.
+	thp bool
 }
 
 // boot starts a fresh VM in dir, which holds rootfs.ext4 and data.raw, and
@@ -374,12 +377,16 @@ func wake(dir string, c vmConfig, mem, state string) (*vm, wakeTimes, error) {
 			time.Sleep(500 * time.Microsecond)
 		}
 		w.apiUp = time.Since(t0)
-		if err = m.api(http.MethodPut, "/snapshot/load", map[string]any{
+		load := map[string]any{
 			"snapshot_path":     state,
 			"mem_backend":       map[string]string{"backend_type": "File", "backend_path": mem},
 			"track_dirty_pages": c.track,
 			"resume_vm":         true,
-		}); err != nil {
+		}
+		if c.thp {
+			load["huge_pages"] = "Transparent"
+		}
+		if err = m.api(http.MethodPut, "/snapshot/load", load); err != nil {
 			return fail(err)
 		}
 	}
