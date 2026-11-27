@@ -39,7 +39,19 @@ func TestReportBodyReachesTheParentWithTheReport(t *testing.T) {
 	if rpcErr := send(protocol.CoordOutcomeSuccess, "other findings", "review"); rpcErr == nil || rpcErr.Code != protocol.CodeConflict {
 		t.Fatalf("the same key with another body = %v, want CodeConflict", rpcErr)
 	}
-	inbox, rpcErr := h.svc.Inbox(ctx, parent, protocol.CoordInboxParams{})
+	for name, body := range map[string]string{"a terminal escape": "red \x1b[31mtext", "invalid UTF-8": "caf\xe9"} {
+		if rpcErr := send(protocol.CoordOutcomeSuccess, body, name); rpcErr == nil || rpcErr.Code != protocol.CodeInvalidParams {
+			t.Fatalf("report with %s in its body = %v, want it refused, not changed", name, rpcErr)
+		}
+	}
+	// A caller from before report bodies shows only body, so it gets the
+	// findings there; reading does not acknowledge, so the next caller
+	// gets the same message again.
+	old, rpcErr := h.svc.Inbox(ctx, parent, protocol.CoordInboxParams{})
+	if rpcErr != nil || len(old.Messages) != 1 || old.Messages[0].Body != "2 findings\n\n"+findings || old.Messages[0].ReportBody != "" {
+		t.Fatalf("inbox for an older caller = %+v, %v; want the body after the summary", old, rpcErr)
+	}
+	inbox, rpcErr := h.svc.Inbox(ctx, parent, protocol.CoordInboxParams{ReportBodies: true})
 	if rpcErr != nil || len(inbox.Messages) != 1 {
 		t.Fatalf("inbox = %+v, %v; want the one report", inbox, rpcErr)
 	}
@@ -60,11 +72,11 @@ func TestReportBodiesCountTowardTheInboxBatch(t *testing.T) {
 			t.Fatalf("report %s: %v", outcome, rpcErr)
 		}
 	}
-	first, rpcErr := h.svc.Inbox(ctx, parent, protocol.CoordInboxParams{})
+	first, rpcErr := h.svc.Inbox(ctx, parent, protocol.CoordInboxParams{ReportBodies: true})
 	if rpcErr != nil || len(first.Messages) != 1 || first.Messages[0].ReportBody != long || first.More != 1 {
 		t.Fatalf("first read = %d messages, more %d, %v; want one report and one more waiting", len(first.Messages), first.More, rpcErr)
 	}
-	second, rpcErr := h.svc.Inbox(ctx, parent, protocol.CoordInboxParams{AckToken: first.AckToken})
+	second, rpcErr := h.svc.Inbox(ctx, parent, protocol.CoordInboxParams{AckToken: first.AckToken, ReportBodies: true})
 	if rpcErr != nil || len(second.Messages) != 1 || second.Messages[0].Body != protocol.CoordOutcomeFailure || second.Messages[0].ReportBody != long {
 		t.Fatalf("second read = %+v, %v; want the other report whole", second.Messages, rpcErr)
 	}

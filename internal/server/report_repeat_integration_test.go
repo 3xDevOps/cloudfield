@@ -203,10 +203,12 @@ func TestIntegrationRepeatReports(t *testing.T) {
 	})
 	t.Run("findings in the report body arrive in one read", func(t *testing.T) {
 		e.t = t
-		parent, child := e.family("head -c 9000 /dev/zero | tr \"\\000\" x >/tmp/findings; echo END-OF-FINDINGS >>/tmp/findings; " +
+		// The body is all "<", which a JSON encoder that escapes HTML grows
+		// six times, past the socket's request frame.
+		parent, child := e.family("head -c 12000 /dev/zero | tr \"\\000\" \"<\" >/tmp/findings; echo END-OF-FINDINGS >>/tmp/findings; " +
 			"$CLI report --outcome success --summary two-findings --body-file /tmp/findings --idempotency-key a")
 		defer e.kill(parent, child)
-		if said := assistantText(waitTurns(ctx, t, e.srv, child, 2)); !strings.Contains(said, `"body_bytes":9016`) {
+		if said := assistantText(waitTurns(ctx, t, e.srv, child, 2)); !strings.Contains(said, `"body_bytes":12016`) {
 			t.Fatalf("the subsession's report was not stored with its body: %s", said)
 		}
 		e.settle(child, parent)
@@ -218,7 +220,7 @@ func TestIntegrationRepeatReports(t *testing.T) {
 			t.Fatal(err)
 		}
 		read := assistantText(waitTurns(ctx, t, e.srv, parent, turns+1))
-		if !strings.Contains(read, `"kind":"report"`) || !strings.Contains(read, `"report_body":"xxxx`) || !strings.Contains(read, `END-OF-FINDINGS`) {
+		if !strings.Contains(read, `"kind":"report"`) || !strings.Contains(read, `"report_body":`) || !strings.Contains(read, `END-OF-FINDINGS`) {
 			t.Fatalf("the parent's inbox read lacks the report's whole body: %.400s", read)
 		}
 	})

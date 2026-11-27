@@ -494,7 +494,15 @@ func (s *Service) Inbox(ctx context.Context, run domain.RunID, p protocol.CoordI
 				return protocol.CoordInboxResult{}, internalError(method, rerr)
 			}
 			if rerr == nil && report.RunID == m.FromRun {
-				item.Kind, item.Outcome, item.ReportBody = protocol.CoordMessageKindReport, string(report.Outcome), report.Body
+				item.Kind, item.Outcome = protocol.CoordMessageKindReport, string(report.Outcome)
+				// A caller from before report bodies prints body alone.
+				switch {
+				case report.Body == "":
+				case p.ReportBodies:
+					item.ReportBody = report.Body
+				default:
+					item.Body += "\n\n" + report.Body
+				}
 			}
 		}
 		out = append(out, item)
@@ -567,14 +575,13 @@ func (s *Service) CoordReport(ctx context.Context, run domain.RunID, p protocol.
 		return protocol.CoordReportResult{}, invalidParams(method, "summary is required")
 	}
 	final := p.Outcome == protocol.CoordOutcomeSuccess || p.Outcome == protocol.CoordOutcomeFailure || p.Outcome == protocol.CoordOutcomeBlocked
-	switch {
-	case p.Body != "" && !final:
+	if p.Body != "" && !final {
 		return protocol.CoordReportResult{}, invalidParams(method, "body is only valid with the \"success\", \"failure\" or \"blocked\" outcome")
-	case len([]byte(p.Body)) > protocol.CoordMaxReportBodyBytes:
-		return protocol.CoordReportResult{}, invalidParams(method,
-			fmt.Sprintf("body is %d bytes and exceeds %d; shorten it, or put the rest in a file on your branch and name it", len([]byte(p.Body)), protocol.CoordMaxReportBodyBytes))
 	}
-	body := cleanReportBody(p.Body)
+	if err := protocol.ValidateReportBody(p.Body); err != nil {
+		return protocol.CoordReportResult{}, invalidParams(method, err.Error())
+	}
+	body := strings.ReplaceAll(p.Body, "\r", "")
 	specs, problem := parseUntil(p.Outcome, p.Until)
 	if problem != "" {
 		return protocol.CoordReportResult{}, invalidParams(method, problem)
@@ -1428,18 +1435,6 @@ func invalidParams(method, msg string) *protocol.Error {
 
 func internalError(method string, err error) *protocol.Error {
 	return &protocol.Error{Code: protocol.CodeInternal, Message: method + ": " + err.Error()}
-}
-
-// cleanReportBody makes a report's body safe to render and keeps its lines
-// and indentation: invalid UTF-8 is dropped and control bytes other than
-// newline and tab become spaces, which never makes it longer.
-func cleanReportBody(body string) string {
-	return strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\t' || !unicode.IsControl(r) {
-			return r
-		}
-		return ' '
-	}, strings.ToValidUTF8(body, ""))
 }
 
 func cleanCoordText(text string, maxBytes int) string {

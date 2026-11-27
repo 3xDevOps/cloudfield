@@ -123,6 +123,7 @@ func registerTools(srv *mcp.Server, socket string, g *gate, cli string) error {
 		if in.AckToken == "" {
 			in.AckToken = g.token()
 		}
+		in.ReportBodies = true
 		var out protocol.CoordInboxResult
 		if err := coordtransport.Call(ctx, socket, protocol.MethodCoordInbox, in, &out); err != nil {
 			return failed(err), empty, nil

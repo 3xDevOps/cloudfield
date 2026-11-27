@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
 )
@@ -293,6 +295,10 @@ type CoordInboxParams struct {
 	AckToken    string `json:"ack_token,omitempty" jsonschema:"the ack_token of the batch you handled; it acknowledges exactly that batch"`
 	WaitSeconds int    `json:"wait_seconds,omitempty" jsonschema:"seconds the server waits for new mail when the inbox is empty; 0 returns at once"`
 	AckOnly     bool   `json:"ack_only,omitempty" jsonschema:"acknowledge the ack_token batch without reading the next one"`
+	// ReportBodies says the caller shows a report's body from report_body.
+	// The command and the bridge set it; a caller that does not gets the
+	// body appended to the summary in body, which every caller shows.
+	ReportBodies bool `json:"report_bodies,omitempty" jsonschema:"set for you; leave it out"`
 }
 
 // CoordMessage is one delivered message.
@@ -352,6 +358,25 @@ type CoordReportResult struct {
 	// BodyBytes is the size of the body the server stored with the report.
 	// A server older than the body leaves it zero.
 	BodyBytes int `json:"body_bytes,omitempty"`
+}
+
+// ValidateReportBody refuses a report body the server would have to change
+// to store: one over the cap, with invalid UTF-8, or with a control
+// character other than a line break or a tab. A carriage return is allowed
+// and dropped.
+func ValidateReportBody(body string) error {
+	if n := len(body); n > CoordMaxReportBodyBytes {
+		return fmt.Errorf("body is %d bytes and exceeds %d; shorten it, or put the rest in a file on your branch and name it", n, CoordMaxReportBodyBytes)
+	}
+	if !utf8.ValidString(body) {
+		return errors.New("body is not valid UTF-8")
+	}
+	for i, r := range body {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' && r != '\r' {
+			return fmt.Errorf("body has a control character (U+%04X at byte %d); remove it, such as a terminal's color codes", r, i)
+		}
+	}
+	return nil
 }
 
 // CheckReportBody is the error for a report whose body its server did not
