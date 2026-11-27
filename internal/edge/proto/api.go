@@ -91,9 +91,16 @@ const MaxRequestBodySize = 64 << 10
 // KindHTTP connection; a larger one is refused with 413.
 const MaxHTTPBodySize = 1 << 20
 
-// ErrorBody is the JSON body of every refused edge API request.
+// ErrorBody is the JSON body of every refused edge API request. Retired
+// is set on the 410 Gone of a retired address of the edge.
 type ErrorBody struct {
-	Error string `json:"error"`
+	Error   string   `json:"error"`
+	Retired *Retired `json:"retired,omitempty"`
+}
+
+// Retired names the relay origin that replaces a retired one.
+type Retired struct {
+	Replacement string `json:"replacement"`
 }
 
 // Refusal is a refusal message the edge sends as ErrorBody.Error, with the
@@ -159,10 +166,12 @@ const (
 )
 
 // DeviceStartRequest registers a client install: its label and its device
-// key as an authorized_keys line.
+// key as an authorized_keys line. RelayOrigin is the relay origin the
+// client signs in for; an edge that does not know the field ignores it.
 type DeviceStartRequest struct {
-	Label string `json:"label"`
-	Key   string `json:"key"`
+	Label       string `json:"label"`
+	Key         string `json:"key"`
+	RelayOrigin string `json:"relay_origin,omitempty"`
 }
 
 // Validate checks the label and parses the key.

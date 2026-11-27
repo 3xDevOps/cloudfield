@@ -85,10 +85,16 @@ type harness struct {
 	pairB           bool
 	signinB, relayB string
 	pairBAddrs      [2]string
-	// recordOrigins sets edge.Config.RecordOrigins.
-	recordOrigins bool
 	// retiring, when set, is what --retiring-pairs names.
 	retiring []edge.Retiring
+	// recordOrigins sets edge.Config.RecordOrigins, which retiring also
+	// sets, as in aether-edge serve.
+	recordOrigins bool
+	// retired, when set, is what --retired-pairs names.
+	retired []edge.Retired
+	// onlyB serves pair B alone, as the first pair: how an operator
+	// retires the pair that was first.
+	onlyB bool
 
 	mu        sync.Mutex
 	skew      time.Duration
@@ -184,10 +190,15 @@ func (h *harness) startEdge() {
 		app.ClientID, app.ClientSecret = "fake-client-id-2", "fake-client-secret-2"
 		morePairs = []edge.Pair{{SigninOrigin: h.signinB, RelayOrigin: h.relayB, GitHub: app}}
 	}
+	first := edge.Pair{SigninOrigin: h.signinURL, RelayOrigin: h.relayURL, GitHub: h.github.app()}
+	if h.onlyB {
+		first, morePairs = morePairs[0], nil
+	}
 	svc, err := edge.New(edge.Config{
-		DataDir: h.edgeDir, SigninOrigin: h.signinURL, RelayOrigin: h.relayURL, MorePairs: morePairs, Retiring: h.retiring,
-		GitHub: h.github.app(), Clock: h.now, ConnectorClientHosts: []string{"127.0.0.1"}, Reviewer: h.reviewer,
-		RecordOrigins: h.recordOrigins,
+		DataDir: h.edgeDir, SigninOrigin: first.SigninOrigin, RelayOrigin: first.RelayOrigin, MorePairs: morePairs,
+		Retiring: h.retiring, Retired: h.retired,
+		GitHub: first.GitHub, Clock: h.now, ConnectorClientHosts: []string{"127.0.0.1"}, Reviewer: h.reviewer,
+		RecordOrigins: h.recordOrigins || h.retiring != nil,
 	})
 	if err != nil {
 		t.Fatal(err)
