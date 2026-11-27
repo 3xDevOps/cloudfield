@@ -173,6 +173,8 @@ func TestEnhancedRunMovesToTheAccountsNextLogin(t *testing.T) {
 func TestALoginTheSessionUsedIsNotTriedAgain(t *testing.T) {
 	t.Parallel()
 	e, rt, _, _, second := newLoginMoveEnv(t, enhancedClaude)
+	// Beside added logins, a default login that holds no sign-in is passed over.
+	writeHomeFile(t, e.adaHome, ".claude/.credentials.json", workLogin)
 	run, err := e.sched.LaunchWithOptions(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP, domain.LaunchOptions{AccountLogin: second.Login})
 	if err != nil {
 		t.Fatal(err)
