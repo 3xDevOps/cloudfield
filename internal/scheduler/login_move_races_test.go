@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"os"
 	"slices"
 	"strings"
@@ -517,10 +518,11 @@ func (u *hookedLoginUsage) Read(ctx context.Context, member domain.MemberID, ref
 	return u.ReadLogin(ctx, domain.AccountOf(member), refresh)
 }
 
-// An Enhanced session's agent fails a second turn on its usage limit while
-// the move to Ada's second login holds the session: that limit is the
-// replaced agent's, and the session moves once, its replacement told once.
-func TestARepeatedLimitFromTheReplacedAgentIsDropped(t *testing.T) {
+// A member's prompt while the move to Ada's second login holds the session
+// is refused rather than sent to the agent the move replaces, which the
+// move would stop mid-turn; the session moves once, its replacement told
+// once.
+func TestAPromptDuringAMoveIsRefused(t *testing.T) {
 	t.Parallel()
 	e, rt, notes, usage, second := newLoginMoveEnv(t, enhancedClaude)
 	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
@@ -529,10 +531,9 @@ func TestARepeatedLimitFromTheReplacedAgentIsDropped(t *testing.T) {
 	}
 	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
 	first := rt.all()[0]
+	var injectErr error
 	e.sched.UseUsageFallback(UsageFallback{Usage: &hookedLoginUsage{loginUsage: usage, during: func() {
-		_, _ = e.sched.Inject(context.Background(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
-		waitFor(t, "the repeat", func() bool { return len(sentPrompts(t, first)) == 2 })
-		time.Sleep(200 * time.Millisecond)
+		_, injectErr = e.sched.Inject(context.Background(), run.ID, e.member.ID, domain.AgentPrompt{Text: "run a long tool"}, false, nil)
 	}}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
 	_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
 	waitFor(t, "the session on the second login", func() bool {
@@ -546,6 +547,8 @@ func TestARepeatedLimitFromTheReplacedAgentIsDropped(t *testing.T) {
 	segments, err := e.db.ListRunAccountSegments(t.Context(), run.ID)
 	row, rowErr := e.db.GetRun(t.Context(), run.ID)
 	switch {
+	case !errors.Is(injectErr, ErrMoving) || !slices.Equal(sentPrompts(t, first), []string{acpmock.PromptUsageLimit}):
+		t.Fatalf("prompt during the move: %v; the replaced agent was prompted %q; want it refused", injectErr, sentPrompts(t, first))
 	case err != nil || len(segments) != 2 || len(execs) != 2:
 		t.Fatalf("segments %+v, %v, %d agents; want one move", segments, err, len(execs))
 	case !slices.Equal(sentPrompts(t, execs[1]), []string{continuedOnSecond}):
