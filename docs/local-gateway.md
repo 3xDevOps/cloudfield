@@ -199,7 +199,15 @@ in-process backend for the member identified by Tailscale WhoIs. This keeps
 the API and stream behavior independent of whether the browser is local or on
 the tailnet.
 
-For the local backend, a replay-safe call that fails on transport (a server
+For the local backend, opening a control channel on the connection costs two
+round trips to the server before the call's own, so a channel whose call was
+answered is kept (up to 8) and carries a later call, one call at a time.
+Calls in flight together each have their own channel. A channel whose call
+was cancelled or timed out is closed, never reused. Only replay-safe calls
+take a kept channel: if one has ended under a live connection, the call is
+sent again on a new channel, and the connection stays up.
+
+A replay-safe call that fails on transport (a server
 restart or dropped network) redials once and retries once before surfacing
 `-32004` (unavailable). A method unsafe to run twice is not replayed: one
 whose second session creates a duplicate (`run.launch`, `template.launch`,

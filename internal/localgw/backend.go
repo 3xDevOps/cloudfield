@@ -19,13 +19,17 @@ import (
 )
 
 // sshBackend proxies the Backend surface onto one lazily dialed SSH connection.
-// Each call and stream opens its own channel. mu guards the fields and is
+// Each stream opens its own channel; calls share control channels, one call
+// at a time on each. mu guards the fields and is
 // never held across network I/O: a dial through an edge can take most of a
 // minute, and every request, Relink and Close would queue behind it.
 type sshBackend struct {
 	mu   sync.Mutex
 	cfg  cli.Config
 	conn *cli.Conn
+	// idle holds conn's control channels whose last call got its answer.
+	// Opening one costs two round trips to the server before the call's own.
+	idle []*protocol.Client
 	// dialing is the dial every caller without a connection waits on.
 	dialing *dialAttempt
 	closed  bool
@@ -113,6 +117,7 @@ func (b *sshBackend) swap(conn *cli.Conn) *cli.Conn {
 	}
 	old := b.conn
 	b.conn = conn
+	b.idle = nil
 	if conn != nil {
 		go b.keepalive(conn)
 	}
@@ -220,6 +225,7 @@ func (b *sshBackend) invalidate(conn *cli.Conn) {
 	cached := b.conn == conn
 	if cached {
 		b.conn = nil
+		b.idle = nil
 	}
 	b.mu.Unlock()
 	if cached {
@@ -283,10 +289,43 @@ func callBound(method string) time.Duration {
 	return callTimeout
 }
 
-// roundTrip runs one call on its own channel. Cancellation and the watchdog
-// close only that channel, to unblock the pending read. Their errors are
+// maxIdleControls is how many answered control channels a connection keeps
+// for its next calls: the browser sends at most six requests at a time.
+const maxIdleControls = 8
+
+// idleControl takes one of conn's answered control channels, nil when it
+// has none.
+func (b *sshBackend) idleControl(conn *cli.Conn) *protocol.Client {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.conn != conn || len(b.idle) == 0 {
+		return nil
+	}
+	client := b.idle[len(b.idle)-1]
+	b.idle = b.idle[:len(b.idle)-1]
+	return client
+}
+
+// keepControl hands back a channel whose call was answered, closing it when
+// conn is no longer the cached connection or already holds enough.
+func (b *sshBackend) keepControl(conn *cli.Conn, client *protocol.Client) {
+	b.mu.Lock()
+	keep := b.conn == conn && len(b.idle) < maxIdleControls
+	if keep {
+		b.idle = append(b.idle, client)
+	}
+	b.mu.Unlock()
+	if !keep {
+		_ = client.Close()
+	}
+}
+
+// roundTrip runs one call alone on its channel. Cancellation and the watchdog
+// close the channel, to unblock the pending read. Their errors are
 // coded so Call does not repeat a call the server may still be running.
-func roundTrip(ctx context.Context, client *protocol.Client, method string, params json.RawMessage) (json.RawMessage, error) {
+// answered reports that the server's response was read, which leaves the
+// channel open and ready for another call; otherwise it is closed.
+func roundTrip(ctx context.Context, client *protocol.Client, method string, params json.RawMessage) (result json.RawMessage, answered bool, err error) {
 	var callParams any
 	if len(params) > 0 {
 		callParams = params
@@ -306,34 +345,56 @@ func roundTrip(ctx context.Context, client *protocol.Client, method string, para
 	defer watchdog.Stop()
 	select {
 	case out := <-done:
+		var refused *protocol.Error
+		if out.err == nil || errors.As(out.err, &refused) {
+			return out.result, true, out.err
+		}
 		_ = client.Close()
-		return out.result, out.err
+		return nil, false, out.err
 	case <-ctx.Done():
 		_ = client.Close()
-		return nil, &protocol.Error{Code: protocol.CodeUnavailable, Message: "request cancelled"}
+		return nil, false, &protocol.Error{Code: protocol.CodeUnavailable, Message: "request cancelled"}
 	case <-watchdog.C:
 		_ = client.Close()
-		return nil, &protocol.Error{Code: protocol.CodeUnavailable, Message: fmt.Sprintf("server did not answer %s within %v", method, bound)}
+		return nil, false, &protocol.Error{Code: protocol.CodeUnavailable, Message: fmt.Sprintf("server did not answer %s within %v", method, bound)}
 	}
 }
 
 // callOnce drops the connection on transport failures so the next attempt
 // redials; server refusals, cancellations and timeouts leave it alone.
-func (b *sshBackend) callOnce(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
+// A replay-safe call goes on an idle control channel when there is one. An
+// idle channel can have ended under a live connection, so a transport
+// failure on one is tried again on a new channel before it counts against
+// the connection; the server may have run the call both times.
+func (b *sshBackend) callOnce(ctx context.Context, method string, params json.RawMessage, replaySafe bool) (json.RawMessage, error) {
 	conn, cfg, err := b.live(ctx)
 	if err != nil {
 		return nil, err
+	}
+	var perr *protocol.Error
+	if replaySafe {
+		if client := b.idleControl(conn); client != nil {
+			result, answered, cerr := roundTrip(ctx, client, method, params)
+			if answered {
+				b.keepControl(conn, client)
+			}
+			if cerr == nil || errors.As(cerr, &perr) {
+				return result, cerr
+			}
+		}
 	}
 	client, err := conn.Control()
 	if err != nil {
 		b.invalidate(conn)
 		return nil, endToEnd(cfg, err)
 	}
-	result, err := roundTrip(ctx, client, method, params)
+	result, answered, err := roundTrip(ctx, client, method, params)
+	if answered {
+		b.keepControl(conn, client)
+	}
 	if err == nil {
 		return result, nil
 	}
-	var perr *protocol.Error
 	if errors.As(err, &perr) {
 		return nil, err
 	}
@@ -444,7 +505,8 @@ var noReplay = map[string]bool{
 // Call redials and retries once on a transport failure, except for methods
 // that may have committed a mutation before the response was lost.
 func (b *sshBackend) Call(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, *protocol.Error) {
-	result, err := b.callOnce(ctx, method, params)
+	replaySafe := !noReplay[method] && !strings.HasPrefix(method, "dev.") && !strings.HasPrefix(method, "run.git.") && !strings.HasPrefix(method, "run.pr.")
+	result, err := b.callOnce(ctx, method, params, replaySafe)
 	if err == nil {
 		return result, nil
 	}
@@ -452,10 +514,10 @@ func (b *sshBackend) Call(ctx context.Context, method string, params json.RawMes
 	if errors.As(err, &perr) {
 		return nil, perr
 	}
-	if noReplay[method] || strings.HasPrefix(method, "dev.") || strings.HasPrefix(method, "run.git.") || strings.HasPrefix(method, "run.pr.") {
+	if !replaySafe {
 		return nil, unreachableError(err)
 	}
-	result, err = b.callOnce(ctx, method, params)
+	result, err = b.callOnce(ctx, method, params, replaySafe)
 	if err == nil {
 		return result, nil
 	}
