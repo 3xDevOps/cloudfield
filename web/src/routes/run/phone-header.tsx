@@ -19,7 +19,7 @@ import { runViewIcon } from '@/routes/run/view-icons'
 import { defaultView, runViewLabel, type RunView } from '@/routes/run/views'
 import { useStore } from '@/store'
 import { diffTotals } from '@/store/diff'
-import { useRunPresentation } from '@/store/hooks'
+import { useAgentStarting, useRunPresentation } from '@/store/hooks'
 import type { RunRecord } from '@/store/runs'
 
 const tabViews = ['session', 'terminal', 'changes'] as const
@@ -55,7 +55,9 @@ export function PhoneRunHeader({ run, view, views, nav, agentName, keyboard, pri
   /** Kept to the Changes tab, where it cannot crowd the tabs. */
   pullRequest: React.ReactNode
 }) {
-  const shown = useRunPresentation(run)
+  const presented = useRunPresentation(run)
+  const starting = useAgentStarting(run.id)
+  const shown = starting ? { state: 'working' as const } : presented
   const assistant = useAssistantAvailable()
   // Chat shows an open request's own card, whose answer is the screen's one filled button.
   const asking = useStore((s) => (s.acpSessions[run.id]?.pending.length ?? 0) > 0)
@@ -74,7 +76,7 @@ export function PhoneRunHeader({ run, view, views, nav, agentName, keyboard, pri
     { id: 'search', label: 'Search…', Icon: Search, onSelect: () => useStore.getState().togglePalette(true) },
     ...(assistant ? [{ id: 'assistant', label: 'Assistant', Icon: Sparkles, onSelect: () => useStore.getState().setAssistantOpen(true) }] : []),
   ]
-  const state = run.switching ? `Switching to ${modeLabel[run.switching] ?? run.switching}…` : stateName(shown)
+  const state = run.switching ? `Switching to ${modeLabel[run.switching] ?? run.switching}…` : starting ? 'Starting' : stateName(shown)
 
   return (
     <>

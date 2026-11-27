@@ -12,7 +12,7 @@ import { usePrimaryAction, type RunNavigation } from '@/routes/run/header'
 import { openAgent } from '@/routes/run/subagent-cards'
 import type { RunView } from '@/routes/run/views'
 import { useStore } from '@/store'
-import { useChildRunFacts, useNeedsYouRuns, useRunPresentation } from '@/store/hooks'
+import { useAgentStarting, useChildRunFacts, useNeedsYouRuns, useRunPresentation } from '@/store/hooks'
 import type { RunRecord } from '@/store/runs'
 import { noAgents } from '@/store/subagents'
 import { deriveRunWorkflow, runFacts, shareTree, type WorkflowNode } from '@/store/workflow'
@@ -35,10 +35,12 @@ function useRunWorkflow(run: RunRecord): WorkflowNode {
 
 export function WorkflowChip({ run, open, onToggle }: { run: RunRecord; open: boolean; onToggle: (opener: HTMLElement) => void }) {
   const tree = useRunWorkflow(run)
-  const shown = useRunPresentation(run)
+  const presented = useRunPresentation(run)
+  const starting = useAgentStarting(run.id) && !run.switching
+  const shown = starting ? { state: 'working' as const } : presented
   const checks = usePullRequest(run, false).feedback?.checks
   const { state } = tree
-  const label = stateName(shown)
+  const label = starting ? 'Starting' : stateName(shown)
   const running = tree.counts?.running ?? 0
   const busy = state === 'waiting-ci' && checks && checks.length > 0
     ? `${countChecks(checks).passing} of ${checks.length} checks`
@@ -55,7 +57,7 @@ export function WorkflowChip({ run, open, onToggle }: { run: RunRecord; open: bo
       className="-mx-1.5 shrink-0 text-text"
       onClick={(event) => onToggle(event.currentTarget)}
     >
-      <StatusDot tone={toneOf(shown)} pulse={state === 'working'} />
+      <StatusDot tone={toneOf(shown)} pulse={starting || state === 'working'} />
       <span>{label}</span>
       {busy && <span className="hidden @min-[480px]/views:inline">· {busy}</span>}
       <Network aria-hidden className="text-muted" />

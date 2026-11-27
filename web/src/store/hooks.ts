@@ -74,6 +74,14 @@ export function useRunPresentation(run: RunRecord): RunPresentation {
   }, [key])
 }
 
+/** A launched Enhanced session is open and its agent has not started yet. */
+export function useAgentStarting(runID: string): boolean {
+  return useStore((s) => {
+    const session = s.acpSessions[runID]
+    return Boolean(session?.starting && !session.live)
+  })
+}
+
 /** Which of these runs need the viewer; stable while that set is. */
 export function useNeedsYouRuns(ids: string[]): ReadonlySet<string> {
   const now = useClock()

@@ -22,7 +22,7 @@ import { useClock } from '@/lib/clock'
 import { useElementSize, useReducedMotion } from '@/lib/hooks'
 import { shortcutLabel } from '@/lib/keybindings'
 import { needsYou, terminalAction } from '@/lib/needs-you'
-import { runLabel, stateName, stateTitle, stateWords, toneOf, waitLine } from '@/lib/status'
+import { runLabel, stateLabel, stateName, stateTitle, stateWords, toneOf, waitLine } from '@/lib/status'
 import { cn } from '@/lib/utils'
 import { watchHint, watchRoute } from '@/lib/watches'
 import { FrameFocusContext } from '@/routes/run/agent-context'
@@ -41,7 +41,7 @@ import { runViewLabel, type RunView } from '@/routes/run/views'
 import type { FrameTile } from '@/routes/run'
 import { useStore } from '@/store'
 import { queuedSteers, unansweredQuestions } from '@/store/collaboration'
-import { useHeaderPrimary, useNeedsYouRuns, useRunPresentation } from '@/store/hooks'
+import { useAgentStarting, useHeaderPrimary, useNeedsYouRuns, useRunPresentation } from '@/store/hooks'
 import type { RunRecord } from '@/store/runs'
 import type { NavigateOptions } from '@/store/ui'
 import { agentState } from '@/store/subagents'
@@ -126,16 +126,14 @@ function WaitLine({ run }: { run: RunRecord }) {
 export function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord; agentName: string; narrow: boolean; controls: boolean; chip?: React.ReactNode }) {
   const presented = useRunPresentation(run)
   const asks = useNeedsYouRuns([run.id]).has(run.id)
-  const starting = useStore((s) => {
-    const session = s.acpSessions[run.id]
-    return Boolean(session?.starting && !session.live)
-  })
+  const starting = useAgentStarting(run.id)
   const presentation = run.switching
     ? { state: 'working' as const, reason: `Switching to ${modeLabel[run.switching] ?? run.switching}…` }
     : starting
-      ? { state: 'working' as const, reason: 'Starting' }
+      ? { state: 'working' as const, reason: stateLabel.working }
       : presented
   const { state } = presentation
+  const name = starting && !run.switching ? 'Starting' : stateName(presentation)
   const subagents = useStore((s) =>
     state === 'waiting-agents'
       ? Object.values(s.acpSessions[run.id]?.agents.agents ?? {}).filter((agent) => agentState(agent) === 'running').length
@@ -163,13 +161,13 @@ export function StateLine({ run, agentName, narrow, controls, chip }: { run: Run
     <>
       {chip ? (
         <>
-          <span role="status" className="sr-only">{stateName(presentation)}</span>
+          <span role="status" className="sr-only">{name}</span>
           {chip}
         </>
       ) : (
         <span className="flex shrink-0 items-center gap-1.5 text-ui-sm" title={stateTitle(presentation, since)}>
           <StatusDot tone={toneOf(presentation)} pulse={state === 'working'} />
-          <span role={controls ? 'status' : undefined} className="font-medium">{stateName(presentation)}</span>
+          <span role={controls ? 'status' : undefined} className="font-medium">{name}</span>
         </span>
       )}
       {/* One line of a wrapping row: a part that does not fit whole wraps out of sight with its separator, and the reason, first, is the one that truncates. */}
