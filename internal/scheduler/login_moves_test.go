@@ -783,3 +783,40 @@ func TestARunOutIsNotedWhenTheSessionCannotMove(t *testing.T) {
 		t.Fatalf("measured %v, %v; want the console login passed over", measured, err)
 	}
 }
+
+// hangingFreshReads is loginUsage whose fresh reads never answer.
+type hangingFreshReads struct{ *loginUsage }
+
+func (u hangingFreshReads) Read(ctx context.Context, member domain.MemberID, refresh bool) ([]quota.Provider, error) {
+	return u.ReadLogin(ctx, domain.AccountOf(member), refresh)
+}
+
+func (u hangingFreshReads) ReadLogin(ctx context.Context, account domain.Account, refresh bool) ([]quota.Provider, error) {
+	if refresh {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return u.loginUsage.ReadLogin(ctx, account, refresh)
+}
+
+// The fresh read of Grace's login that a teammate's signal needs waits no
+// longer than a launch's read: one that does not answer parks the session
+// within seconds, not after the move's whole timeout.
+func TestAMovesUsageReadIsBounded(t *testing.T) {
+	t.Parallel()
+	e, _, notes, usage, _ := newLoginMoveEnv(t, enhancedClaude)
+	e.share(t)
+	work := e.addLogin(t, e.owner.ID, "lgn-work000000", "work", workLogin)
+	e.sched.UseUsageFallback(UsageFallback{Usage: hangingFreshReads{usage}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	run, err := e.sched.LaunchWithOptions(t.Context(), e.ws.ID, e.member.ID, e.owner.ID, "", "claude", domain.LaunchACP, domain.LaunchOptions{AccountLogin: work.Login})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+	start := time.Now()
+	_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+	got := e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
+	if !strings.HasSuffix(got.Reason, "Grace (work)'s usage does not show") || time.Since(start) > 20*time.Second {
+		t.Fatalf("run %q after %s; want it parked on the unanswered read within seconds", got.Reason, time.Since(start))
+	}
+}

@@ -44,8 +44,10 @@ func (s *Scheduler) loginRow(ctx context.Context, account domain.Account, agent 
 }
 
 // readLogin reads a login's usage through the fallback's reader, afresh
-// when refresh is set.
+// when refresh is set, waiting no longer than a launch does.
 func readLogin(ctx context.Context, usage fallback.QuotaReader, account domain.Account, refresh bool) ([]quota.Provider, error) {
+	ctx, cancel := context.WithTimeout(ctx, fallback.ReadTimeout)
+	defer cancel()
 	if account.Login.Added() {
 		logins, ok := usage.(fallback.LoginReader)
 		if !ok {

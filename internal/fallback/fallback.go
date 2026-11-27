@@ -25,10 +25,10 @@ import (
 // minutes.
 const ExhaustedPercent = 95
 
-// readTimeout bounds how long a launch waits on one account's quota read. A
+// ReadTimeout bounds how long a launch waits on one account's quota read. A
 // slower read counts as unreadable; it carries on and fills the quota cache
 // for the next launch.
-const readTimeout = 3 * time.Second
+const ReadTimeout = 3 * time.Second
 
 // QuotaReader reads the vendor quota of a member's default login without
 // exposing its credentials or the provider's responses to the caller.
@@ -130,7 +130,7 @@ const Unknown = -1
 // Measure reads the usage Select decides on: the requested login's, and,
 // only when it is exhausted, every candidate's. It reads vendor quota, so
 // callers run it before taking the shared authorization mutex, and under it
-// only once more, bounded by readTimeout, for a login chosen again there;
+// only once more, bounded by ReadTimeout, for a login chosen again there;
 // Select authorises each account again under that mutex.
 func Measure(ctx context.Context, st store.Store, usage QuotaReader, launcher domain.MemberID, requested domain.Account, harness string, policy domain.AccountFallback) (Measured, error) {
 	if policy.Disabled || usage == nil {
@@ -490,7 +490,7 @@ func usedPercent(ctx context.Context, usage QuotaReader, account domain.Account,
 	if ids == nil {
 		return 0, false
 	}
-	ctx, cancel := context.WithTimeout(ctx, readTimeout)
+	ctx, cancel := context.WithTimeout(ctx, ReadTimeout)
 	defer cancel()
 	var (
 		providers []quota.Provider
