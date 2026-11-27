@@ -669,3 +669,33 @@ func TestAnOwedContinuationGoesOnlyToAConversationThatWaited(t *testing.T) {
 		})
 	}
 }
+
+// The record that a continuation is being sent is made durable, its
+// directory entry included, before the send: a state directory that cannot
+// be synced leaves the continuation owed and unsent.
+func TestAContinuationIsSentOnlyOnceItsRecordIsDurable(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("root opens a directory whatever its mode")
+	}
+	e, rt, _ := newFallbackEnv(t, enhancedClaude)
+	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+	entry, swap := e.owe(t, run.ID, "Continue the task where you stopped.")
+	// Files can still be written and renamed in it, but it cannot be opened
+	// to be synced.
+	if err = os.Chmod(e.cfg.StateDir, 0o300); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(e.cfg.StateDir, 0o700) })
+	e.sched.acp.sendContinuation(entry, swap)
+	if err = os.Chmod(e.cfg.StateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got, sending := e.marker(entry); got != swap || sending || len(sentPrompts(t, rt.all()[0])) != 0 {
+		t.Fatalf("marker %+v, sending %v, prompts %q; want the continuation owed and unsent", got, sending, sentPrompts(t, rt.all()[0]))
+	}
+}

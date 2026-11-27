@@ -72,7 +72,13 @@ func (d *acpDriver) markSending(entry *supervised, swap *accountSwap) bool {
 		return false
 	}
 	swap.Sending = true
-	if err := d.s.writeSidecar(entry.sidecar()); err != nil {
+	// Durable before the send: a crash after it must not find the marker
+	// from before the rename and send again.
+	err := d.s.writeSidecar(entry.sidecar())
+	if err == nil {
+		err = fsyncDir(d.s.cfg.StateDir)
+	}
+	if err != nil {
 		swap.Sending = false
 		slog.Warn("scheduler: record the continuation as being sent; it stays owed", "run", entry.runID, "error", err)
 		return false
