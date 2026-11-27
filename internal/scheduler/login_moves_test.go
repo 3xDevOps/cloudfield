@@ -525,3 +525,57 @@ func TestVendorLine(t *testing.T) {
 		}
 	}
 }
+
+// Ada's sleeping session on Grace's work login: waking it checks the login
+// is still shared with Ada, and when Grace turned it off for shares before
+// the sweep saw it, the wake starts nothing and the revoke path stops the
+// session. The sweep after turning it off stops a sleeping one too.
+func TestASleepingSessionWakesOnlyOnALoginStillShared(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []string{"shared", "wake after turning off", "sweep"} {
+		t.Run(tc, func(t *testing.T) {
+			t.Parallel()
+			e, _, _, _, _ := newLoginMoveEnv(t, func(cfg *Config) {
+				enhancedClaude(cfg)
+				cfg.RunSleepAfter = time.Nanosecond
+				cfg.sleepAnyAgent = true
+			})
+			e.share(t)
+			work := e.addLogin(t, e.owner.ID, "lgn-work000000", "work", workLogin)
+			startScheduler(t, e.sched)
+			<-e.sched.RecoveryReady()
+			run, err := e.sched.LaunchWithOptions(t.Context(), e.ws.ID, e.member.ID, e.owner.ID, "say pong", "claude", domain.LaunchACP, domain.LaunchOptions{AccountLogin: work.Login})
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+			e.sleepRun(t, run.ID)
+			c := e.container(t, run.ID)
+			if tc != "shared" {
+				if err = e.db.SetAgentLoginShared(t.Context(), e.owner.ID, "claude", work.Login, false); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch tc {
+			case "shared":
+				if err = e.sched.WakeRun(t.Context(), run.ID, e.member.ID); err != nil || containerState(c) != "running" {
+					t.Fatalf("wake = %v, container %s; want it running again", err, containerState(c))
+				}
+				return
+			case "wake after turning off":
+				if err = e.sched.WakeRun(t.Context(), run.ID, e.member.ID); err == nil || !strings.Contains(err.Error(), "no longer shared with it") {
+					t.Fatalf("wake = %v; want it refused", err)
+				}
+			case "sweep":
+				e.sched.RevokeLogin(work)
+			}
+			waitFor(t, "the session stopped by the revoke", func() bool {
+				row, rowErr := e.db.GetRun(t.Context(), run.ID)
+				return rowErr == nil && row.Status.Terminal() && strings.HasPrefix(row.Reason, revokedReason)
+			})
+			if state := containerState(c); state == "running" {
+				t.Fatalf("container %s; want it never started on the login again", state)
+			}
+		})
+	}
+}
