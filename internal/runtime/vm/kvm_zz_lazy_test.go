@@ -632,8 +632,51 @@ func (v *lazyVM) capTest() {
 	v.sum, _, _ = v.sh("sha256sum </dev/shm/fill")
 }
 
+// lazyHostCow times, in a plain host process with no VM, the ways a page of
+// a private file mapping becomes the process's own: read and then written,
+// or written first.
+func lazyHostCow(h *lazyHost) {
+	const size = 300 << 20
+	path := filepath.Join(h.e.root, "..", "zz-hostcow")
+	defer func() { _ = os.Remove(path) }()
+	if out, err := exec.Command("sh", "-c", "head -c 314572800 /dev/urandom >"+path+" && sync").CombinedOutput(); err != nil {
+		h.logf("hostcow err=%q %s", err, out)
+		return
+	}
+	for _, mode := range []string{"read_then_write", "write_first", "read_all_then_write_all"} {
+		f, err := os.Open(path)
+		if err != nil {
+			h.logf("hostcow err=%q", err)
+			return
+		}
+		mem, err := unix.Mmap(int(f.Fd()), 0, size, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_PRIVATE)
+		_ = f.Close()
+		if err != nil {
+			h.logf("hostcow err=%q", err)
+			return
+		}
+		var sum byte
+		start := time.Now()
+		if mode == "read_all_then_write_all" {
+			for off := 0; off < size; off += 4096 {
+				sum += mem[off]
+			}
+		}
+		for off := 0; off < size; off += 4096 {
+			if mode == "read_then_write" {
+				sum += mem[off]
+			}
+			mem[off] = sum
+		}
+		took := time.Since(start)
+		_ = unix.Munmap(mem)
+		h.logf("hostcow mode=%s pages=%d total_ms=%s us_per_page=%.2f", mode, size/4096, ms(took), float64(took.Microseconds())/(size/4096))
+	}
+}
+
 func TestKVMZZLazyWake(t *testing.T) {
 	h := newLazyHost(t)
+	lazyHostCow(h)
 	n, _ := strconv.Atoi(lazyEnv("ZZ_N", "10"))
 	extra := lazyEnv("ZZ_EXTRA", "1") == "1"
 	var totals []string
