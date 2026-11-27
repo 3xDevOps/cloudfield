@@ -298,6 +298,11 @@ func TestLogoutAtARetiredAddress(t *testing.T) {
 			notified + "Device dev-1 may still be signed in; revoke it on https://auth.new.example.test/devices.\n" +
 				"still signed in to new.example.test; sign out there with: aether logout --edge https://new.example.test\n" +
 				"still signed in to new.example.test:443; sign out there with: aether logout --edge https://new.example.test:443\n", ""},
+		{"retired, a malformed record at the other spelling", http.StatusGone, retired,
+			map[string]string{newEdge + ":443": "not an origin", newEdge: "https://auth.new.example.test"}, "dev-1",
+			notified + "Device dev-1 may still be signed in; revoke it on https://auth.new.example.test/devices.\n" +
+				"still signed in to new.example.test; sign out there with: aether logout --edge https://new.example.test\n" +
+				"still signed in to new.example.test:443; sign out there with: aether logout --edge https://new.example.test:443\n", ""},
 		{"retired, signed in at the replacement's other spelling", http.StatusGone, retired,
 			map[string]string{newEdge + ":443": "https://other.new.example.test"}, "dev-1",
 			notified + "Device dev-1 may still be signed in; revoke it on https://other.new.example.test/devices.\n" +

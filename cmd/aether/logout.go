@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"text/tabwriter"
 
 	"github.com/3xDevOps/cloudfield/internal/cli"
@@ -60,38 +61,42 @@ func runLogout(args []string) error {
 
 // devicesPage says where to revoke a device that old, a retired address,
 // named replacement as its successor for: the Devices page of the sign-in
-// origin this machine recorded for exactly replacement, else of the one it
-// recorded for every other spelling of it, else of replacement's when this
-// machine knows it otherwise. An address it does not know is only the old
-// address's word, and records that disagree name no page.
+// origin this machine recorded for exactly replacement; without such a
+// record, of the one it recorded for every other spelling of it; else of
+// replacement's when this machine knows it otherwise. An address it does
+// not know is only the old address's word, and a record that cannot be
+// read, or records that disagree, name no page.
 func devicesPage(dir, old, replacement string) string {
 	const ask = "ask whoever runs the edge for the address of its Devices page and revoke it there"
 	holdings, err := cli.LoadEdgeHoldings(dir)
 	if err != nil || !holdings.Known(old, replacement) {
 		return ask
 	}
-	signin := map[string]string{}
-	for _, origin := range holdings.SignedIn {
-		if !cli.SameEdge(origin, replacement) {
-			continue
-		}
+	signinAt := func(origin string) (string, bool) {
 		c, err := edgeclient.New(dir, origin)
 		if err != nil {
-			return ask
+			return "", false
 		}
 		s, err := c.Session()
-		if err != nil {
+		return s.SigninOrigin, err == nil
+	}
+	page := ""
+	if slices.Contains(holdings.SignedIn, replacement) {
+		signin, ok := signinAt(replacement)
+		if !ok {
 			return ask
 		}
-		signin[origin] = s.SigninOrigin
-	}
-	page, exact := signin[replacement]
-	if !exact {
-		for _, o := range signin {
-			if page != "" && o != page {
+		page = signin
+	} else {
+		for _, origin := range holdings.SignedIn {
+			if !cli.SameEdge(origin, replacement) {
+				continue
+			}
+			signin, ok := signinAt(origin)
+			if !ok || (page != "" && signin != page) {
 				return ask
 			}
-			page = o
+			page = signin
 		}
 	}
 	if page == "" {
