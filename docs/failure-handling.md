@@ -295,7 +295,12 @@ than on a VM disk, is not counted, as it is not for a Docker session.
 
 Attaching, messaging, pulling, closing, killing and deleting sessions keep
 working below the reserve, and so does reopening a closed session whose container
-is still there. To free space yourself:
+is still there. Waking a sleeping session, or starting a closed one's stopped
+container, creates no disk, and waking a saved VM deletes its saved memory, so
+it needs only 1 GiB free for itself and each start in flight, not the reserve.
+With less it is refused with the error above, naming a reserve of 0 bytes. A
+woken session whose disks then grow is paused as described above. To free
+space yourself:
 
 1. Open **Insights → System** to see what uses the space.
 2. Delete sessions you no longer need with **Delete run** or `cloudfield delete
@@ -870,8 +875,10 @@ that ran detached, such as one started with `nohup`, stopped with the sleep:
 the connection is refused until you start it again. The request that woke it waits while the
 container starts and the agent restores its conversation, then goes through.
 Two wakes at once start the container once. Waking counts against the same
-memory and disk checks as a launch, and a saved VM must fit its saved memory
-([Recover from memory pressure](#recover-from-memory-pressure)); a VM
+memory checks as a launch, and a saved VM must fit its saved memory
+([Recover from memory pressure](#recover-from-memory-pressure)). On disk it
+needs 1 GiB free but not the reserve a launch keeps
+([Recover from disk pressure](#recover-from-disk-pressure)). A VM
 still paused in memory already holds what it wakes with and passes no
 check. A refused or failed wake returns its
 error to the request that caused it, keeps the session asleep and shows the

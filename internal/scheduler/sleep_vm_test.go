@@ -165,7 +165,7 @@ func (r *saveRuntime) savedFrom(id runtime.ID) string {
 
 // newSaveEnv's agents restore their conversation in a new process when
 // resumable.
-func newSaveEnv(t *testing.T, resumable bool) (*testEnv, *acpRuntime, *saveRuntime) {
+func newSaveEnv(t *testing.T, resumable bool, mutate ...func(*Config)) (*testEnv, *acpRuntime, *saveRuntime) {
 	t.Helper()
 	var sr *saveRuntime
 	e, rt := newACPEnv(t, func(cfg *Config) {
@@ -173,6 +173,9 @@ func newSaveEnv(t *testing.T, resumable bool) (*testEnv, *acpRuntime, *saveRunti
 		cfg.sleepAnyAgent = resumable
 		sr = &saveRuntime{acpRuntime: cfg.Runtime.(*acpRuntime), saved: map[runtime.ID]string{}}
 		cfg.Runtime = sr
+		for _, m := range mutate {
+			m(cfg)
+		}
 	})
 	e.onGuestCPU("0")
 	return e, rt, sr
