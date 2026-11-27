@@ -1,7 +1,7 @@
 // The local gateway runs the edge device flow and keeps the device token;
 // this screen never sees it.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { CopyableCommand } from '@/components/copyable-command'
 import { Button } from '@/components/ui/button'
@@ -242,6 +242,7 @@ export function EdgeSignIn({
   const claimEdge = claim === undefined ? undefined : parseClaim(claim)?.edge
   const signIn = useEdgeSignIn(client, claimEdge)
   const { phase, setPhase } = signIn
+  const signedIn = phase.name === 'signed-in' ? phase.edges : []
   const picked = phase.name === 'signed-in' ? phase.edges.find((e) => e.edge === phase.chosen) : undefined
   const signedOut = phase.name === 'signed-out'
   useEffect(() => {
@@ -275,24 +276,15 @@ export function EdgeSignIn({
         />
       )}
       {phase.name === 'signed-in' &&
-        phase.edges.map(
-          (e) =>
-            e.retiring && (
-              <RetiringNotice
-                key={e.edge}
-                edge={e.edge}
-                notice={e.retiring}
-                signedInThere={phase.edges.some((o) => sameOrigin(o.edge, e.retiring!.replacement))}
-                signIn={signIn}
-              />
-            ),
-        )}
+        phase.edges.map((e) => e.edge !== picked?.edge && retiringNotice(e, phase.edges, signIn))}
       {picked && (
         <ServerPicker
           key={`${picked.edge} ${claim ?? ''}`}
           client={client}
           edge={picked.edge}
           account={picked.account}
+          notice={retiringNotice(picked, signedIn, signIn)}
+          retired={picked.retiring?.state === 'retired'}
           claim={claim}
           onHand={onHand}
           onLinked={onLinked}
@@ -474,6 +466,12 @@ function sameOrigin(a: string, b: string): boolean {
   }
 }
 
+function retiringNotice(e: SignedInEdge, edges: SignedInEdge[], signIn: SignIn) {
+  if (!e.retiring) return null
+  const there = edges.find((o) => sameOrigin(o.edge, e.retiring!.replacement))
+  return <RetiringNotice key={e.edge} edge={e.edge} notice={e.retiring} signedInThere={there?.edge} signIn={signIn} />
+}
+
 /** What an edge address says of itself. Nothing authenticates it, so the
  * new address is filled in only when this computer, or the linked server's
  * verified notice, already names it; signing in stays the person's step. */
@@ -485,7 +483,8 @@ export function RetiringNotice({
 }: {
   edge: string
   notice: EdgeStatusNotice
-  signedInThere: boolean
+  /** The signed-in edge at the replacement, when there is one. */
+  signedInThere?: string
   signIn: SignIn
 }) {
   const server = useStore((s) => s.edge)
@@ -494,19 +493,36 @@ export function RetiringNotice({
   useEffect(() => {
     if (known) setTarget((t) => t || notice.replacement)
   }, [known, notice.replacement])
-  const when = notice.state === 'retired' ? 'is retired' : `is retiring${notice.date ? ` on ${notice.date}` : ''}`
   return (
-    <Callout tone={notice.state === 'retired' ? 'failed' : 'needs-you'} className="self-stretch">
+    <Callout
+      tone={notice.state === 'retired' ? 'failed' : 'needs-you'}
+      className="self-stretch"
+      title={
+        <>
+          <span className="font-code">{edgeHost(edge)}</span>{' '}
+          {notice.state === 'retired' ? 'is retired' : 'is retiring'}
+          {notice.state === 'retiring' && notice.date && (
+            <>
+              {' '}on <span className="whitespace-nowrap">{notice.date}</span>
+            </>
+          )}
+        </>
+      }
+    >
       <p>
-        <span className="font-code">{edgeHost(edge)}</span> says it {when} and that its new address is{' '}
-        <span className="break-words font-code">{notice.replacement}</span>.
+        It says its new address is <span className="break-words font-code">{notice.replacement}</span>.
       </p>
       <p className="text-muted">
-        {signedInThere
-          ? 'You are signed in there too: choose it above and link your server again through it.'
-          : known
-            ? 'Sign in at the new address, then link your server again there.'
-            : 'Confirm that address with whoever runs the edge before you sign in there.'}
+        {signedInThere ? (
+          <>
+            You are signed in at <span className="font-code">{edgeHost(signedInThere)}</span> too: choose it above and
+            link your server again through it.
+          </>
+        ) : known ? (
+          'Sign in at the new address, then link your server again there.'
+        ) : (
+          'Confirm that address with whoever runs the edge before you sign in there.'
+        )}
       </p>
       {!signedInThere && (
         <form
@@ -525,7 +541,7 @@ export function RetiringNotice({
               onChange={(e) => setTarget(e.target.value)}
             />
           </FormField>
-          <Button type="submit" size="sm" variant="secondary" disabled={!target.trim() || signIn.starting}>
+          <Button type="submit" variant="secondary" disabled={!target.trim() || signIn.starting}>
             {signIn.starting ? 'Signing in…' : 'Sign in'}
           </Button>
         </form>
@@ -581,6 +597,8 @@ function ServerPicker({
   client,
   edge,
   account,
+  notice,
+  retired,
   claim,
   onHand,
   onLinked,
@@ -588,6 +606,10 @@ function ServerPicker({
   client: Api
   edge: string
   account: EdgeAccount
+  /** The signed-in edge's retiring notice, shown under the line that names it. */
+  notice: ReactNode
+  /** The edge address is retired: its refusals do not change on a retry. */
+  retired: boolean
   claim?: string
   onHand: (link: HandedLink) => void
   onLinked: (result: EdgeLinkResult) => void
@@ -663,10 +685,11 @@ function ServerPicker({
         Signed in to <span className="font-code">{edgeHost(edge)}</span> as{' '}
         <span className="font-medium">{accountName(account)}</span>.
       </p>
+      {notice}
       {error && (
         <div className="flex min-w-0 flex-col items-start gap-2">
           <ErrorLine>{error}</ErrorLine>
-          {servers === null && (
+          {servers === null && !retired && (
             <Button size="sm" variant="secondary" onClick={() => void load()}>
               Retry
             </Button>
