@@ -44,9 +44,9 @@ type Manager struct {
 
 	mu     sync.Mutex
 	active map[domain.RunID]io.Closer
-	// tapped is the account each run was on when its output was last
-	// tapped, kept after that tap ends until the run does.
-	tapped map[domain.RunID]domain.MemberID
+	// tapped is the account and login each run was on when its output was
+	// last tapped, kept after that tap ends until the run does.
+	tapped map[domain.RunID]domain.Account
 	closed bool
 
 	sub events.Subscription
@@ -56,7 +56,7 @@ type Manager struct {
 // NewManager builds a Manager; call Start to begin consuming events.
 func NewManager(bus events.Bus, runs RunLookup, pty OutputTap, results ResultSink) *Manager {
 	return &Manager{bus: bus, runs: runs, pty: pty, results: results,
-		active: make(map[domain.RunID]io.Closer), tapped: make(map[domain.RunID]domain.MemberID)}
+		active: make(map[domain.RunID]io.Closer), tapped: make(map[domain.RunID]domain.Account)}
 }
 
 // Start subscribes to run-status events, attaches taps to already-running
@@ -95,7 +95,7 @@ func (m *Manager) scan(ctx context.Context) {
 		m.mu.Lock()
 		account, known := m.tapped[r.ID]
 		m.mu.Unlock()
-		m.attach(r.WorkspaceID, r.ID, known && account != r.AccountMember())
+		m.attach(r.WorkspaceID, r.ID, known && account != r.Account())
 	}
 }
 
@@ -175,7 +175,7 @@ func (m *Manager) attach(workspace domain.WorkspaceID, run domain.RunID, replace
 	if !ok {
 		return // no adapter for this harness: graceful degradation
 	}
-	account := r.AccountMember()
+	account := r.Account()
 	tap, err := m.pty.TapOutput(run)
 	if err != nil {
 		m.mu.Lock()
