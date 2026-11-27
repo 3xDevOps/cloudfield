@@ -123,10 +123,18 @@ export function messageListViewed(key: string): boolean {
   return viewers.has(key)
 }
 
+/** The latest read of each list's newest page; an earlier one that answers later must not replace its result. */
+const newestReads = new Map<string, number>()
+
 export async function loadMessagePage(store: RootStore, client: Api, scope: MessageScope, older = false): Promise<void> {
   const key = messageScopeKey(scope)
   const before = store.getState().messageLists[key]?.nextBefore
   if (older && !before) return
+  const identity = store.getState().identityKey
+  const read = (newestReads.get(key) ?? 0) + 1
+  if (!older) newestReads.set(key, read)
+  // Another member signed in, or a newer read of this page answered first.
+  const stale = () => store.getState().identityKey !== identity || (!older && newestReads.get(key) !== read)
   try {
     const page = await client.coordMessagesList({
       workspace_id: scope.workspaceID,
@@ -134,9 +142,11 @@ export async function loadMessagePage(store: RootStore, client: Api, scope: Mess
       correlation_id: scope.kind === 'thread' ? scope.correlationID : undefined,
       before: older ? (before ?? undefined) : undefined,
     })
+    if (stale()) return
     store.getState().setMessagePage(scope, page.messages ?? [], page.next_before, older)
     store.getState().setMessageError(scope)
   } catch (err) {
+    if (stale()) return
     // A kept list re-read with no viewer would show a stale error to its next one.
     if (viewers.has(key)) store.getState().setMessageError(scope, message(err))
     // An empty list still hears coord.message events, which re-read it.

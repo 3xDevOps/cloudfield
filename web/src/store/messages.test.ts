@@ -147,6 +147,43 @@ describe('messages slice', () => {
   })
 })
 
+describe('reads that answer late', () => {
+  it('keeps the newest read of a list when an earlier one answers after it', async () => {
+    const store = createRootStore()
+    store.getState().upsertRun(run())
+    let fail!: (err: Error) => void
+    const coordMessagesList = vi.fn()
+      .mockImplementationOnce(() => new Promise((_, reject) => { fail = reject }))
+      .mockResolvedValueOnce({ messages: [runMessage({ id: 'newer' })] })
+    const client = fakeApi({ coordMessagesList })
+    const view = renderHook(() => useMessageList(store, client, runScope))
+    await waitFor(() => expect(coordMessagesList).toHaveBeenCalledTimes(1))
+    await loadMessagePage(store, client, runScope)
+    expect(ids(scopeMessages(store.getState(), runScope))).toEqual(['newer'])
+    fail(new Error('server did not answer coord.messages.list within 1m0s'))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(store.getState().messageErrors['run:run_1']).toBeUndefined()
+    view.unmount()
+  })
+
+  it('drops a read that answers after another member signed in', async () => {
+    const store = createRootStore()
+    store.getState().upsertRun(run())
+    store.getState().setIdentityKey('first')
+    let answer!: (page: { messages: RunMessage[] }) => void
+    const client = fakeApi({ coordMessagesList: vi.fn(() => new Promise<{ messages: RunMessage[] }>((resolve) => { answer = resolve })) })
+    const view = renderHook(() => useMessageList(store, client, runScope))
+    await waitFor(() => expect(client.coordMessagesList).toHaveBeenCalledTimes(1))
+    store.getState().setIdentityKey('second')
+    answer({ messages: [runMessage({ id: 'for-the-first-member' })] })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(scopeMessages(store.getState(), runScope)).toEqual([])
+    view.unmount()
+  })
+})
+
 describe('agent message events', () => {
   const messageEvent = (seq: number, payload: Record<string, unknown>, type = 'coord.message'): Event => ({
     id: `coord-${seq}`,

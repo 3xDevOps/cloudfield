@@ -527,8 +527,10 @@ describe('run details', () => {
     const section = await panel.findByRole('region', { name: 'Agent messages' })
     const alert = within(section).getByRole('alert')
     expect(within(alert).getByText('server did not answer coord.messages.list within 1m0s')).toBeDefined()
+    const reads = vi.mocked(api.coordMessagesList).mock.calls.length
     fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
     expect((await within(alert).findByRole('button', { name: 'Retrying…' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(api.coordMessagesList).toHaveBeenCalledTimes(reads + 1)
     await act(async () => answer({ messages: [] }))
     await waitFor(() => expect(panel.queryByRole('region', { name: 'Agent messages' })).toBeNull())
   })

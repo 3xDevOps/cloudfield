@@ -33,7 +33,7 @@ import { WaitConditions } from '@/routes/run/wait-conditions'
 import { cn } from '@/lib/utils'
 import { useStore } from '@/store'
 import { compareInstants, isDoneNote, isOpenNote } from '@/store/collaboration'
-import { useRunPresentation } from '@/store/hooks'
+import { useCapability, useRunPresentation } from '@/store/hooks'
 import { useShallow } from 'zustand/react/shallow'
 import { loadMessagePage, messageScopeKey, useMessageList, type MessageScope } from '@/store/messages'
 import { isTerminal, type RunRecord } from '@/store/runs'
@@ -75,19 +75,25 @@ function AgentMessages({ run, inset }: { run: RunRecord; inset: boolean }) {
   const [all, setAll] = useState(false)
   const [loading, setLoading] = useState(false)
   const [retrying, setRetrying] = useState(false)
+  const [olderFailed, setOlderFailed] = useState(false)
+  const readable = useCapability().hasMethod('coord.messages.list')
   const hidden = useStore((s) => s.hiddenAgentMessages[run.id] === true)
   useMessageList(useStore, api, scope)
-  if (messages.length === 0 && !error) return null
+  // A gateway without the method has nothing to retry.
+  if (messages.length === 0 && (!error || !readable)) return null
   const label = (id: string) => (id === run.id ? 'This session' : undefined)
   const shown = all ? messages : messages.slice(-recentMessages)
   const older = async () => {
     setLoading(true)
     await loadMessagePage(useStore, api, scope, true)
+    setOlderFailed(Boolean(useStore.getState().messageErrors[key]))
     setLoading(false)
   }
+  // Retry repeats the read that failed: the older page after Show older, else the newest.
   const retry = async () => {
     setRetrying(true)
-    await loadMessagePage(useStore, api, scope)
+    await loadMessagePage(useStore, api, scope, olderFailed)
+    setOlderFailed(olderFailed && Boolean(useStore.getState().messageErrors[key]))
     setRetrying(false)
   }
   return (
