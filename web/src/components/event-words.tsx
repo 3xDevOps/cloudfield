@@ -8,6 +8,7 @@ import { liveStateOf, stateLabel } from '@/lib/status'
 import type { BudgetState, Event, RoomMessageKind, RoomMessageState, RunActivity, RunStatus } from '@/lib/types'
 import { modeLabel } from '@/routes/run/agent-name'
 import { useStore } from '@/store'
+import { agentMailVia } from '@/store/collaboration'
 
 type Payload = Record<string, unknown>
 
@@ -89,6 +90,7 @@ function roomLine(p: Payload, actor: string): ReactNode {
       return 'Cloudfield added a note'
     case 'steer_request': {
       const state = steerStates[text(p.state) as RoomMessageState]
+      if (p.via === agentMailVia) return `A line telling the agent to read its mail ${state ?? 'was held'}`
       return state ? <>A message from <Who id={p.actor_id} object /> {state}</> : <>{who} messaged the agent</>
     }
     default:

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 )
 
@@ -72,6 +73,9 @@ func attentionRowOf(it protocol.AttentionItem, l links) attentionRow {
 	case it.Message != nil:
 		row.AnswerID = it.Message.ID
 		text.Text = clip(it.Message.Body, maxText)
+		if it.Message.Via == domain.ViaAgentMail {
+			row.Reason = "The agent has unread mail; a line telling it to read its inbox is typed into its terminal unless dismissed"
+		}
 	}
 	row.AnswerWith = answerWith(it)
 	return row

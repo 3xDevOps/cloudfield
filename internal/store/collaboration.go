@@ -106,7 +106,8 @@ type RoomMessage struct {
 	ActorID          domain.MemberID
 	ActorDisplayName string
 	// Via is the connector client, such as ChatGPT, the actor posted
-	// through; empty for every other caller.
+	// through, or domain.ViaAgentMail on a mail wake notice; empty for
+	// every other caller.
 	Via            string
 	Kind           RoomMessageKind
 	Body           string

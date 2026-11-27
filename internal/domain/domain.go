@@ -972,6 +972,25 @@ func ViaFrom(ctx context.Context) string {
 	return via
 }
 
+// ViaAgentMail is the Via of the room message the server writes to show a
+// member in control the wake it owes their session's agent for unread mail.
+// No connector client posts under it.
+const ViaAgentMail = "agent mail"
+
+type wakeApprovedKey struct{}
+
+// WithWakeApproved marks ctx as the member in control of a session asking
+// for the mail wake held for them to be typed now.
+func WithWakeApproved(ctx context.Context) context.Context {
+	return context.WithValue(ctx, wakeApprovedKey{}, true)
+}
+
+// WakeApproved reports whether WithWakeApproved marked ctx.
+func WakeApproved(ctx context.Context) bool {
+	approved, _ := ctx.Value(wakeApprovedKey{}).(bool)
+	return approved
+}
+
 // AccountMember returns the member whose agent account backs the run.
 func (r *Run) AccountMember() MemberID {
 	if r.AccountMemberID != "" {

@@ -368,9 +368,11 @@ it types one line that points at the inbox, never a message:
 6. **A Standard Copilot, Gemini or Cursor session gets one typed line.** These
    CLIs have no hook or API that starts a turn, so the server pastes the
    inbox instruction into the agent's terminal as one line and submits it.
-   It does so only while the terminal is quiet, bracketed paste is on, no
-   recorded request waits for an answer and no member controls the session;
-   otherwise the wake stays owed. Each set of new unread messages is typed for once.
+   It does so only while the terminal is quiet, bracketed paste is on and no
+   recorded request waits for an answer; otherwise the wake stays owed. A
+   member connected in control of the session is shown the wake for 45
+   seconds first and can type it at once or dismiss it. Each set of new
+   unread messages is typed for once.
    Nothing is typed after the agent exits to its login shell.
    The conditions and what they cannot see are in
    [harnesses.md](harnesses.md#typed-wake).

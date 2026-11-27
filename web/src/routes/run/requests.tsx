@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { DecisionButtons } from '@/components/decision-buttons'
+import { DecisionButtons, type DecisionAnswers } from '@/components/decision-buttons'
 import { AgentGlyph } from '@/components/ui/agent-glyph'
 import { Avatar } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
@@ -20,7 +20,7 @@ import type { RunNavigation } from '@/routes/run/header'
 import type { RunRoom } from '@/routes/run/room'
 import { SessionRequestCard } from '@/routes/run/session-requests'
 import { useStore } from '@/store'
-import { queuedSteers, unansweredQuestions } from '@/store/collaboration'
+import { agentMailVia, heldFor, unansweredQuestions } from '@/store/collaboration'
 import { useSelf, useStale } from '@/store/hooks'
 import { stillWaiting, usePastDeadline } from '@/store/optimistic'
 import type { RunRecord } from '@/store/runs'
@@ -34,11 +34,16 @@ export const requestCardID = {
 const emptyMessages: RoomMessage[] = []
 const emptyRequests: SessionRequest[] = []
 
-const deliveryText = (remaining: number) => (remaining ? `Delivers in ${remaining}s` : 'Ready to deliver')
+const deliveryText = (remaining: number, mail: boolean) => mail
+  ? (remaining ? `Typed in ${remaining}s` : 'Typed once the terminal is quiet')
+  : (remaining ? `Delivers in ${remaining}s` : 'Ready to deliver')
 
-export function DeliveryCountdown({ deliverAfter }: { deliverAfter?: string }) {
-  return <>{deliveryText(useSecondsUntil(deliverAfter))}</>
+export function DeliveryCountdown({ deliverAfter, mail = false }: { deliverAfter?: string; mail?: boolean }) {
+  return <>{deliveryText(useSecondsUntil(deliverAfter), mail)}</>
 }
+
+/** A held mail wake is typed or put off, not approved or denied. */
+export const mailWakeAnswers: DecisionAnswers = { approve: ['Type it now', 'Typing…'], deny: ['Not now', 'Dismissing…'], denyVariant: 'secondary' }
 
 export function useRunRequests(run: RunRecord) {
   const room = useStore((s) => s.roomMessages[run.id] ?? emptyMessages)
@@ -49,7 +54,7 @@ export function useRunRequests(run: RunRecord) {
     inputs: run.acp ? [] : inputs.filter((input) => !isSudo(input)),
     sudo: inputs.filter(isSudo),
     sessionRequests,
-    steers: queuedSteers(room).filter((m) => m.actor_id !== selfID),
+    steers: heldFor(room, selfID),
     questions: unansweredQuestions(room).filter((m) => m.actor_id !== run.member_id),
   }
 }
@@ -91,28 +96,30 @@ function ReplyForm({ question, room }: { question: RoomMessage; room: RunRoom })
   )
 }
 
-function SteerCard({ steer, name, agent, room, openTerminal }: {
+function SteerCard({ steer, name, harness, agent, room, openTerminal }: {
   steer: RoomMessage
   name: string
+  harness: string
   agent: AgentTerminal
   room: RunRoom
   openTerminal: () => void
 }) {
   const remaining = useSecondsUntil(steer.deliver_after)
   const total = steer.deliver_after ? Date.parse(steer.deliver_after) - Date.parse(steer.created_at) : 0
+  const mail = steer.via === agentMailVia
   return (
     <RequestCard
       id={requestCardID.steer(steer.id)}
-      avatar={<MemberAvatar id={steer.actor_id} name={name} />}
-      title={`${name} sent the agent a message${steer.via ? ` via ${steer.via}` : ''}`}
-      meta={deliveryText(remaining)}
+      avatar={mail ? <IconTile aria-hidden><AgentGlyph agent={harness} className="size-4" /></IconTile> : <MemberAvatar id={steer.actor_id} name={name} />}
+      title={mail ? 'The agent has unread mail' : `${name} sent the agent a message${steer.via ? ` via ${steer.via}` : ''}`}
+      meta={deliveryText(remaining, mail)}
       description={<Clamped className="max-h-[6lh]">{steer.body}</Clamped>}
       timeBar={remaining > 0 && total > 0 && <RequestTimeBar left={remaining * 1000} total={total} />}
       footer={(agent.localControl || (agent.steerable && agent.hasAgentTerminal)) && (
         <RequestFooter>
           <RequestActions>
             {agent.localControl
-              ? <DecisionButtons decide={(approve) => room.decide(steer.id, approve ? 'approve' : 'deny')} />
+              ? <DecisionButtons decide={(approve) => room.decide(steer.id, approve ? 'approve' : 'deny')} answers={mail ? mailWakeAnswers : undefined} />
               : <RequestAction label="Take control to decide" onClick={openTerminal} />}
           </RequestActions>
         </RequestFooter>
@@ -206,7 +213,7 @@ export function NeedsYouCards({ run, agent, room, nav, docked }: {
         />
       ))}
       {steers.map((steer) => (
-        <SteerCard key={steer.id} steer={steer} name={name(steer.actor_id, steer.actor_display_name)} agent={agent} room={room} openTerminal={openTerminal} />
+        <SteerCard key={steer.id} steer={steer} name={name(steer.actor_id, steer.actor_display_name)} harness={run.harness} agent={agent} room={room} openTerminal={openTerminal} />
       ))}
       {questions.map((question) => {
         const asker = name(question.actor_id, question.actor_display_name)

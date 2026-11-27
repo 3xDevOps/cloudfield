@@ -58,6 +58,39 @@ func TestMailTypesOneLineIntoAnIdleTerminal(t *testing.T) {
 	}
 }
 
+// Clicking a dashboard button takes focus from the terminal, which every
+// agent CLI asks to be told, so the terminal has just had input when the
+// member in control asks for a held wake.
+func TestTheMemberInControlTypesAHeldWakeOverTheirOwnInput(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t, withServerBinary(fakeServerBinary(t, "typed wake cli")))
+	withCoordination(t, e)
+	run, entry := e.launchQuiet(t, "gemini")
+	sess := e.pty.session(run)
+	sess.mu.Lock()
+	sess.typed = time.Now()
+	sess.mu.Unlock()
+	asked := domain.WithWakeApproved(t.Context())
+	if err := e.sched.Wake(t.Context(), run, protocol.CoordInboxContext(1)); err == nil {
+		t.Fatal("a wake nobody asked for was typed over a person's input")
+	}
+	e.sched.mu.Lock()
+	entry.quietFrom = time.Now()
+	e.sched.mu.Unlock()
+	if err := e.sched.Wake(asked, run, protocol.CoordInboxContext(1)); err == nil || len(e.pty.injected()) != 0 {
+		t.Fatalf("into a session that just resumed: Wake = %v, typed %+v", err, e.pty.injected())
+	}
+	e.sched.mu.Lock()
+	entry.quietFrom = time.Time{}
+	e.sched.mu.Unlock()
+	if err := e.sched.Wake(asked, run, protocol.CoordInboxContext(1)); err != nil {
+		t.Fatalf("Wake the member in control asked for: %v", err)
+	}
+	if got := e.pty.injected(); len(got) != 1 || got[0].message != typedWakeLine(1) {
+		t.Fatalf("typed %+v, want the line once", got)
+	}
+}
+
 func TestATypedWakeWaitsForAQuietUnattendedTerminal(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t, withServerBinary(fakeServerBinary(t, "typed wake cli")))

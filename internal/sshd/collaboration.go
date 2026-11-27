@@ -493,6 +493,8 @@ func collaborationRPCError(err error) *protocol.Error {
 		return &protocol.Error{Code: protocol.CodeDenied, Message: "collaboration operation denied"}
 	case errors.Is(err, collab.ErrInvalidRequest), errors.Is(err, collab.ErrInvalidAttachment), errors.Is(err, collab.ErrInvalidAnchor):
 		return &protocol.Error{Code: protocol.CodeInvalidParams, Message: "invalid collaboration request"}
+	case errors.Is(err, collab.ErrWakeNotTyped):
+		return &protocol.Error{Code: protocol.CodeUnavailable, Message: err.Error()}
 	case errors.Is(err, store.ErrRoomMessageResolveConflict):
 		return &protocol.Error{Code: protocol.CodeConflict, Message: "room message already resolved with a different outcome"}
 	case errors.Is(err, evidence.ErrExpired):

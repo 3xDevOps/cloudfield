@@ -242,6 +242,18 @@ func TestAttentionListFindsRoomRequestsBeyondTheNewestPage(t *testing.T) {
 		t.Errorf("queued message = %+v, want %s", q, steer.ID)
 	}
 
+	wake := &store.RoomMessage{WorkspaceID: e.ws.ID, RunID: bobs.ID, ActorID: bob.ID, Kind: store.RoomMessageSteerRequest, Body: "1 unread message from another agent.", IdempotencyKey: "wake", Via: domain.ViaAgentMail}
+	if err := e.store.CreateRoomMessage(ctx, wake); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.srv.cfg.Control.Acquire(string(bobs.ID), string(bob.ID), "bob-tab", false); err != nil {
+		t.Fatal(err)
+	}
+	if q := attentionItems(t, e, bob.ID, protocol.AttentionListParams{})[bobs.ID]; q.Kind != protocol.AttentionKindQueuedMessage || q.Message == nil || q.Message.ID != wake.ID ||
+		q.Message.Via != domain.ViaAgentMail || q.Reason != "The agent has unread mail, a line telling it to read its inbox is typed soon" {
+		t.Errorf("a held mail wake on the controller's own session = %+v, want it listed as agent mail", q)
+	}
+
 	e.srv.cfg.Store = noOpenRoomRequests{e.store}
 	if q := attentionItems(t, e, bob.ID, protocol.AttentionListParams{})[bobs.ID]; q.Kind != protocol.AttentionKindRoomQuestion || q.Reason != "A teammate asked a question" || q.Message != nil {
 		t.Errorf("room question without its text = %+v", q)

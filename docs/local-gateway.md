@@ -1099,9 +1099,11 @@ request, in either mode, offers `allow-once` (`allow_once`) and `deny-once`
 request is a `question` whose `request` also carries `url`: open that page,
 then accept or decline.
 `room-question` and `queued-message` carry
-`message: {id, body, from}`: a room
+`message: {id, body, from, via}`: a room
 question to answer with a `run.room.post` reply, and a steer request to
-decide with `run.room.decide`. A `room-question` whose text cannot be read
+decide with `run.room.decide`. `via` is the room message's: `agent mail`
+marks a held [typed wake](harnesses.md#typed-wake), which the server writes
+as the session's owner and no client can post. A `room-question` whose text cannot be read
 says `A teammate asked a question` and has no `message`. An item with no
 known `since` sorts last.
 

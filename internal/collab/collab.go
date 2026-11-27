@@ -199,6 +199,7 @@ type Service struct {
 	// bootAt is when Start ran; steers queued before it are an earlier
 	// server process's.
 	bootAt time.Time
+	waker  Waker
 }
 
 // OverdueDeliveryError reports the latest overdue worker failure, kept after
@@ -362,6 +363,9 @@ func (s *Service) Close() error {
 func (s *Service) Post(ctx context.Context, in MessageInput) (Result, error) {
 	if err := s.validateInput(ctx, &in); err != nil {
 		return Result{}, err
+	}
+	if domain.ViaFrom(ctx) == domain.ViaAgentMail {
+		return Result{}, fmt.Errorf("%w: a connector client named %q cannot post: the name marks the server's mail wake notices", ErrInvalidRequest, domain.ViaAgentMail)
 	}
 	run, actor, ws, err := s.scope(ctx, in.WorkspaceID, in.RunID, in.ActorID)
 	if err != nil {

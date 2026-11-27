@@ -20,6 +20,7 @@ function mount(draft: string) {
         sent('3', 'a note', { kind: 'comment' }),
         sent('4', 'second\nwith two lines'),
         sent('5', 'third'),
+        sent('6', '1 unread message from another agent.', { via: 'agent mail' }),
       ],
     },
   })

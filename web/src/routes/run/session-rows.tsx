@@ -20,10 +20,11 @@ import type { AgentTerminal } from '@/routes/run/agent-terminal'
 import type { RunNavigation } from '@/routes/run/header'
 import { NoteMessage } from '@/routes/run/note-thread'
 import type { RunRoom } from '@/routes/run/room'
-import { DeliveryCountdown, requestCardID } from '@/routes/run/requests'
+import { DeliveryCountdown, mailWakeAnswers, requestCardID } from '@/routes/run/requests'
 import { hasDetail, MoreSteps, StepDetail, StepsBlockHeader, StepView } from '@/routes/run/session-steps'
 import { SubagentGroup } from '@/routes/run/subagent-cards'
 import { useStore } from '@/store'
+import { agentMailVia } from '@/store/collaboration'
 import { useSelf } from '@/store/hooks'
 import type { RunRecord } from '@/store/runs'
 import type { SessionRow } from '@/store/session-rows'
@@ -171,9 +172,10 @@ function UserRow({ row, ctx, name }: { row: Extract<SessionRow, { kind: 'user' }
   const self = useStore((s) => s.info?.member.id)
   const body = row.body.startsWith(`${ctx.task}\n\n`) ? ctx.task : row.body
   const authorID = row.authorID ?? (row.images?.length || row.files?.length ? undefined : ctx.ownerID)
-  const color = useStore((s) => (authorID ? resolveMember(s, authorID).member?.color : undefined))
-  const author = authorID === self && !row.via ? undefined : `${authorID ? name(authorID) : 'User'}${row.via ? ` via ${row.via}` : ''}`
-  const other = authorID !== undefined && authorID !== self
+  const mail = row.via === agentMailVia
+  const color = useStore((s) => (authorID && !mail ? resolveMember(s, authorID).member?.color : undefined))
+  const author = mail ? 'Agent mail' : authorID === self && !row.via ? undefined : `${authorID ? name(authorID) : 'User'}${row.via ? ` via ${row.via}` : ''}`
+  const other = mail || (authorID !== undefined && authorID !== self)
   const asking = other && row.deliverAfter !== undefined
   const steer = asking ? ctx.steer : undefined
   return (
@@ -182,9 +184,9 @@ function UserRow({ row, ctx, name }: { row: Extract<SessionRow, { kind: 'user' }
       border={other ? { color, ...(asking && { from: row.at, until: row.deliverAfter }) } : undefined}
       actions={authorID && steer && (
         <>
-          <Avatar name={name(authorID)} color={color} size="header" />
+          {!mail && <Avatar name={name(authorID)} color={color} size="header" />}
           {'decide' in steer
-            ? <DecisionButtons decide={(approve) => steer.decide(row.id, approve)} />
+            ? <DecisionButtons decide={(approve) => steer.decide(row.id, approve)} answers={mail ? mailWakeAnswers : undefined} />
             : <><StaleReason /><RequestAction label="Take control to decide" onClick={steer.takeControl} /></>}
         </>
       )}
@@ -194,8 +196,9 @@ function UserRow({ row, ctx, name }: { row: Extract<SessionRow, { kind: 'user' }
           {author && <span aria-hidden className="-ml-1">·</span>}
           {row.delivery && (
             <>
-              <span className={cn('shrink-0', (row.delivery === 'Not sent' || row.delivery === 'Denied') && 'text-state-failed')}>
-                {row.delivery === 'Queued' && row.deliverAfter ? <DeliveryCountdown deliverAfter={row.deliverAfter} /> : row.delivery}
+              <span className={cn('shrink-0', (row.delivery === 'Not sent' || row.delivery === 'Denied') && !mail && 'text-state-failed')}>
+                {row.delivery === 'Queued' && row.deliverAfter ? <DeliveryCountdown deliverAfter={row.deliverAfter} mail={mail} />
+                  : mail && row.delivery === 'Denied' ? 'Dismissed' : row.delivery}
               </span>
               <span aria-hidden>·</span>
             </>

@@ -44,7 +44,7 @@ func (s *Service) publishMessage(ctx context.Context, msg *store.RoomMessage) er
 	if msg.Resolution != "" {
 		actor = msg.ResolvedBy
 	}
-	_, err := s.cfg.Bus.Publish(ctx, events.Event{WorkspaceID: msg.WorkspaceID, RunID: msg.RunID, ActorID: actor, Payload: events.RoomMessagePayload{MessageID: msg.ID, WorkspaceID: msg.WorkspaceID, RunID: msg.RunID, ActorID: msg.ActorID, Kind: string(msg.Kind), State: string(msg.State), DeliverAfter: deliverAfter, DecidedBy: msg.DecidedBy, DecidedAt: decidedAt, CorrelationID: msg.CorrelationID, AttachmentCount: len(msg.Attachments), HasAnchor: msg.Anchor != nil, Resolution: string(msg.Resolution)}})
+	_, err := s.cfg.Bus.Publish(ctx, events.Event{WorkspaceID: msg.WorkspaceID, RunID: msg.RunID, ActorID: actor, Payload: events.RoomMessagePayload{MessageID: msg.ID, WorkspaceID: msg.WorkspaceID, RunID: msg.RunID, ActorID: msg.ActorID, Kind: string(msg.Kind), State: string(msg.State), DeliverAfter: deliverAfter, DecidedBy: msg.DecidedBy, DecidedAt: decidedAt, CorrelationID: msg.CorrelationID, AttachmentCount: len(msg.Attachments), HasAnchor: msg.Anchor != nil, Resolution: string(msg.Resolution), Via: msg.Via}})
 	if err != nil {
 		return fmt.Errorf("collab: publish room message %q in state %q: %w", msg.ID, msg.State, err)
 	}

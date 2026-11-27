@@ -409,6 +409,14 @@ export function queuedSteers(messages: RoomMessage[]): RoomMessage[] {
   )
 }
 
+/** Mirrors domain.ViaAgentMail: the notice of a mail wake held for the member in control, which the server writes as the session's owner. */
+export const agentMailVia = 'agent mail'
+
+/** The queued messages memberID has to decide: everyone else's, and mail wake notices. */
+export function heldFor(messages: RoomMessage[], memberID: string | undefined): RoomMessage[] {
+  return queuedSteers(messages).filter((message) => message.via === agentMailVia || message.actor_id !== memberID)
+}
+
 /** A comment nobody has completed or deleted: a sticky in the rail or strip. Questions are never resolvable. */
 export const isOpenNote = (message: RoomMessage) => message.kind === 'comment' && !message.resolution
 

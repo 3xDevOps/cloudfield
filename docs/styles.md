@@ -219,7 +219,7 @@ than restyling it.
 | `secondary` | Seam border on `bg-raised`, `shadow-button` | Other actions |
 | `ghost` | Muted text, `bg-hover-chrome` on hover | Toolbar and icon buttons |
 | `danger` | `bg-state-failed`, `text-on-failed` | Confirming a destructive action |
-| `confirm` | `bg-state-done`, `text-on-done` | Approve, beside a `danger` Deny |
+| `confirm` | `bg-state-done`, `text-on-done` | Approve, beside a `danger` Deny; Type it now, beside a `secondary` Not now |
 | `link` | Accent text, underline on hover | Inline actions that read as links |
 | `quiet` | Muted text; `text-text` and an underline on hover | Inline secondary actions inside muted copy |
 

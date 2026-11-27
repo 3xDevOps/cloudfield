@@ -1023,15 +1023,37 @@ and the server tries again, at least every 30 seconds:
   and when a person last typed.
 - No request the server recorded for the session waits for an answer, such
   as a sudo approval.
-- No member controls the session
-  ([terminal.md](terminal.md#session-control)). The wake waits until they
-  release control or their lease lapses. The owner's desktop Terminal view
-  takes control when it opens, so the wake waits while that view stays open.
-  Nothing tells the member or the sender that it waits.
+- Nobody is connected in control of the session
+  ([terminal.md](terminal.md#session-control)). A member who is gets a notice
+  first, described below. A lease whose connection dropped holds the wake,
+  without a notice, until it reconnects or lapses 15 seconds later.
 - The agent is not waiting in `cloudfield-internal inbox --wait`, which takes
   the mail itself.
 
 Each set of new unread messages is typed for once. New mail types again.
+
+While a member is connected in control, the owner's desktop Terminal view
+included, the server holds the wake for 45 seconds and shows it to them like
+a teammate's held message ([terminal.md](terminal.md#messages-and-notes)).
+Their dashboard lists **The agent has unread mail** under **Details → Needs
+you**, shows an **Agent mail** row in Chat that counts down, and offers
+**Review agent mail** in the header:
+
+- **Type it now** types the line at once, also right after the member typed
+  in the terminal. The other conditions above still apply: if the terminal
+  cannot take the line, the dashboard shows why and the notice stays.
+- **Not now** dismisses the notice. That mail is not typed for again; new
+  mail makes a new notice.
+- With neither, the line is typed when the 45 seconds end and the conditions
+  above hold. The server checks every second, so a member who is still
+  typing is not cut into: the notice reads **Typed once the terminal is
+  quiet** until 10 seconds pass without input.
+
+Mail that arrives while a notice waits joins it, and the line counts the
+mail unread when it is typed. If the agent reads its inbox first, nothing is
+typed and the row ends as **Not sent**. A notice survives a server restart.
+A member in control from `cloudfield attach` has no dashboard and sees no
+notice: the line is typed on the same schedule.
 
 What the server cannot see:
 

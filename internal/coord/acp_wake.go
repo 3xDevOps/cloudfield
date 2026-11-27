@@ -2,7 +2,10 @@ package coord
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -160,6 +163,25 @@ func (s *Service) wakeEnhanced(run domain.RunID) (retry bool) {
 	if typed {
 		// A member in control may be typing a prompt the line would join.
 		admit = s.cfg.ReminderAdmission
+		if s.cfg.HoldWake != nil {
+			set := sha256.Sum256([]byte(strings.Join(ids, "\n")))
+			unread := fmt.Sprintf("%d unread messages from other agents", len(ids))
+			if len(ids) == 1 {
+				unread = "1 unread message from another agent"
+			}
+			held, holdErr := s.cfg.HoldWake(ctx, run, "mail-wake-"+hex.EncodeToString(set[:]),
+				unread+". Cloudfield types a line into the terminal that tells the agent to read its inbox.")
+			if holdErr != nil {
+				slog.Debug("coord: typed wake not held for the member in control", "run", run, "error", holdErr)
+				return s.cfg.Waker.Wakeable(run)
+			}
+			if held {
+				s.mu.Lock()
+				s.markWokenLocked(run, ids)
+				s.mu.Unlock()
+				return false
+			}
+		}
 	}
 	err = admit(ctx, run, func() error {
 		// An agent waiting in aether-internal inbox takes the mail from that
@@ -203,6 +225,14 @@ func (s *Service) wakeEnhanced(run domain.RunID) (retry bool) {
 	if _, refused := s.enhancedRefusals[run]; err != nil && !refused {
 		s.enhancedRefusals[run] = wakeRefusal{opens: opens}
 	}
+	s.markWokenLocked(run, ids)
+	if overlapSent {
+		s.enhancedOverlaps[run] = overlap
+	}
+	return false
+}
+
+func (s *Service) markWokenLocked(run domain.RunID, ids []string) {
 	woken := s.enhancedWoken[run]
 	if woken == nil {
 		woken = make(map[string]struct{}, len(ids))
@@ -211,10 +241,40 @@ func (s *Service) wakeEnhanced(run domain.RunID) (retry bool) {
 	for _, id := range ids {
 		woken[id] = struct{}{}
 	}
-	if overlapSent {
-		s.enhancedOverlaps[run] = overlap
+}
+
+// TypeHeldWake types the wake a notice held back (Config.HoldWake) into
+// run's terminal, worded for the mail unread now. It reports false when
+// nothing is left to wake: the agent read its mail, or the session takes no
+// typed wake any more. The caller holds the run's control admission.
+func (s *Service) TypeHeldWake(ctx context.Context, run domain.RunID) (bool, error) {
+	mail, ok := s.cfg.Mail.(store.UnackedRunMessageIDsStore)
+	if !ok || s.cfg.Disabled || s.cfg.Waker == nil || !s.cfg.Waker.TypedWake(run) || !s.enterRun(run) {
+		return false, nil
 	}
-	return false
+	defer s.leaveRun(run)
+	ctx, cancel := s.wakeContext(ctx, run, enhancedWakeTimeout)
+	defer cancel()
+	admission := s.inboxAdmissionLock(run)
+	admission.Lock()
+	defer admission.Unlock()
+	ids, err := mail.ListUnackedRunMessageIDs(ctx, run, protocol.CoordMaxUnread)
+	if err != nil {
+		return false, fmt.Errorf("coord: typed wake: list unread mail: %w", err)
+	}
+	s.mu.Lock()
+	reading := s.inboxConsumers[run] > 0
+	s.mu.Unlock()
+	if len(ids) == 0 || reading {
+		return false, nil
+	}
+	if err = s.cfg.Waker.Wake(ctx, run, protocol.CoordInboxContext(len(ids))); err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	s.markWokenLocked(run, ids)
+	s.mu.Unlock()
+	return true, nil
 }
 
 // overlapState names the peers and files the run overlaps, the state the

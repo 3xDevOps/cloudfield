@@ -627,6 +627,26 @@ describe('run details', () => {
     })))
   })
 
+  it('lets the member in control type a held mail wake now or dismiss it', async () => {
+    const wake = roomMessage({
+      id: 'wake_1', kind: 'steer_request', state: 'queued', via: 'agent mail', deliver_after: '2099-01-01T00:00:00Z',
+      body: '2 unread messages from other agents. Cloudfield types a line into the terminal that tells the agent to read its inbox.',
+    })
+    vi.mocked(api.runRoomList).mockResolvedValue({ messages: [wake] })
+    open({ controller_member_id: alice.id, harness: 'gemini' })
+    attached(true)
+    fireEvent.click(await within(screen.getByRole('toolbar', { name: 'Session actions' })).findByRole('button', { name: 'Review agent mail' }))
+    const panel = within(await screen.findByRole('dialog', { name: 'Session details' }))
+    const card = within(panel.getByText('The agent has unread mail').closest('[data-slot=request-card]') as HTMLElement)
+    expect(card.getByText(wake.body)).toBeDefined()
+    expect(card.getByText(/^Typed in \d+s$/)).toBeDefined()
+    expect(card.getByRole('button', { name: 'Type it now' })).toBeDefined()
+    fireEvent.click(card.getByRole('button', { name: 'Not now' }))
+    await waitFor(() => expect(api.runRoomDecide).toHaveBeenCalledWith(expect.objectContaining({
+      message_id: 'wake_1', decision: 'deny', control_generation: 3,
+    })))
+  })
+
   async function waitingCards() {
     vi.mocked(api.runRoomList).mockResolvedValue({ messages: [
       roomMessage({ id: 'q_1', kind: 'question', actor_id: bob.id, body: 'keep the prefix?' }),

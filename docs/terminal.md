@@ -113,10 +113,13 @@ page, or when the lease lapses 15 seconds after the tab is killed. See
 [coordination.md](coordination.md#subsessions).
 
 Mail wakes an idle Standard Copilot, Gemini or Cursor session with one line
-the server types into its terminal. While anyone controls the session that
-line waits until they release control or the lease lapses, and nothing shows
-that it waits: `held` marks only a subsession's mail. Text still in the
-agent's input box after control is released is submitted joined to the line
+the server types into its terminal. While you are connected in control, the
+line is held for 45 seconds and shown to you first: **The agent has unread
+mail** under **Details → Needs you**, an **Agent mail** row in Chat and
+**Review agent mail** in the header. **Type it now** types it at once and
+**Not now** dismisses it. Otherwise it is typed when the 45 seconds end and
+you have not typed in the terminal for 10 seconds. Text still in the agent's
+input box then is submitted joined to the line
 ([harnesses.md](harnesses.md#typed-wake)).
 
 ### The Terminal toolbar
@@ -159,6 +162,10 @@ eight files per message.
 - The row ends as **Sent**, **Not sent**, **Delivery uncertain**, **Denied** or
   **Cancelled**. **Sent** means the terminal accepted the write, not that the
   agent read it.
+- An **Agent mail** row is not a person's message: it is the notice of a
+  [typed wake](harnesses.md#typed-wake) held for the member in control, who
+  gets **Not now** and **Type it now** under it. A dismissed one ends as
+  **Dismissed**.
 - If the agent has turned on bracketed paste, the message arrives as one paste
   and Enter follows 200 ms later, so a multi-line message is sent whole and
   once. Otherwise it is typed as written, then Enter.

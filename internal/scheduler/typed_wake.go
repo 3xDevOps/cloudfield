@@ -36,7 +36,8 @@ func (s *Scheduler) TypedWake(run domain.RunID) bool {
 // next prompt. It writes nothing and fails while a person may be typing
 // there, a request waits for an answer, the terminal is about to be replaced
 // or it is not at rest: the line would join a draft, answer the request, be
-// lost with the old terminal or stay unsent.
+// lost with the old terminal or stay unsent. The member in control who asks
+// for the line (domain.WithWakeApproved) is not held for their own input.
 func (s *Scheduler) typeWake(ctx context.Context, run domain.RunID, line string) error {
 	awake, err := s.holdAwakeNow(run)
 	if err != nil {
@@ -60,7 +61,8 @@ func (s *Scheduler) typeWake(ctx context.Context, run domain.RunID, line string)
 		return fmt.Errorf("scheduler: typed wake held: the terminal printed %s ago", time.Since(out).Round(time.Millisecond))
 	}
 	// A restarted server knows neither who controlled the terminal nor when a person last typed in it.
-	if in, _ := s.cfg.PTY.LastInput(key); in.After(unattended) {
+	// A click on the dashboard's button moves focus off the terminal, which the agent CLIs ask it to report as input.
+	if in, _ := s.cfg.PTY.LastInput(key); in.After(unattended) && !domain.WakeApproved(ctx) {
 		unattended = in
 	}
 	if time.Since(unattended) < typedWakeQuietInput {

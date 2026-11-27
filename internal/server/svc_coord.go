@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/3xDevOps/cloudfield/internal/children"
+	"github.com/3xDevOps/cloudfield/internal/collab"
 	"github.com/3xDevOps/cloudfield/internal/control"
 	"github.com/3xDevOps/cloudfield/internal/coord"
 	"github.com/3xDevOps/cloudfield/internal/domain"
@@ -29,6 +30,11 @@ func init() {
 		var childAuthority coord.ChildService
 		if childSvc != nil {
 			childAuthority = childSvc
+		}
+		rooms, _ := d.SSH.Services.Rooms.(*collab.Service)
+		var holdWake func(context.Context, domain.RunID, string, string) (bool, error)
+		if rooms != nil {
+			holdWake = rooms.HoldWake
 		}
 		svc, err := coord.New(coord.Config{
 			Dir:              filepath.Join(d.DataDir, "coord"),
@@ -57,9 +63,13 @@ func init() {
 			WakeAdmission:     newCoordWakeAdmission(d),
 			Waker:             d.Runs,
 			ReminderAdmission: newCoordReminderAdmission(d),
+			HoldWake:          holdWake,
 		})
 		if err != nil {
 			return nil, err
+		}
+		if rooms != nil {
+			rooms.SetWaker(svc.TypeHeldWake)
 		}
 		if childSvc != nil {
 			childSvc.SetMailer(svc)
