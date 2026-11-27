@@ -122,6 +122,7 @@ func (s *Scheduler) checkVMMemory(ctx context.Context) (uint64, bool) {
 		for _, c := range candidates {
 			if c.resident && s.saveFits(c, writing, false) {
 				paused += c.memory
+				writing += c.memory
 			}
 		}
 		// Saving them for a session that would still not fit frees nothing
@@ -176,8 +177,13 @@ func (s *Scheduler) savePausedVMs(ctx context.Context, target uint64) (uint64, e
 // saveLongPaused saves the VMs that have stayed paused in memory for
 // vmPausedFor, one after another, so an idle session does not hold the
 // host's memory for days. It writes no timeline note: the session's sleep
-// row says where it is kept.
+// row says where it is kept. A guard or admission busy saving VMs has the
+// list; the next sweep takes what it left.
 func (s *Scheduler) saveLongPaused(ctx context.Context) {
+	if !s.vmMemoryMu.TryLock() {
+		return
+	}
+	defer s.vmMemoryMu.Unlock()
 	candidates, writing := s.memoryCandidates(ctx)
 	var long []memoryCandidate
 	for _, c := range candidates {

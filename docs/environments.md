@@ -509,7 +509,7 @@ What changes:
   current browser image, so a VM running across an upgrade keeps its older
   browser until then.
 - An idle session's VM is paused in memory, and saved to disk when the
-  host needs that memory, with every process
+  host needs that memory or after an hour, with every process
   ([Sessions in VMs](failure-handling.md#sessions-in-vms)), and closing a
   session stops its VM, which keeps its disks
   ([Relaunching a closed session](failure-handling.md#relaunching-a-closed-session)). Closing a

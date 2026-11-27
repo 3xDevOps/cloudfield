@@ -461,7 +461,6 @@ func TestAVMPausedForLongIsSavedToDisk(t *testing.T) {
 	e.sched.runs[oldRun].asleepSince = time.Now().UTC().Add(-vmPausedFor)
 	e.sched.mu.Unlock()
 
-	e.sched.cfg.VMSleepAfter = time.Hour
 	e.sched.sleepIdle(t.Context())
 	waitFor(t, "the long-paused VM saved", func() bool { return mr.isSaved(old) && !e.sched.Sleep(oldRun).InMemory })
 	if state := e.sched.Sleep(oldRun); !state.Saved {

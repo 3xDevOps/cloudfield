@@ -558,6 +558,7 @@ func (s *Scheduler) sessionFacts(run domain.RunID, enhanced, saving bool, f idle
 // every closed one retained that long, each in its own goroutine: Enhanced
 // runs in containers, and Standard and Enhanced runs in session VMs.
 func (s *Scheduler) sleepIdle(ctx context.Context) {
+	s.saveLongPaused(ctx)
 	if s.cfg.RunSleepAfter <= 0 && s.cfg.VMSleepAfter <= 0 {
 		return
 	}
@@ -610,7 +611,6 @@ func (s *Scheduler) sleepIdle(ctx context.Context) {
 			s.goSleep(c.e, s.sleepClosed)
 		}
 	}
-	s.saveLongPaused(ctx)
 }
 
 // mayRunSleep checks the run row: the agent, which any VM keeps through a
