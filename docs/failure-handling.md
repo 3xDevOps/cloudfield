@@ -974,7 +974,10 @@ sooner:
   or a quiet download or remote `ssh` job freezes with it and may lose its
   connection, so keep such a session in use, or set `--run-sleep-after` to
   `0`. A pause that fails leaves the session running; Cloudfield tries again
-  after another `--run-sleep-after`.
+  after another `--run-sleep-after`. A message, or any other use, that
+  arrives while a VM is being paused or saved ends that sleep if the guest
+  has not stopped yet, and the session stays awake. A save the server
+  makes because the host is short of memory is not ended.
 - A closed session's VM is stopped as soon as the close finishes, whatever
   `--run-sleep-after` is, and keeps its disks without its memory
   ([Relaunching a closed session](#relaunching-a-closed-session)). Closing
@@ -1065,7 +1068,8 @@ A saved VM takes about as much disk as the memory its processes use, after
 the guest drops its page cache: 137 MiB for an idle test VM of 2 GiB whose
 page cache held 1400 MiB. A save waits up to 40 seconds for the host to get
 that cache back first ([vm-guest.md](vm-guest.md#limits-stats-and-the-clock)),
-and a wake, close or kill that arrives meanwhile waits for the save. When disk runs low, Cloudfield deletes the saved
+and a wake, close or kill that arrives during that wait ends the save and
+leaves the session awake; once the guest is paused it waits for the save. When disk runs low, Cloudfield deletes the saved
 memory of the longest-sleeping sessions first
 ([Recover from disk pressure](#recover-from-disk-pressure)). A server
 restart or update leaves sleeping VMs asleep; the next use wakes them. A
