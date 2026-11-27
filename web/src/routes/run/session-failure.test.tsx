@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { api } from '@/lib/api'
+import { api, ApiError } from '@/lib/api'
 import { SessionFailureCallout } from '@/routes/run/session-failure'
 import type { RunShells } from '@/routes/run/shells'
 import { useStore } from '@/store'
@@ -147,6 +147,22 @@ describe('open in Standard', () => {
       workspace_id: record.workspace_id, task: record.task, harness: 'claude', mode: 'tui', model: 'opus',
       account_member_id: 'mem-ada', fallback_account_member_ids: ['mem-me'], children: 'off', extra_workspace_ids: ['ws-2'],
     }))
+  })
+
+  it('starts a new Standard session when a switchable agent has no conversation to move', async () => {
+    const refusal = new ApiError(200, 'run.mode.switch: scheduler: invalid session state transition: the agent has not reported its conversation yet; it does on its first turn', -32002, { reason: 'session_not_reported' })
+    vi.spyOn(api, 'runModeSwitch').mockRejectedValue(refusal)
+    const launch = vi.spyOn(api, 'runLaunch').mockResolvedValue(run({ id: 'run_2', status: 'running' }))
+    vi.spyOn(api, 'runClose').mockResolvedValue(run({ id: 'run_1', status: 'abandoned' }))
+    const record = runRecords(run({ id: 'run_1', harness: 'claude', status: 'running' })).run_1!
+    const session = { turns: [{ items: [{ kind: 'notice', notice: { title: 'Enhanced agent failed' } }] }], live: false } as unknown as AcpSession
+    useStore.setState({ acpSessions: { run_1: session }, info: { member: { id: 'mem-me' } } as never })
+    const nav = { go: vi.fn(), reveal: vi.fn(), focusComposer: vi.fn(), focusRequest: vi.fn() }
+    render(<SessionFailureCallout run={record} session={session} switchable shells={{} as RunShells} nav={nav} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Standard' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Start a Standard session' }))
+    await waitFor(() => expect(launch).toHaveBeenCalledWith(expect.objectContaining({ mode: 'tui', task: record.task })))
+    expect(nav.go).not.toHaveBeenCalled()
   })
 
   it('lists close warnings before it closes the run it replaces', async () => {

@@ -15,7 +15,7 @@ import { AskAssistantButton } from '@/components/assistant/ask'
 import { CloseWarnings, useCloseCheck, warningScroll } from '@/components/close-warnings'
 import { Button } from '@/components/ui/button'
 import { Callout } from '@/components/ui/callout'
-import { api } from '@/lib/api'
+import { api, ApiError } from '@/lib/api'
 import { closeWarned } from '@/lib/close-check'
 import { errorSentence } from '@/lib/format'
 import { focusRingShown } from '@/lib/utils'
@@ -59,11 +59,13 @@ function sessionFailure(session: AcpSession | undefined): SessionFailure | null 
 function OpenInStandard({ run, switchable, nav }: { run: RunRecord; switchable: boolean; nav: RunNavigation }) {
   const [confirm, setConfirm] = useState(false)
   const [busy, setBusy] = useState(false)
+  // A switch needs a conversation the agent reported, which one that never started has not.
+  const [fresh, setFresh] = useState(!switchable)
   const check = useCloseCheck(confirm ? run.id : null, 'abandoned')
   const act = async () => {
     setBusy(true)
     try {
-      if (switchable) {
+      if (!fresh) {
         useStore.getState().upsertRun(await api.runModeSwitch(run.id, 'tui', sessionLease(useStore, run.id)))
         nav.go('terminal')
         return
@@ -91,7 +93,10 @@ function OpenInStandard({ run, switchable, nav }: { run: RunRecord; switchable: 
       useStore.getState().upsertRun(await api.runClose(run.id, 'abandoned'))
       useStore.getState().navigate('run', { runId: next.id })
     } catch (err) {
-      toast.error(`Open in Standard failed: ${errorSentence(err)}`)
+      if (!fresh && err instanceof ApiError && err.data?.reason === 'session_not_reported') {
+        setFresh(true)
+        setConfirm(true)
+      } else toast.error(`Open in Standard failed: ${errorSentence(err)}`)
     } finally {
       setBusy(false)
     }
@@ -102,8 +107,8 @@ function OpenInStandard({ run, switchable, nav }: { run: RunRecord; switchable: 
         size="sm"
         variant="secondary"
         disabled={busy}
-        hint={switchable ? 'Resumes this conversation in the agent’s own terminal' : 'Starts a new Standard session with the same task and closes this one'}
-        onClick={() => (switchable ? void act() : setConfirm(true))}
+        hint={fresh ? 'Starts a new Standard session with the same task and closes this one' : 'Resumes this conversation in the agent’s own terminal'}
+        onClick={() => (fresh ? setConfirm(true) : void act())}
       >
         Open in Standard
       </Button>
@@ -112,7 +117,7 @@ function OpenInStandard({ run, switchable, nav }: { run: RunRecord; switchable: 
           <AlertDialogHeader>
             <AlertDialogTitle>Start a Standard session instead?</AlertDialogTitle>
             <AlertDialogDescription>
-              This agent cannot move a running conversation between modes. Cloudfield starts a new Standard session with the same task and closes this one without merging. The conversation so far stays in this session’s history.
+              Cloudfield cannot move this conversation to Standard. It starts a new Standard session with the same task and closes this one without merging. The conversation so far stays in this session’s history.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {check ? <CloseWarnings check={check} run={run} onLeave={() => setConfirm(false)} className={warningScroll} /> : <p className="text-ui-sm text-muted">Checking what closing affects…</p>}

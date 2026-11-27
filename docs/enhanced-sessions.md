@@ -485,8 +485,9 @@ enhanced session ended: the agent's ACP server exited with code 1; stderr: ...
 Fix the cause (for a login, run the agent's login command in the Terminal tab).
 Then choose **Retry Enhanced** in the Chat view, or pause and resume the session,
 to start a fresh ACP server. **Open in Standard** switches the session when the agent
-can switch. Otherwise it starts a new Standard session with the same task and closes
-this one without merging, after asking.
+can switch and has reported a conversation, which it does on its first turn.
+Otherwise, as after a failed start, it starts a new Standard session with the
+same task and closes this one without merging, after asking.
 
 A turn that fails on the account's usage limit does not park with
 `enhanced turn failed:`. The session moves to another account
