@@ -164,7 +164,7 @@ func TestCLISkillOutcomesFollowTheLaunchMode(t *testing.T) {
 		{name: "background", background: "1", capabilities: reports,
 			want: []string{backgroundOutcomes, backgroundRule}, refuse: []string{"- needs-input", "- waiting", "- answered"}},
 		{name: "no reports", capabilities: []string{protocol.MethodCoordInbox},
-			want: []string{"aether-internal inbox --wait 30"}, refuse: []string{"- waiting", "END EVERY TURN"}},
+			want: []string{"aether-internal inbox --wait 30"}, refuse: []string{"- waiting", "REPORT ONCE A TURN"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(coordtransport.BackgroundEnv, tc.background)
