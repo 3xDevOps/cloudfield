@@ -44,23 +44,41 @@ func runLogout(args []string) error {
 	if err != nil {
 		return err
 	}
-	if unrevoked != nil {
-		fmt.Print(unrevokedText(client.Host(), unrevoked))
-	} else {
-		fmt.Printf("signed out of %s: the device token is revoked at the edge and deleted here; the device key and your links stay\n", client.Host())
-	}
 	dir, err := cli.Dir()
 	if err != nil {
 		return err
 	}
+	if unrevoked == nil {
+		fmt.Printf("signed out of %s: the device token is revoked at the edge and deleted here; the device key and your links stay\n", client.Host())
+		return printStillSignedIn(os.Stdout, dir)
+	}
+	fmt.Printf("deleted the device token for %s here, but the edge did not confirm the sign-out: it answered that this address is retired and that its new address is %s.\n",
+		client.Host(), unrevoked.Replacement)
+	fmt.Printf("Device %s may still be signed in; %s.\n", unrevoked.Device.ID, devicesPage(dir, client.URL(), unrevoked.Replacement))
 	return printStillSignedIn(os.Stdout, dir)
 }
 
-// unrevokedText is what logout says after host, a retired address,
-// refused to revoke the token it deleted here.
-func unrevokedText(host string, u *edgeclient.Unrevoked) string {
-	return fmt.Sprintf("deleted the device token for %s here, but the edge did not confirm the sign-out: %s says it is retired and that its new address is %s.\n"+
-		"Device %s may still be signed in; revoke it on the Devices page of the sign-in origin of %s.\n", host, host, u.Replacement, u.Device.ID, u.Replacement)
+// devicesPage says where to revoke a device that old, a retired address,
+// named replacement as its successor for: the Devices page of the sign-in
+// origin this machine recorded at replacement, or of replacement's when
+// this machine knows it otherwise. An address it does not know is only
+// the old address's word.
+func devicesPage(dir, old, replacement string) string {
+	holdings, err := cli.LoadEdgeHoldings(dir)
+	if err != nil || !holdings.Known(old, replacement) {
+		return "ask whoever runs the edge for the address of its Devices page and revoke it there"
+	}
+	for _, origin := range holdings.SignedIn {
+		if !cli.SameEdge(origin, replacement) {
+			continue
+		}
+		if c, err := edgeclient.New(dir, origin); err == nil {
+			if s, err := c.Session(); err == nil {
+				return "revoke it on " + s.SigninOrigin + "/devices"
+			}
+		}
+	}
+	return "revoke it on the Devices page of the sign-in origin of " + replacement
 }
 
 // printStillSignedIn names the edges this machine still holds a token

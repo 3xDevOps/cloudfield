@@ -66,20 +66,25 @@ func TestLogoutAtRetiredAddress(t *testing.T) {
 		body      string
 		deleted   bool
 		unrevoked *Unrevoked
+		noVersion bool
 	}{
-		{"revoked", http.StatusNoContent, "", true, nil},
-		{"already refused", http.StatusUnauthorized, `{"error":"token revoked"}`, true, nil},
-		{"retired", http.StatusGone, retired, true, &Unrevoked{Device: edgeproto.Device{ID: "dev-1", Label: "laptop"}, Replacement: "https://new.example.test"}},
-		{"gone without retired", http.StatusGone, `{"error":"gone"}`, false, nil},
-		{"retired names no origin", http.StatusGone, `{"error":"gone","retired":{"replacement":"https://new.example.test/login?code=1"}}`, false, nil},
-		{"retired names a control character", http.StatusGone, `{"error":"gone","retired":{"replacement":"https://new.example.test\u001b[2J"}}`, false, nil},
-		{"retired on another status", http.StatusForbidden, retired, false, nil},
-		{"server error", http.StatusInternalServerError, `{"error":"boom"}`, false, nil},
+		{"revoked", http.StatusNoContent, "", true, nil, false},
+		{"already refused", http.StatusUnauthorized, `{"error":"token revoked"}`, true, nil, false},
+		{"retired", http.StatusGone, retired, true, &Unrevoked{Device: edgeproto.Device{ID: "dev-1", Label: "laptop"}, Replacement: "https://new.example.test"}, false},
+		{"gone without retired", http.StatusGone, `{"error":"gone"}`, false, nil, false},
+		{"retired names no origin", http.StatusGone, `{"error":"gone","retired":{"replacement":"https://new.example.test/login?code=1"}}`, false, nil, false},
+		{"retired names a control character", http.StatusGone, `{"error":"gone","retired":{"replacement":"https://new.example.test\u001b[2J"}}`, false, nil, false},
+		{"retired on another status", http.StatusForbidden, retired, false, nil, false},
+		{"server error", http.StatusInternalServerError, `{"error":"boom"}`, false, nil, false},
+		{"retired without the edge's version", http.StatusGone, retired, false, nil, true},
+		{"retired in a body that does not decode", http.StatusGone, retired + "}", false, nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			edge := newFakeEdge(t)
 			edge.mux.HandleFunc("POST "+edgeproto.PathLogout, func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set(edgeproto.HeaderVersion, "1")
+				if !tc.noVersion {
+					w.Header().Set(edgeproto.HeaderVersion, "1")
+				}
 				w.WriteHeader(tc.status)
 				_, _ = io.WriteString(w, tc.body)
 			})

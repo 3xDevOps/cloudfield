@@ -187,7 +187,8 @@ type RefusedError struct {
 	// between, such as a captive portal, a proxy or a firewall.
 	FromEdge bool
 	// Retired is the replacement relay origin a 410 from a retired
-	// address named, empty unless it is a canonical origin.
+	// address named, empty unless the answer carried the edge's protocol
+	// version and the origin is a printable notice origin.
 	Retired string
 }
 
@@ -213,7 +214,8 @@ func (c *Client) refusal(op, origin string, resp *http.Response, body []byte) *R
 	status := resp.StatusCode
 	msg := http.StatusText(status)
 	fromEdge := resp.Header.Get(edgeproto.HeaderVersion) != ""
-	if json.Unmarshal(body, &eb) == nil && eb.Error != "" {
+	decoded := json.Unmarshal(body, &eb) == nil
+	if decoded && eb.Error != "" {
 		msg, fromEdge = eb.Error, true
 	} else if shown := strings.TrimSpace(string(body)); shown != "" {
 		msg += ": " + shown
@@ -222,7 +224,7 @@ func (c *Client) refusal(op, origin string, resp *http.Response, body []byte) *R
 		msg = msg[:maxShownText] + "..."
 	}
 	var retired string
-	if status == http.StatusGone && eb.Retired != nil && clean(eb.Retired.Replacement) == eb.Retired.Replacement && edgeproto.NoticeOrigin(eb.Retired.Replacement) {
+	if status == http.StatusGone && decoded && resp.Header.Get(edgeproto.HeaderVersion) != "" && eb.Retired != nil && clean(eb.Retired.Replacement) == eb.Retired.Replacement && edgeproto.NoticeOrigin(eb.Retired.Replacement) {
 		retired = eb.Retired.Replacement
 	}
 	return &RefusedError{Edge: HostOf(origin), URL: c.origin, Op: op, Status: status, Message: clean(msg), FromEdge: fromEdge, Retired: retired}

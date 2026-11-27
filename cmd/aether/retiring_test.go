@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -120,7 +121,9 @@ func retiringEdge(t *testing.T, value string) *httptest.Server {
 	return edge
 }
 
-func writeEdgeToken(t *testing.T, origin string) string {
+// writeEdgeTokens stores a device token for each relay origin, issued
+// at the sign-in origin it maps to.
+func writeEdgeTokens(t *testing.T, signin map[string]string) string {
 	t.Helper()
 	dir, err := cli.Dir()
 	if err != nil {
@@ -129,8 +132,11 @@ func writeEdgeToken(t *testing.T, origin string) string {
 	if err = os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := json.Marshal(map[string]any{"edges": map[string]any{origin: map[string]any{
-		"token": edgeproto.NewToken(), "signin_origin": origin, "device": map[string]any{"id": "dev-1", "label": "laptop"}}}})
+	edges := map[string]any{}
+	for relay, origin := range signin {
+		edges[relay] = map[string]any{"token": edgeproto.NewToken(), "signin_origin": origin, "device": map[string]any{"id": "dev-1", "label": "laptop"}}
+	}
+	raw, err := json.Marshal(map[string]any{"edges": edges})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +179,7 @@ func TestRetiringNoticeAfterACommand(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			testhome.Isolate(t)
 			edge := retiringEdge(t, tc.value)
-			writeEdgeToken(t, edge.URL)
+			writeEdgeTokens(t, map[string]string{edge.URL: edge.URL})
 			out, err := captureStdout(t, func() error { return dispatch([]string{"servers", "--edge", edge.URL}) })
 			if err != nil {
 				t.Fatal(err)
@@ -222,55 +228,69 @@ func TestRetiringNoticeLeavesJSONAlone(t *testing.T) {
 }
 
 // logout at an address that answers it is retired deletes the token and
-// says the edge did not confirm it; every other refusal but 401 keeps it.
+// says the edge did not confirm it, naming a Devices page only for a
+// replacement this machine knows; every other refusal but 401 keeps it.
+// The relay and sign-in hosts differ, as on a hosted edge: sign-out goes
+// to the sign-in host, and its refusal names that host.
 func TestLogoutAtARetiredAddress(t *testing.T) {
+	const (
+		signedOut = "signed out of RELAY: the device token is revoked at the edge and deleted here; the device key and your links stay\n"
+		retired   = `{"error":"retired","retired":{"replacement":"https://new.example.test"}}`
+		notified  = "deleted the device token for RELAY here, but the edge did not confirm the sign-out: it answered that this address is retired and that its new address is https://new.example.test.\n"
+	)
 	for _, tc := range []struct {
 		name   string
 		status int
 		body   string
+		atNew  bool
 		stdout string
 		errMsg string
 	}{
-		{"revoked", http.StatusNoContent, "", "signed out of HOST: the device token is revoked at the edge and deleted here; the device key and your links stay\n", ""},
-		{"already refused", http.StatusUnauthorized, `{"error":"token revoked"}`, "signed out of HOST: the device token is revoked at the edge and deleted here; the device key and your links stay\n", ""},
-		{"retired", http.StatusGone, `{"error":"retired","retired":{"replacement":"https://new.example.test"}}`,
-			"deleted the device token for HOST here, but the edge did not confirm the sign-out: HOST says it is retired and that its new address is https://new.example.test.\n" +
-				"Device dev-1 may still be signed in; revoke it on the Devices page of the sign-in origin of https://new.example.test.\n", ""},
-		{"gone without retired", http.StatusGone, `{"error":"gone"}`, "", "sign out: HOST refused: gone (HTTP 410); the token is still valid and kept in "},
-		{"forbidden", http.StatusForbidden, `{"error":"no"}`, "", "sign out: HOST refused: no (HTTP 403); the token is still valid and kept in "},
+		{"revoked", http.StatusNoContent, "", false, signedOut, ""},
+		{"already refused", http.StatusUnauthorized, `{"error":"token revoked"}`, false, signedOut, ""},
+		{"retired, replacement unknown", http.StatusGone, retired, false,
+			notified + "Device dev-1 may still be signed in; ask whoever runs the edge for the address of its Devices page and revoke it there.\n", ""},
+		{"retired, signed in at the replacement", http.StatusGone, retired, true,
+			notified + "Device dev-1 may still be signed in; revoke it on https://auth.new.example.test/devices.\n" +
+				"still signed in to new.example.test; sign out there with: aether logout --edge https://new.example.test\n", ""},
+		{"gone without retired", http.StatusGone, `{"error":"gone"}`, false, "", "sign out: SIGNIN refused: gone (HTTP 410); the token is still valid and kept in "},
+		{"forbidden", http.StatusForbidden, `{"error":"no"}`, false, "", "sign out: SIGNIN refused: no (HTTP 403); the token is still valid and kept in "},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			testhome.Isolate(t)
-			edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			signin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set(edgeproto.HeaderVersion, "1")
 				w.WriteHeader(tc.status)
 				_, _ = io.WriteString(w, tc.body)
 			}))
-			t.Cleanup(edge.Close)
-			dir := writeEdgeToken(t, edge.URL)
-			host := strings.TrimPrefix(edge.URL, "http://")
-			out, err := captureStdout(t, func() error { return dispatch([]string{"logout", "--edge", edge.URL}) })
+			t.Cleanup(signin.Close)
+			relay := httptest.NewServer(http.NotFoundHandler())
+			t.Cleanup(relay.Close)
+			tokens := map[string]string{relay.URL: signin.URL}
+			if tc.atNew {
+				tokens[newEdge] = "https://auth.new.example.test"
+			}
+			dir := writeEdgeTokens(t, tokens)
+			hosts := strings.NewReplacer("RELAY", strings.TrimPrefix(relay.URL, "http://"), "SIGNIN", strings.TrimPrefix(signin.URL, "http://"))
+			out, err := captureStdout(t, func() error { return dispatch([]string{"logout", "--edge", relay.URL}) })
 			signedIn, readErr := edgeclient.SignedIn(dir)
 			if readErr != nil {
 				t.Fatal(readErr)
 			}
+			if slices.Contains(signedIn, relay.URL) == (tc.errMsg == "") {
+				t.Fatalf("token at the retired address kept = %v, want %v", !(tc.errMsg == ""), tc.errMsg != "")
+			}
 			if tc.errMsg != "" {
-				if err == nil || !strings.Contains(err.Error(), strings.ReplaceAll(tc.errMsg, "HOST", host)) {
-					t.Fatalf("error = %v, want %q", err, tc.errMsg)
-				}
-				if len(signedIn) != 1 {
-					t.Fatal("the token was deleted")
+				if err == nil || !strings.Contains(err.Error(), hosts.Replace(tc.errMsg)) {
+					t.Fatalf("error = %v, want %q", err, hosts.Replace(tc.errMsg))
 				}
 				return
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			if want := strings.ReplaceAll(tc.stdout, "HOST", host); out != want {
+			if want := hosts.Replace(tc.stdout); out != want {
 				t.Fatalf("stdout:\n%s\nwant:\n%s", out, want)
-			}
-			if len(signedIn) != 0 {
-				t.Fatal("the token was kept")
 			}
 		})
 	}
