@@ -312,8 +312,9 @@ func TestALaunchNamingNoLoginNeverFallsBackToALoginThatIsOff(t *testing.T) {
 }
 
 // A teammate who picks an account whose owner added logins may still run
-// the owner's Claude Code installation, as before logins existed; only a
-// fallback the launcher did not pick refuses to borrow it.
+// the owner's Claude Code installation, as before logins existed, on any of
+// that account's logins; only a fallback on an account the launcher did not
+// pick refuses to borrow it.
 func TestATeammatesStartOnASharedAccountMayBorrowTheOwnersInstallation(t *testing.T) {
 	e := newLoginShareEnv(t)
 	ctx := t.Context()
@@ -346,6 +347,9 @@ func TestATeammatesStartOnASharedAccountMayBorrowTheOwnersInstallation(t *testin
 	}
 	if ok, err := e.sched.FallbackLaunchable(ctx, e.member.ID, e.member.ID, work, "claude", domain.LaunchTUI, ""); err != nil || ok {
 		t.Fatalf("work as a fallback Ada did not pick = %v, %v; want refused, as it borrows Grace's installation", ok, err)
+	}
+	if ok, err := e.sched.FallbackLaunchable(ctx, e.member.ID, e.owner.ID, work, "claude", domain.LaunchTUI, ""); err != nil || !ok {
+		t.Fatalf("work as a fallback on Grace's account, which Ada picked = %v, %v; want it, on the installation Ada chose to run", ok, err)
 	}
 }
 

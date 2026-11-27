@@ -922,11 +922,12 @@ func (s *Scheduler) DefaultMode(ctx context.Context, member, account domain.Memb
 // in mode on account can stand in for one on requested as a usage fallback:
 // the owner's login is there to share, an enhanced launch finds its ACP
 // server, and the agent runs from member's own installation, or from the
-// image when the launch on requested would too. It never borrows the owner's
-// installation, whose executables only a launcher who picked that account
-// has agreed to run, and never moves a launch that relied on requested's
-// installation to an account where the agent is missing, nor onto a login a
-// live container holds under another uid:gid. An added login is judged by
+// image when the launch on requested would too. It never borrows another
+// owner's installation, whose executables only a launcher who picked that
+// account has agreed to run, though a launcher who picked requested runs
+// its installation on requested's other logins too. It never moves a launch
+// that relied on requested's installation to an account where the agent is
+// missing, nor onto a login a live container holds under another uid:gid. An added login is judged by
 // its own file, never its owner's default login. It reads member homes,
 // login directories and the scheduler's own state only, never the runtime or
 // the vendor.
@@ -947,7 +948,7 @@ func (s *Scheduler) FallbackLaunchable(ctx context.Context, member, requested do
 	}
 	if len(profile.TUIArgs) > 0 {
 		installation, installErr := s.cfg.Homes.Installation(member, account, profile.TUIArgs[0], profile.InstallPaths)
-		if installErr != nil || (installation != "" && installation != member) {
+		if installErr != nil || (installation != "" && installation != member && installation != requested) {
 			return false, installErr
 		}
 		if installation == "" {
