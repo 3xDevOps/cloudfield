@@ -362,19 +362,19 @@ func roundTrip(ctx context.Context, client *protocol.Client, method string, para
 
 // callOnce drops the connection on transport failures so the next attempt
 // redials; server refusals, cancellations and timeouts leave it alone.
-// A replay-safe call goes on an idle control channel when there is one. An
+// With reuse the call goes on an idle control channel when there is one. An
 // idle channel can have ended under a live connection, so a transport
 // failure on one is sent again on a new channel before it counts against
 // the connection. That second send is the call's one replay: when it fails
 // too, the error is final and Call does not send a third.
-func (b *sshBackend) callOnce(ctx context.Context, method string, params json.RawMessage, replaySafe bool) (json.RawMessage, error) {
+func (b *sshBackend) callOnce(ctx context.Context, method string, params json.RawMessage, reuse bool) (json.RawMessage, error) {
 	conn, cfg, err := b.live(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var perr *protocol.Error
 	resent := false
-	if replaySafe {
+	if reuse {
 		if client := b.idleControl(conn); client != nil {
 			resent = true
 			result, answered, cerr := roundTrip(ctx, client, method, params)
@@ -534,7 +534,8 @@ func (b *sshBackend) Call(ctx context.Context, method string, params json.RawMes
 	if !replaySafe {
 		return nil, unreachableError(err)
 	}
-	result, err = b.callOnce(ctx, method, params, replaySafe)
+	// The replay is the second send, so it takes no kept channel that could ask for a third.
+	result, err = b.callOnce(ctx, method, params, false)
 	if err == nil {
 		return result, nil
 	}
