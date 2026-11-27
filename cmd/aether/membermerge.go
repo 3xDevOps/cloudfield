@@ -252,6 +252,9 @@ func printMergePlan(out io.Writer, plan protocol.MemberMergePlan) {
 		for _, d := range m.Devices {
 			_, _ = fmt.Fprintf(out, "   device %q: %s\n", d.Label, d.Status)
 		}
+		for _, l := range m.Logins {
+			_, _ = fmt.Fprintf(out, "   %s login %s (%s)\n", l.Agent, l.Name, l.ID)
+		}
 		_, _ = fmt.Fprintf(out, "   %d sessions, %d schedules\n", m.Runs, m.Schedules)
 	}
 	_, _ = fmt.Fprintf(out, "\nthe merged member signs in with: %s, as %s\n", strings.Join(plan.SignIns, ", "), plan.Role)
@@ -265,6 +268,16 @@ func printMergeChoice(out io.Writer, plan protocol.MemberMergePlan, keep string)
 		if c.KeepSettingsOf == keep {
 			_, _ = fmt.Fprintf(out, "\nkeeping %s; member %s is absorbed and these of its settings are discarded:\n", keep, c.AbsorbedID)
 			printDiscarded(out, c.Discarded)
+			absorbed := plan.Minted
+			if c.AbsorbedID == plan.Proposer.ID {
+				absorbed = plan.Proposer
+			}
+			if len(absorbed.Logins) > 0 {
+				_, _ = fmt.Fprintf(out, "its added logins move to %s, off for shares, each renamed if %s has a login of that name:\n", keep, keep)
+				for _, l := range absorbed.Logins {
+					_, _ = fmt.Fprintf(out, "  %s login %s (%s)\n", l.Agent, l.Name, l.ID)
+				}
+			}
 			return nil
 		}
 	}
