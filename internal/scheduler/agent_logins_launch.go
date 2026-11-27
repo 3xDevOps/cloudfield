@@ -259,7 +259,7 @@ func (s *Scheduler) keepsAddedLogin(ctx context.Context, agent string, members .
 // errLoginUnread.
 func (s *Scheduler) defaultSignInProblem(member domain.MemberID, agent string, profile harness.Profile) (string, error) {
 	identity, err := s.cfg.Homes.DefaultIdentity(member, agent)
-	if err != nil {
+	if err != nil && identity.Kind != memberhome.LoginSubscription {
 		return "", fmt.Errorf("%w: %w", errLoginUnread, err)
 	}
 	var problem string
@@ -283,8 +283,8 @@ func (s *Scheduler) defaultSignInProblem(member domain.MemberID, agent string, p
 }
 
 // errLoginUnread marks a default login whose files cannot be read to tell
-// whether it signs in. A launch that names no login passes over it, and
-// starts on it only when no other login serves.
+// whether it signs in. A launch that names no login starts on it in its
+// place, counting its usage unknown.
 var errLoginUnread = errors.New("its files cannot be read")
 
 // addedLoginRefusal is loginRefusal for an added login: it must still
@@ -423,7 +423,6 @@ func (s *Scheduler) StartLogin(ctx context.Context, workspace domain.WorkspaceID
 		return "", payerErr
 	}
 	var refused []string
-	unread := false
 	for _, l := range logins {
 		if account != member && (!l.Automatic || !l.Shared) {
 			continue
@@ -434,17 +433,16 @@ func (s *Scheduler) StartLogin(ctx context.Context, workspace domain.WorkspaceID
 		}
 		login := domain.Account{Member: account, Login: loginOf(l.ID)}
 		refusal, refusalErr := s.loginRefusal(ctx, member, login, harness, permission == domain.PermissionIsolated)
+		if errors.Is(refusalErr, errLoginUnread) {
+			return login.Login, nil
+		}
 		if refusalErr != nil {
-			unread = unread || (errors.Is(refusalErr, errLoginUnread) && !login.Login.Added())
 			refusal = refusalErr.Error()
 		}
 		if refusal == "" {
 			return login.Login, nil
 		}
 		refused = append(refused, l.Name+": "+refusal)
-	}
-	if unread {
-		return "", nil
 	}
 	if account != member {
 		if len(refused) == 0 {
@@ -498,24 +496,40 @@ func (s *Scheduler) ChildLogin(ctx context.Context, workspace domain.WorkspaceID
 // login whose files cannot be read is not billed per use: the flag only
 // orders and labels, and the read must not fail what would run.
 func (s *Scheduler) LoginPerUse(ctx context.Context, home domain.MemberID, login domain.Account, agent string) (bool, error) {
+	perUse, _, err := s.loginBilling(ctx, home, login, agent)
+	return perUse, err
+}
+
+// LoginUsageUnknown reports whether a launch that names no login counts the
+// usage of login, its start, as unknown, so that it yields to a login with
+// usage known to be left: login is billed per use, or it is home's own
+// default login whose kind its files do not tell, beside added logins.
+func (s *Scheduler) LoginUsageUnknown(ctx context.Context, home domain.MemberID, login domain.Account, agent string) (bool, error) {
+	perUse, unread, err := s.loginBilling(ctx, home, login, agent)
+	return perUse || unread, err
+}
+
+// loginBilling is LoginPerUse, and whether login is a default login whose
+// kind cannot be read.
+func (s *Scheduler) loginBilling(ctx context.Context, home domain.MemberID, login domain.Account, agent string) (perUse, unread bool, err error) {
 	if login.Login.Added() {
 		identity, err := s.cfg.Logins.Identity(login.Member, agent, login.Login)
 		if err != nil {
-			return false, fmt.Errorf("scheduler: whether the login is billed per use: %w", err)
+			return false, false, fmt.Errorf("scheduler: whether the login is billed per use: %w", err)
 		}
-		return identity.PerUse(), nil
+		return identity.PerUse(), false, nil
 	}
 	if login.Member != home || s.cfg.Homes == nil {
-		return false, nil
+		return false, false, nil
 	}
 	if keeps, err := s.cfg.Store.ListAgentLogins(ctx, login.Member, agent); err != nil || len(keeps) == 0 {
-		return false, err
+		return false, false, err
 	}
 	if key, _ := s.settingsSignIn(home, agent); key != "" {
-		return true, nil
+		return true, false, nil
 	}
-	identity, _ := s.cfg.Homes.DefaultIdentity(login.Member, agent)
-	return identity.PerUse(), nil
+	identity, idErr := s.cfg.Homes.DefaultIdentity(login.Member, agent)
+	return identity.PerUse(), idErr != nil && identity.Kind == "", nil
 }
 
 func loginOf(id domain.LoginID) domain.LoginID {

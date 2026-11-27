@@ -365,29 +365,30 @@ func (s *Server) launchLogin(ctx context.Context, workspace domain.WorkspaceID, 
 
 // MeasureUnnamed reads the usage fallback.Select decides on for member's
 // launch on login, which the launch did not name but was chosen for it: a
-// login billed per use is taken only when no candidate with readable usage
-// is left. An account whose owner keeps no login rows is measured as before
-// logins existed, and so is a launch where something else signs the agent
-// in (payer, a RunController.LoginPayer answer): that pays on every account.
+// login billed per use, or whose kind cannot be read, is taken only when no
+// candidate with readable usage is left. An account whose owner keeps no
+// login rows is measured as before logins existed, and so is a launch where
+// something else signs the agent in (payer, a RunController.LoginPayer
+// answer): that pays on every account.
 func MeasureUnnamed(ctx context.Context, cfg *Config, member domain.MemberID, login domain.Account, harness string, policy domain.AccountFallback, payer func() (string, error)) (fallback.Measured, error) {
 	rows, err := cfg.Store.ListAgentLogins(ctx, login.Member, harness)
 	if err != nil {
 		return nil, err
 	}
-	perUse := false
+	unknown := false
 	if len(rows) > 0 {
-		if perUse, err = cfg.Runs.LoginPerUse(ctx, member, login, harness); err != nil {
+		if unknown, err = cfg.Runs.LoginUsageUnknown(ctx, member, login, harness); err != nil {
 			return nil, err
 		}
 	}
-	if perUse {
+	if unknown {
 		paidBy, payerErr := payer()
 		if payerErr != nil {
 			return nil, payerErr
 		}
-		perUse = paidBy == ""
+		unknown = paidBy == ""
 	}
-	return fallback.MeasureStart(ctx, cfg.Store, cfg.Services.Usage, member, login, harness, policy, perUse)
+	return fallback.MeasureStart(ctx, cfg.Store, cfg.Services.Usage, member, login, harness, policy, unknown)
 }
 
 // Launchable is the fallback.Launchable of member's launch on requested: a

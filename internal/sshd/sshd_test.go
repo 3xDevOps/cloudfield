@@ -395,7 +395,7 @@ type fakeRuns struct {
 	whileTerminalStopped func()
 	// startLogins are what StartLogin answers, one per call, then "".
 	startLogins []domain.LoginID
-	// perUse are the logins LoginPerUse reports billed per use.
+	// perUse are the logins LoginUsageUnknown reports billed per use.
 	perUse map[domain.LoginID]bool
 	// environmentPays is whether LoginPayer names a payer.
 	environmentPays bool
@@ -495,7 +495,7 @@ func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.M
 	return true, nil
 }
 
-func (f *fakeRuns) LoginPerUse(_ context.Context, _ domain.MemberID, login domain.Account, _ string) (bool, error) {
+func (f *fakeRuns) LoginUsageUnknown(_ context.Context, _ domain.MemberID, login domain.Account, _ string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.perUse[login.Login], nil

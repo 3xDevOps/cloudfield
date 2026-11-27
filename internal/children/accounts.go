@@ -185,7 +185,7 @@ func (s *Service) keepsLogins(ctx context.Context, account domain.MemberID, harn
 // a subsession of p's owner on when it starts from start: start, or another
 // login of its account that start gives way to.
 func (s *Service) dispatchUsed(ctx context.Context, p *policy, start domain.Account, harness string, mode domain.LaunchMode) (float64, bool) {
-	perUse, err := s.cfg.Runs.LoginPerUse(ctx, p.owner, start, harness)
+	unknown, err := s.cfg.Runs.LoginUsageUnknown(ctx, p.owner, start, harness)
 	if err != nil {
 		return 0, false
 	}
@@ -194,7 +194,7 @@ func (s *Service) dispatchUsed(ctx context.Context, p *policy, start domain.Acco
 		return 0, false
 	}
 	policy := domain.AccountFallback{Disabled: p.parent.Fallback.Disabled, Order: []domain.MemberID{start.Member}}
-	measured, err := fallback.MeasureStart(ctx, s.cfg.Store, s.cfg.Usage, p.owner, start, harness, policy, perUse && payer == "")
+	measured, err := fallback.MeasureStart(ctx, s.cfg.Store, s.cfg.Usage, p.owner, start, harness, policy, unknown && payer == "")
 	if err != nil {
 		return 0, false
 	}

@@ -410,6 +410,8 @@ func (l *Logins) Identity(member domain.MemberID, agent string, id domain.LoginI
 
 // DefaultIdentity is what Claude Code recorded about member's default login,
 // from their home; an empty Kind when it holds none Cloudfield recognises.
+// With an error, Kind is still LoginSubscription when the subscription
+// sign-in file reads as one.
 func (m *Manager) DefaultIdentity(member domain.MemberID, agent string) (LoginIdentity, error) {
 	if agent != "claude" {
 		return LoginIdentity{}, nil
@@ -424,7 +426,7 @@ func (m *Manager) DefaultIdentity(member domain.MemberID, agent string) (LoginId
 	defer func() { _ = home.Close() }()
 	identity, err := claudeIdentity(home, claudeCredentialPath, []string{claudeLegacyConfigPath, claudeConfigPath}, AnthropicProfileDir)
 	if err != nil {
-		return LoginIdentity{}, fmt.Errorf("memberhome: read the default login of %q: %w", member, err)
+		return identity, fmt.Errorf("memberhome: read the default login of %q: %w", member, err)
 	}
 	return identity, nil
 }
@@ -442,7 +444,8 @@ const maxIdentityConfigBytes = 8 << 20
 // Code's configuration, with the API key and the account it cached), and
 // the Anthropic profile directory profile. A subscription sign-in wins over
 // a Console API key, which wins over a keyless Console sign-in, as Claude
-// Code itself picks them.
+// Code itself picks them. A configuration file it cannot read is an error,
+// returned with the subscription sign-in when the file oauth holds one.
 func claudeIdentity(root *os.Root, oauth string, configs []string, profile string) (identity LoginIdentity, err error) {
 	var config struct {
 		PrimaryAPIKey string `json:"primaryApiKey"`
@@ -452,26 +455,27 @@ func claudeIdentity(root *os.Root, oauth string, configs []string, profile strin
 			OrganizationName string `json:"organizationName"`
 		} `json:"oauthAccount"`
 	}
+	var configErr error
 	for _, rel := range configs {
-		var data []byte
-		data, err = readStateUpTo(root, rel, maxIdentityConfigBytes)
-		if errors.As(err, new(stateTooLarge)) {
+		data, readErr := readStateUpTo(root, rel, maxIdentityConfigBytes)
+		if errors.As(readErr, new(stateTooLarge)) {
 			// Too large to read for an identity: the account it caches
 			// stays unknown, as for a login signed in before this feature.
 			break
 		}
-		if err != nil {
-			return LoginIdentity{}, fmt.Errorf("%s: %w", rel, err)
+		if readErr != nil {
+			configErr = fmt.Errorf("%s: %w", rel, readErr)
+			break
 		}
 		if len(data) == 0 {
 			continue
 		}
 		if json.Unmarshal(data, &config) != nil {
-			return LoginIdentity{}, notJSON(rel)
+			configErr = notJSON(rel)
 		}
 		break
 	}
-	if a := config.OAuthAccount; a != nil {
+	if a := config.OAuthAccount; a != nil && configErr == nil {
 		identity.Email, identity.OrganizationID, identity.OrganizationName = a.EmailAddress, a.OrganizationUUID, a.OrganizationName
 	}
 	defer func() { identity = identity.clean() }()
@@ -492,8 +496,11 @@ func claudeIdentity(root *os.Root, oauth string, configs []string, profile strin
 		}
 		if o := file.ClaudeAIOAuth; o != nil && (strings.TrimSpace(o.AccessToken) != "" || strings.TrimSpace(o.RefreshToken) != "") {
 			identity.Kind, identity.Plan = LoginSubscription, o.SubscriptionType
-			return identity, nil
+			return identity, configErr
 		}
+	}
+	if configErr != nil {
+		return LoginIdentity{}, configErr
 	}
 	if strings.TrimSpace(config.PrimaryAPIKey) != "" {
 		identity.Kind = LoginAPIKey

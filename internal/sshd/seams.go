@@ -87,9 +87,10 @@ type RunController interface {
 	// settings. A launch then chooses between no logins. Empty when nothing
 	// does.
 	LoginPayer(ctx context.Context, workspace domain.WorkspaceID, home domain.MemberID, harness string, mode domain.LaunchMode) (string, error)
-	// LoginPerUse reports whether login, in a session in home's home, is
-	// billed per use.
-	LoginPerUse(ctx context.Context, home domain.MemberID, login domain.Account, harness string) (bool, error)
+	// LoginUsageUnknown reports whether a launch in home's home that names
+	// no login counts the usage of login, its start, as unknown: billed per
+	// use, or a default login whose kind cannot be read.
+	LoginUsageUnknown(ctx context.Context, home domain.MemberID, login domain.Account, harness string) (bool, error)
 	FallbackLaunchable(ctx context.Context, member, requested domain.MemberID, account domain.Account, harness string, mode domain.LaunchMode, permission domain.Permission) (bool, error)
 	// LoginProblem is why agent's login in account's home cannot sign it
 	// in for a launch by member, empty when the server knows of none, and

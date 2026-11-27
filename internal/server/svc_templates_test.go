@@ -36,7 +36,7 @@ func (r *lockedRuns) StartLogin(context.Context, domain.WorkspaceID, domain.Memb
 	return "lgn-work000000", nil
 }
 
-func (r *lockedRuns) LoginPerUse(context.Context, domain.MemberID, domain.Account, string) (bool, error) {
+func (r *lockedRuns) LoginUsageUnknown(context.Context, domain.MemberID, domain.Account, string) (bool, error) {
 	return false, nil
 }
 

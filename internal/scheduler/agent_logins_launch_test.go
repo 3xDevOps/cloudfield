@@ -950,13 +950,14 @@ func TestASessionRecordsWhetherItsLoginIsBilledPerUse(t *testing.T) {
 	}
 }
 
-// A default login whose kind cannot be read fails no launch: it is not
-// billed per use, a launch that names none passes it over for the next
-// login that serves, and starts on it when none does.
+// A default login whose kind cannot be read fails no launch and keeps its
+// place: it is not billed per use, and a launch that names none starts on
+// it ahead of a later login billed per use, counting its usage unknown, so
+// it yields only to a login with usage known to be left.
 func TestAnUnreadableDefaultLoginFailsNoLaunch(t *testing.T) {
 	e := newLoginShareEnv(t)
 	ctx := t.Context()
-	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	e.addLogin(t, e.member.ID, "lgn-console000", "console", "")
 	writeHomeFile(t, e.adaHome, ".claude.json", `{"primaryApiKey":"test-not-a-key-of-ada"`)
 	run, err := e.launchOn(t, domain.Account{Member: e.member.ID}, "")
 	if err != nil {
@@ -965,13 +966,31 @@ func TestAnUnreadableDefaultLoginFailsNoLaunch(t *testing.T) {
 	if run.AccountLoginPerUse {
 		t.Fatal("a default login of unknown kind is marked billed per use")
 	}
-	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI, ""); err != nil || got != work.Login {
-		t.Fatalf("Ada's start = %q, %v; want work, past the default login it cannot read", got, err)
-	}
-	dir, _ := e.logins.Path(e.member.ID, "claude", work.Login)
-	writeHomeFile(t, dir, memberhome.LoginCredentials, `{"claudeAiOauth":{"accessToken":"test-access-old","expiresAt":1}}`)
 	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI, ""); err != nil || got != "" {
-		t.Fatalf("Ada's start with work signed out = %q, %v; want the default login", got, err)
+		t.Fatalf("Ada's start = %q, %v; want the default login in its place, ahead of console", got, err)
+	}
+	if unknown, err := e.sched.LoginUsageUnknown(ctx, e.member.ID, domain.AccountOf(e.member.ID), "claude"); err != nil || !unknown {
+		t.Fatalf("the default login's usage unknown = %v, %v; want unknown", unknown, err)
+	}
+}
+
+// A default login whose subscription sign-in file is sound is a
+// subscription whatever ~/.claude.json holds: a hard-linked or half-written
+// one neither passes it over nor makes its usage unknown.
+func TestASubscriptionDefaultIsJudgedByItsSignInFile(t *testing.T) {
+	e := newLoginShareEnv(t)
+	ctx := t.Context()
+	e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	writeHomeFile(t, e.adaHome, ".claude/.credentials.json", workLogin)
+	if err := os.Link(filepath.Join(e.adaHome, ".claude.json"), filepath.Join(e.adaHome, "claude-copy.json")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI, ""); err != nil || got != "" {
+		t.Fatalf("Ada's start = %q, %v; want her default subscription", got, err)
+	}
+	unknown, err := e.sched.LoginUsageUnknown(ctx, e.member.ID, domain.AccountOf(e.member.ID), "claude")
+	if err != nil || unknown {
+		t.Fatalf("the default subscription's usage unknown = %v, %v; want it read as any subscription's", unknown, err)
 	}
 }
 

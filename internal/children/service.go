@@ -30,7 +30,7 @@ type Runs interface {
 	// parent's account.
 	ChildLogin(ctx context.Context, workspace domain.WorkspaceID, owner, account domain.MemberID, inherited domain.LoginID, harness string, mode domain.LaunchMode, permission domain.Permission) (domain.LoginID, error)
 	LoginPayer(ctx context.Context, workspace domain.WorkspaceID, home domain.MemberID, harness string, mode domain.LaunchMode) (string, error)
-	LoginPerUse(ctx context.Context, home domain.MemberID, login domain.Account, harness string) (bool, error)
+	LoginUsageUnknown(ctx context.Context, home domain.MemberID, login domain.Account, harness string) (bool, error)
 	FallbackLaunchable(ctx context.Context, member, requested domain.MemberID, account domain.Account, harnessName string, mode domain.LaunchMode, permission domain.Permission) (bool, error)
 	AgentModels(ctx context.Context, member, account domain.MemberID, name string, refresh bool) (protocol.AgentModelsResult, error)
 	Paused(run domain.RunID) bool

@@ -41,7 +41,8 @@ type fakeRuns struct {
 	childRefusal error
 	// payerReads counts LoginPayer's calls.
 	payerReads atomic.Int32
-	// payer is what LoginPayer answers, and perUse what LoginPerUse does.
+	// payer is what LoginPayer answers, and perUse what LoginUsageUnknown
+	// does.
 	payer  string
 	perUse bool
 }
@@ -117,7 +118,7 @@ func (f *fakeRuns) LoginPayer(context.Context, domain.WorkspaceID, domain.Member
 	return f.payer, nil
 }
 
-func (f *fakeRuns) LoginPerUse(context.Context, domain.MemberID, domain.Account, string) (bool, error) {
+func (f *fakeRuns) LoginUsageUnknown(context.Context, domain.MemberID, domain.Account, string) (bool, error) {
 	return f.perUse, nil
 }
 
