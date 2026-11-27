@@ -688,8 +688,10 @@ func frag(s *saved) {
 		return
 	}
 	defer m.kill()
-	size := *mem - shmMiB() - 400
-	for _, step := range []string{fmt.Sprintf("free %d", stableID), fmt.Sprintf("free %d", heapID), fmt.Sprintf("frag 3 %d", size)} {
+	// The guest gives up everything it holds, /dev/shm file included, and
+	// fragments all but 800 MiB of its RAM.
+	size := *mem - 800
+	for _, step := range []string{fmt.Sprintf("free %d", stableID), fmt.Sprintf("free %d", heapID), "shm 0", fmt.Sprintf("frag 3 %d", size)} {
 		if _, err = m.guest("%s", step); err != nil {
 			fmt.Printf("FCLAZY FRAG %s step=%q FAIL %v; alive=%t; %s\n", id, step, err, m.alive(), m.tail())
 			return
