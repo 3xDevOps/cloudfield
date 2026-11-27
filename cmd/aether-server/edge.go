@@ -115,6 +115,12 @@ func edgeCmd(args []string) error {
 		return errors.New(edgeUsage)
 	}
 	edgeURL := string(*o.edgeURL)
+	if edgeURL == "" && sub == "move" {
+		// A flag that empties edge-url is an override, not an edge turned off.
+		if err := configGives(configPath, o.config, edgeURL, *o.dataDir); err != nil {
+			return err
+		}
+	}
 	if edgeURL == "" {
 		return fmt.Errorf("the edge is off: edge-url is empty in %s; turn it on with:\n  %saether-server config set edge-url %s%s",
 			configPath, sudoPrefix(), edgeagent.DefaultURL, configFlag(configPath))

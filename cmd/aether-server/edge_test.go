@@ -275,6 +275,22 @@ func TestEdgeMoveRefusesAFlagOverrideFirst(t *testing.T) {
 	}
 }
 
+// An empty --edge-url on edge move is a flag override of the file, not an
+// edge that is off.
+func TestEdgeMoveRefusesAnEmptyFlagOverride(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "server.conf")
+	const file = "https://edge-old.example.test"
+	if err := serversetup.WriteConfig(path, map[string]string{"data-dir": dir, "edge-url": file}); err != nil {
+		t.Fatal(err)
+	}
+	err := edgeCmd([]string{"move", "https://edge-new.example.test", "--config", path, "--edge-url="})
+	if want := path + ` gives edge-url "` + file + `" and data-dir "` + dir + `", but edge move runs with "" and "` + dir +
+		`" from its flags; nothing changed, run it again without --edge-url or --data-dir`; fmt.Sprint(err) != want {
+		t.Errorf("move: %v\nwant: %s", err, want)
+	}
+}
+
 // edge move decides on the one config it read at the start: a file
 // changed since to the address a flag gave does not turn a flag override
 // into a move, and nothing is dialed or created.
