@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -215,6 +216,9 @@ func TestConnectorListAtRetiringAddress(t *testing.T) {
 		{"unreadable notices", 6, false, both, edgeagent.StoredNotices{}, errors.New("read notices.json: permission denied"), want{url: universal, universal: universal}},
 		{"enrolled at a retiring address", 6, false, both, stored(false, retiring), nil, want{url: newRelay + "/mcp", universal: newRelay + "/mcp",
 			notices: at("retiring", "2027-03-01", newRelay+ownPath, newRelay+"/mcp")}},
+		{"replacement announced with the default port", 6, false, []string{e.origin, newRelay + ":443"}, stored(false, retiring), nil,
+			want{url: newRelay + ":443/mcp", universal: newRelay + ":443/mcp",
+				notices: at("retiring", "2027-03-01", newRelay+":443"+ownPath, newRelay+":443/mcp")}},
 		{"retiring without a date", 6, false, both, stored(false, undated), nil, want{url: newRelay + "/mcp", universal: newRelay + "/mcp",
 			notices: at("retiring", "", newRelay+ownPath, newRelay+"/mcp")}},
 		{"first use", 6, false, both, stored(true, retiring), nil, want{url: universal, universal: universal,
@@ -282,8 +286,8 @@ func TestConnectorListAtRetiringAddress(t *testing.T) {
 	if err := e.admin.Call(protocol.MethodConnectorList, struct{}{}, &list); err != nil {
 		t.Fatal(err)
 	}
-	if list.URL != newRelay+ownPath {
-		t.Errorf("url %q, want %q", list.URL, newRelay+ownPath)
+	if list.URL != newRelay+ownPath || list.UniversalURL != e.origin+"/mcp" {
+		t.Errorf("url %q universal_url %q, want %q %q", list.URL, list.UniversalURL, newRelay+ownPath, e.origin+"/mcp")
 	}
 	for _, c := range list.Connectors {
 		got, _ := json.Marshal(c.Notice)
@@ -295,6 +299,56 @@ func TestConnectorListAtRetiringAddress(t *testing.T) {
 			t.Errorf("without GitHub, connector at %s: notice %s, want %s", ids[c.ID], got, want)
 		}
 	}
+}
+
+func TestConnectorCodeNeverMintsWithoutAURL(t *testing.T) {
+	e := newEnv(t)
+	for k := int64(1); k <= 6; k++ {
+		e.edge.version.Store(int64(edgeproto.VersionRelayOrigin))
+		e.edge.dropAfter.Store(k)
+		var code protocol.ConnectorCodeResult
+		if err := e.device.Call(protocol.MethodConnectorCode, struct{}{}, &code); err == nil && code.URL == "" {
+			t.Fatalf("edge dropping after %d version reads: connector.code minted %+v with no URL", k, code)
+		}
+		e.edge.version.Store(int64(edgeproto.VersionRelayOrigin))
+		e.edge.dropAfter.Store(k)
+		var list protocol.ConnectorListResult
+		if err := e.device.Call(protocol.MethodConnectorList, struct{}{}, &list); err != nil || list.URL == "" {
+			t.Fatalf("edge dropping after %d version reads: connector.list = %+v, %v; want a URL", k, list, err)
+		}
+	}
+	e.edge.dropAfter.Store(0)
+}
+
+func TestUnreadableNoticesLogOncePerFailure(t *testing.T) {
+	e := newEnv(t)
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	list := func() {
+		t.Helper()
+		var out protocol.ConnectorListResult
+		if err := e.device.Call(protocol.MethodConnectorList, struct{}{}, &out); err != nil {
+			t.Fatal(err)
+		}
+	}
+	warned := func(want int) {
+		t.Helper()
+		if got := strings.Count(logs.String(), "connectors shown without the edge's notices"); got != want {
+			t.Fatalf("logged the unreadable notices %d times, want %d:\n%s", got, want, logs.String())
+		}
+	}
+	failing := errors.New("read notices.json: permission denied")
+	e.edge.setErr(failing)
+	list()
+	list()
+	warned(1)
+	e.edge.setErr(nil)
+	list()
+	e.edge.setErr(failing)
+	list()
+	warned(2)
 }
 
 func TestToolResultNoticeAtRetiringAddress(t *testing.T) {

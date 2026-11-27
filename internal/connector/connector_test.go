@@ -970,6 +970,9 @@ type edgeAt struct {
 	err     error
 	// unclaimed is an edge that reports the server not claimed.
 	unclaimed atomic.Bool
+	// dropAfter, when set, is how many more EdgeVersion reads see the
+	// edge before it drops to version 0.
+	dropAfter atomic.Int64
 }
 
 func (e *edgeAt) ConnectorOrigins() []string {
@@ -979,8 +982,14 @@ func (e *edgeAt) ConnectorOrigins() []string {
 	return e.RelayOrigins()
 }
 
-func (e *edgeAt) Origin() string   { return e.origin }
-func (e *edgeAt) EdgeVersion() int { return int(e.version.Load()) }
+func (e *edgeAt) Origin() string { return e.origin }
+
+func (e *edgeAt) EdgeVersion() int {
+	if e.dropAfter.Load() > 0 && e.dropAfter.Add(-1) == 0 {
+		defer e.version.Store(0)
+	}
+	return int(e.version.Load())
+}
 
 func (e *edgeAt) RelayOrigins() []string {
 	e.mu.Lock()
