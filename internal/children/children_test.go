@@ -22,6 +22,7 @@ import (
 	agentharness "github.com/3xDevOps/cloudfield/internal/harness"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/quota"
 	"github.com/3xDevOps/cloudfield/internal/store"
 )
 
@@ -36,6 +37,8 @@ type fakeRuns struct {
 	killed   []domain.RunID
 	closed   []domain.RunID
 	paused   map[domain.RunID]bool
+	// childRefusal is what ChildLogin refuses with, when set.
+	childRefusal error
 }
 
 func (f *fakeRuns) LaunchWithOptions(ctx context.Context, ws domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode, opts domain.LaunchOptions) (*domain.Run, error) {
@@ -114,6 +117,9 @@ func (f *fakeRuns) LoginPerUse(context.Context, domain.MemberID, domain.Account,
 
 // ChildLogin inherits an added login and starts on the default otherwise.
 func (f *fakeRuns) ChildLogin(_ context.Context, _ domain.WorkspaceID, _, _ domain.MemberID, inherited domain.LoginID, _ string, _ domain.LaunchMode, _ domain.Permission) (domain.LoginID, error) {
+	if f.childRefusal != nil {
+		return "", f.childRefusal
+	}
 	if inherited.Added() {
 		return inherited, nil
 	}
@@ -1133,6 +1139,7 @@ func TestSubsessionInheritsTheParentsLinearIssue(t *testing.T) {
 func TestASubsessionOnAnAddedLoginIgnoresASignedOutDefault(t *testing.T) {
 	h := newHarness(t)
 	h.agents.missing[h.ada.ID] = true
+	h.addLogin(h.ada.ID, "lgn-work000000", "work")
 	parent := &domain.Run{WorkspaceID: h.ws.ID, MemberID: h.ada.ID, AccountMemberID: h.ada.ID, AccountLogin: "lgn-work000000", Task: "parent", Harness: "claude", Mode: domain.LaunchACP, Status: domain.RunRunning}
 	if err := h.db.CreateRun(h.ctx, parent); err != nil {
 		t.Fatal(err)
@@ -1152,5 +1159,79 @@ func TestASubsessionOnAnAddedLoginIgnoresASignedOutDefault(t *testing.T) {
 	h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "claude", Task: "on work"})
 	if _, err := h.start(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "on the default"}); code(err) != protocol.CodeDenied || !strings.Contains(err.Error(), "Ada is not signed in to codex") {
 		t.Fatalf("a subsession on Ada's signed-out default = %v, want refused", err)
+	}
+}
+
+func (h *harness) addLogin(member domain.MemberID, id domain.LoginID, name string) {
+	h.t.Helper()
+	if _, err := h.db.AddAgentLogin(h.ctx, domain.AgentLogin{MemberID: member, Agent: "claude", ID: id, Name: name, CreatedAt: time.Now()}, ""); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+func (h *harness) options(parent domain.RunID) map[string]protocol.ChildChoice {
+	h.t.Helper()
+	raw, _ := json.Marshal(protocol.ChildOptionsParams{})
+	out, err := h.svc.HandleAgent(h.ctx, parent, protocol.MethodChildOptions, raw)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	listed := map[string]protocol.ChildChoice{}
+	for _, c := range out.(protocol.ChildOptionsResult).Choices {
+		if c.AccountMemberID == string(h.ada.ID) {
+			listed[c.Harness] = c
+		}
+	}
+	return listed
+}
+
+// usageByLogin reports each login's used share of its Claude five-hour
+// window.
+type usageByLogin map[domain.Account]float64
+
+func (u usageByLogin) Read(ctx context.Context, account domain.MemberID, refresh bool) ([]quota.Provider, error) {
+	return u.ReadLogin(ctx, domain.AccountOf(account), refresh)
+}
+
+func (u usageByLogin) ReadLogin(_ context.Context, account domain.Account, _ bool) ([]quota.Provider, error) {
+	resets := time.Now().Add(time.Hour)
+	return []quota.Provider{{Provider: "claude", Status: "ok", Windows: []quota.Window{{ID: "five_hour", UsedPercent: u[account], ResetsAt: &resets}}}}, nil
+}
+
+// Where the account's owner keeps logins, a subsession is listed and
+// refused as dispatch would launch it: a default login the files show
+// signed out but that a login choice serves (one an apiKeyHelper signs in)
+// is ready, an account none of whose logins serves is not, and a spent
+// first login with a second that has usage left is not exhausted.
+func TestSubsessionOptionsJudgeTheLoginDispatchUses(t *testing.T) {
+	h := newHarness(t)
+	h.agents.missing[h.ada.ID] = true
+	h.addLogin(h.ada.ID, "lgn-work000000", "work")
+	parent := h.run(h.ada.ID, domain.LaunchACP, "parent")
+	if got := h.options(parent.ID)["claude"]; got.Status != choiceReady {
+		t.Fatalf("claude on Ada's account = %s (%s); want ready on the login a launch chooses", got.Status, got.Detail)
+	}
+	h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "claude", Task: "on the default"})
+	if got := h.options(parent.ID)["codex"]; got.Status != choiceNotSignedIn {
+		t.Fatalf("codex, for which Ada keeps no logins = %s; want not signed in, as before", got.Status)
+	}
+
+	h.runs.childRefusal = errors.New("no login of this account can start a session unnamed: default is automatic off; work is automatic off")
+	if got := h.options(parent.ID)["claude"]; got.Status != choiceNotSignedIn || !strings.Contains(got.Detail, "automatic off") {
+		t.Fatalf("claude with every login automatic off = %s (%s); want refused with the reason", got.Status, got.Detail)
+	}
+	if _, err := h.start(parent.ID, protocol.ChildStartParams{Harness: "claude", Task: "refused"}); code(err) != protocol.CodeDenied || !strings.Contains(err.Error(), "automatic off") {
+		t.Fatalf("a subsession with every login automatic off = %v; want refused", err)
+	}
+	h.runs.childRefusal = nil
+
+	work := domain.Account{Member: h.ada.ID, Login: "lgn-work000000"}
+	h.svc.cfg.Usage = usageByLogin{domain.AccountOf(h.ada.ID): 100, work: 10}
+	if got := h.options(parent.ID)["claude"]; got.Status != choiceReady {
+		t.Fatalf("claude with the default spent and work at 10%% = %s (%s); want ready", got.Status, got.Detail)
+	}
+	h.svc.cfg.Usage = usageByLogin{domain.AccountOf(h.ada.ID): 100, work: 100}
+	if got := h.options(parent.ID)["claude"]; got.Status != choiceExhausted {
+		t.Fatalf("claude with both logins spent = %s (%s); want exhausted", got.Status, got.Detail)
 	}
 }
