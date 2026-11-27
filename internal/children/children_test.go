@@ -108,7 +108,11 @@ func (f *fakeRuns) EnvironmentSignsIn(context.Context, domain.WorkspaceID, strin
 	return false, nil
 }
 
-func (f *fakeRuns) ChildLogin(context.Context, domain.WorkspaceID, domain.MemberID, domain.MemberID, domain.LoginID, string, domain.LaunchMode, domain.Permission) (domain.LoginID, error) {
+// ChildLogin inherits an added login and starts on the default otherwise.
+func (f *fakeRuns) ChildLogin(_ context.Context, _ domain.WorkspaceID, _, _ domain.MemberID, inherited domain.LoginID, _ string, _ domain.LaunchMode, _ domain.Permission) (domain.LoginID, error) {
+	if inherited.Added() {
+		return inherited, nil
+	}
 	return "", nil
 }
 
@@ -1116,5 +1120,20 @@ func TestSubsessionInheritsTheParentsLinearIssue(t *testing.T) {
 	want := []string{"https://linear.app/acme/issue/ENG-1", "https://linear.app/acme/issue/ENG-2"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("subsession Linear issues = %v, want %v", got, want)
+	}
+}
+
+// A subsession that will run on its parent's added login is not refused
+// because the account's default login is signed out.
+func TestASubsessionOnAnAddedLoginIgnoresASignedOutDefault(t *testing.T) {
+	h := newHarness(t)
+	h.agents.missing[h.ada.ID] = true
+	parent := &domain.Run{WorkspaceID: h.ws.ID, MemberID: h.ada.ID, AccountMemberID: h.ada.ID, AccountLogin: "lgn-work000000", Task: "parent", Harness: "claude", Mode: domain.LaunchACP, Status: domain.RunRunning}
+	if err := h.db.CreateRun(h.ctx, parent); err != nil {
+		t.Fatal(err)
+	}
+	h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "claude", Task: "on work"})
+	if _, err := h.start(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "on the default"}); code(err) != protocol.CodeDenied || !strings.Contains(err.Error(), "Ada is not signed in to codex") {
+		t.Fatalf("a subsession on Ada's signed-out default = %v, want refused", err)
 	}
 }
