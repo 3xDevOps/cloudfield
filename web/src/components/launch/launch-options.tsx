@@ -90,8 +90,11 @@ export function FallbackOptions({
       <CollapsibleTrigger>
         {logins ? (
           <>
-            <span className="shrink-0 font-medium">Fallback accounts</span>
-            <span className="shrink-0 text-muted">· {params.fallback_account_member_ids ? 'In your order' : 'Most usage left first'} · after your logins</span>
+            {/* "after your logins" never breaks: shut, it is the one place that says the member's logins come first. */}
+            <span className="min-w-0">
+              <span className="font-medium">Fallback accounts</span>{' '}
+              <span className="text-muted">· {params.fallback_account_member_ids ? 'In your order' : 'Most usage left first'} · <span className="whitespace-nowrap">after your logins</span></span>
+            </span>
           </>
         ) : (
           <>

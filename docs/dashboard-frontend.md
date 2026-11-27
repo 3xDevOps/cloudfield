@@ -3037,7 +3037,8 @@ whether a session may move to another login, for launches on every device;
 not the login.", or with other accounts "Saves this account, the fallback
 accounts and whether a session may move to another login or account, …".
 **Fallback** then holds only what the switch does not: **Fallback accounts ·
-Most usage left first** (or **In your order**) **· after your logins**, the
+Most usage left first** (or **In your order**) **· after your logins**, which
+wraps between words on a narrow sheet and never breaks "after your logins", the
 other accounts' list without a checkbox, shown while the switch is on and
 another account is shared with the caller, and gone otherwise.
 
