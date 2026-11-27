@@ -455,9 +455,10 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
   const lastLive = useRef<{ canAct: boolean; waiting: boolean }>(undefined)
   if (stream === 'live') lastLive.current = { canAct: control.canAct, waiting: backgroundWait(run, session) !== null }
   const shape = lastLive.current
-  // A sleeping session's ack says its agent is gone, and holds until the wake's resubscribed stream is live, whichever side of the wake's event that falls.
+  // A sleeping session's ack says its agent is gone. After the wake it holds until an ack says the agent is live, or the stream has resubscribed.
   const sleepAck = useRef<'held' | 'resubscribing'>(undefined)
   if (run.asleep_since) sleepAck.current = 'held'
+  else if (session?.live) sleepAck.current = undefined
   else if (sleepAck.current && stream !== 'live') sleepAck.current = 'resubscribing'
   else if (sleepAck.current === 'resubscribing') sleepAck.current = undefined
   const gate = enhancedBlock({
