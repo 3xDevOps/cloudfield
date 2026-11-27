@@ -134,7 +134,10 @@ func (s *Server) workspaceOrigin(ctx context.Context, member domain.MemberID, pa
 	note := "workspace origin cleared"
 	if ws.Origin != "" {
 		// Every reader of the workspace, and every agent that reads its timeline, sees this note.
-		note = "workspace origin set to " + domain.OriginWithoutUserinfo(ws.Origin)
+		note = "workspace origin set"
+		if shown := domain.OriginForNote(ws.Origin); shown != "" {
+			note += " to " + shown
+		}
 	}
 	_, _ = s.cfg.Bus.Publish(ctx, events.Event{
 		WorkspaceID: ws.ID,

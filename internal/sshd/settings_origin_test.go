@@ -95,8 +95,8 @@ func TestWorkspaceOrigin(t *testing.T) {
 	}, nil); err != nil {
 		t.Fatalf("workspace.origin with userinfo: %v", err)
 	}
-	if note := waitTimelineNote(t, sub); note != "workspace origin set to https://git.example.test/acme/app.git" {
-		t.Fatalf("timeline note = %q, want the origin without its userinfo", note)
+	if note := waitTimelineNote(t, sub); note != "workspace origin set" {
+		t.Fatalf("timeline note = %q, want no address for an origin that may hold a credential", note)
 	}
 	if stored, err = e.store.GetWorkspace(ctx, e.ws.ID); err != nil || stored.Origin != withCredential {
 		t.Fatalf("stored origin = %q (%v), want it kept as given", stored.Origin, err)

@@ -279,22 +279,26 @@ func TestASubsessionOutcomeIsForItsParentOnly(t *testing.T) {
 	}
 }
 
-func TestOriginWithoutUserinfo(t *testing.T) {
-	for origin, want := range map[string]string{
-		"":                                 "",
-		"https://github.com/acme/shop.git": "https://github.com/acme/shop.git",
-		"https://ada:not-a-real-value@git.example.test/acme/shop.git": "https://git.example.test/acme/shop.git",
-		"https://not-a-real-value@git.example.test/acme/shop":         "https://git.example.test/acme/shop",
-		"http://ada:not-a-real-value@git.example.test:8080/shop":      "http://git.example.test:8080/shop",
-		"https://ada:not-a-real-value@git.example.test":               "https://git.example.test",
-		"https://git.example.test/acme/a@b.git":                       "https://git.example.test/acme/a@b.git",
-		"ssh://git@git.example.test/acme/shop.git":                    "ssh://git@git.example.test/acme/shop.git",
-		"ssh://ada:not-a-real-value@git.example.test/acme/shop.git":   "ssh://git.example.test/acme/shop.git",
-		"git@git.example.test:acme/shop.git":                          "git@git.example.test:acme/shop.git",
-		"/srv/git/shop.git":                                           "/srv/git/shop.git",
-	} {
-		if got := OriginWithoutUserinfo(origin); got != want {
-			t.Errorf("OriginWithoutUserinfo(%q) = %q, want %q", origin, got, want)
+func TestOriginForNote(t *testing.T) {
+	shown := []string{"", "https://github.com/acme/shop.git", "http://git.example.test:8080/shop", "/srv/git/shop.git", "git://git.example.test/shop.git"}
+	hidden := []string{
+		"https://ada:not-a-real-value@git.example.test/acme/shop.git",
+		"https://not-a-real-value@git.example.test/acme/shop",
+		"https://ada:not/a-real-value@git.example.test/acme/shop.git",
+		"https://git.example.test/shop.git?access_token=not-a-real-value",
+		"https://git.example.test/shop.git#not-a-real-value",
+		"ssh://not-a-real-value@git.example.test/acme/shop.git",
+		"ssh://ada:not-a-real-value@git.example.test/acme/shop.git",
+		"not-a-real-value@git.example.test:acme/shop.git",
+	}
+	for _, origin := range shown {
+		if got := OriginForNote(origin); got != origin {
+			t.Errorf("OriginForNote(%q) = %q, want it shown", origin, got)
+		}
+	}
+	for _, origin := range hidden {
+		if got := OriginForNote(origin); got != "" {
+			t.Errorf("OriginForNote(%q) = %q, want nothing shown", origin, got)
 		}
 	}
 }

@@ -197,7 +197,9 @@ func (e *Engine) CreateRunCheckoutAt(ctx context.Context, ws domain.WorkspaceID,
 	if origin != "" {
 		if _, err := e.git(ctx, checkoutPath, "remote", "set-url", "origin", origin); err != nil {
 			cleanup()
-			return "", "", fmt.Errorf("gitengine: point session %s origin at %s: %w", run, domain.OriginWithoutUserinfo(origin), err)
+			// git's error repeats its arguments, and the origin may hold a credential:
+			// this error becomes the session's failure reason, which every reader sees.
+			return "", "", fmt.Errorf("gitengine: point session %s at its workspace's origin: git remote set-url failed", run)
 		}
 	}
 	if err := e.writeRunMeta(run, runMeta{Base: baseCommit, Branch: branch, BaseBranch: baseBranch, Workspace: ws}); err != nil {

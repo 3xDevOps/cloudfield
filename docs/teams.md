@@ -357,10 +357,13 @@ authenticate over HTTPS only.
 Do not put a credential in the address (`https://user:token@host/...`). The
 address is stored as given and every member who can read the workspace sees
 it: `workspace.list` returns it, the dashboard shows it, and it is the
-`origin` remote in every session's checkout. The timeline note for a change
-("workspace origin set to ...") and a launch error that names the address
-leave the part before `@` out; notes written before that change keep what
-they hold. If a token was ever set this way, rotate it.
+`origin` remote in every session's checkout, where its agent can read it.
+`cloudfield link` copies your clone's `origin` when the workspace has none, so
+check `git remote get-url origin` first. The timeline note for a change says
+"workspace origin set" without the address when the address holds an `@`,
+`?` or `#`; notes written before that change keep what they hold. If a token
+was ever set this way, rotate it: it reached every member who could read the
+workspace, the agents that ran in it, and anything that read its timeline.
 
 ### Source mirror
 
