@@ -12,25 +12,31 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/rootfs"
 )
 
-const (
-	cacheTrimInterval = 10 * time.Minute
-	// Must exceed the longest go command by more than Go's hourly mtime refresh.
-	goBuildInUseAge = 2 * time.Hour
-)
+const cacheTrimInterval = 10 * time.Minute
 
 // trimCacheDisk keeps the cache disk mounted at root at most half full,
 // from boot and every cacheTrimInterval: go test, go vet and a module
 // download fail on a full one, and Go's own trim goes by age alone.
 func trimCacheDisk(root string) {
-	for {
-		if err := trimCacheOnce(root); err != nil {
+	// seen holds what the clock read at each of the last passes, so the
+	// cutoff is disk.GoBuildInUseAge of running time ago. A saved VM does
+	// not run, and its clock is set forward when it wakes, which ages the
+	// entries of a go command that runs across the save.
+	var seen [disk.GoBuildInUseAge / cacheTrimInterval]time.Time
+	for i := range seen {
+		seen[i] = time.Now().Add(time.Duration(i)*cacheTrimInterval - disk.GoBuildInUseAge)
+	}
+	for i := 0; ; i++ {
+		cutoff := seen[i%len(seen)]
+		seen[i%len(seen)] = time.Now()
+		if err := trimCacheOnce(root, cutoff); err != nil {
 			slog.Warn("guest: trim the Go build cache", "error", err)
 		}
 		time.Sleep(cacheTrimInterval)
 	}
 }
 
-func trimCacheOnce(root string) error {
+func trimCacheOnce(root string, cutoff time.Time) error {
 	use, err := disk.Filesystem(root)
 	if err != nil || use.UsedBytes <= use.TotalBytes/2 {
 		return err
@@ -49,5 +55,5 @@ func trimCacheOnce(root string) error {
 		return err
 	}
 	defer func() { _ = cache.Close() }()
-	return disk.TrimGoBuildCache(context.Background(), []*os.Root{cache}, time.Now().Add(-goBuildInUseAge), use.UsedBytes-use.TotalBytes/2)
+	return disk.TrimGoBuildCache(context.Background(), []*os.Root{cache}, cutoff, use.UsedBytes-use.TotalBytes/2)
 }

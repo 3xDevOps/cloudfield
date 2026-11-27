@@ -11,12 +11,15 @@ import (
 	"time"
 )
 
+// GoBuildInUseAge is how long before now TrimGoBuildCache's callers put its
+// cutoff. It must exceed the longest go command by more than Go's hourly
+// mtime refresh.
+const GoBuildInUseAge = 2 * time.Hour
+
 // TrimGoBuildCache removes the entries of the Go build caches that were last
 // used before cutoff, oldest first, until it has freed at least excess bytes.
-// It walks the same 256 shard directories as Go's own trim. The caller keeps
-// cutoff more than an hour, Go's mtime refresh, before the start of the
-// longest running go command. A cache that cannot be read is left alone and
-// reported; the others are still trimmed.
+// It walks the same 256 shard directories as Go's own trim. A cache that
+// cannot be read is left alone and reported; the others are still trimmed.
 func TrimGoBuildCache(ctx context.Context, caches []*os.Root, cutoff time.Time, excess uint64) error {
 	type entry struct {
 		cache *os.Root
