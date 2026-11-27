@@ -462,10 +462,6 @@ func (s *Server) runSnapshot(run *domain.Run) protocol.Run {
 				out.AccountLoginName = l.Name
 			}
 		}
-		if s.cfg.Logins != nil {
-			identity, idErr := s.cfg.Logins.Identity(run.AccountMember(), run.Harness, run.AccountLogin)
-			out.AccountLoginPerUse = idErr == nil && identity.PerUse()
-		}
 	}
 	if s.cfg.Runs != nil {
 		out.Paused = s.cfg.Runs.Paused(run.ID)

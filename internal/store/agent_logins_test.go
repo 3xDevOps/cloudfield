@@ -96,7 +96,9 @@ func TestAgentLoginsOrderAndLeaveNoRowWhenNoneAreLeft(t *testing.T) {
 		t.Fatalf("agent_logins rows after removing every added login = %d; want 0", n)
 	}
 	for _, set := range []func(domain.LoginID, bool) error{
-		func(id domain.LoginID, on bool) error { return db.SetAgentLoginAutomatic(ctx, ada.ID, "claude", id, on) },
+		func(id domain.LoginID, on bool) error {
+			return db.SetAgentLoginAutomatic(ctx, ada.ID, "claude", id, on)
+		},
 		func(id domain.LoginID, on bool) error { return db.SetAgentLoginShared(ctx, ada.ID, "claude", id, on) },
 	} {
 		off := func(id domain.LoginID) error { return set(id, false) }

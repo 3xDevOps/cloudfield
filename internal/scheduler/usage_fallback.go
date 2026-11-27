@@ -841,7 +841,11 @@ func (s *Scheduler) commitMove(ctx context.Context, entry *supervised, f *UsageF
 	if killed {
 		return 0, errors.New("the session is being killed")
 	}
-	seq, err := s.cfg.Store.SetRunAccount(ctx, run.ID, to, m.segment(), time.Now().UTC())
+	perUse, err := s.loginPerUse(ctx, run.HomeMember(), to, run.Harness)
+	if err != nil {
+		return 0, err
+	}
+	seq, err := s.cfg.Store.SetRunAccount(ctx, run.ID, to, perUse, m.segment(), time.Now().UTC())
 	if err != nil {
 		return 0, fmt.Errorf("record the session's account: %w", err)
 	}

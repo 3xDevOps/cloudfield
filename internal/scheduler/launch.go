@@ -328,6 +328,10 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	if err != nil {
 		return nil, err
 	}
+	perUse, err := s.loginPerUse(ctx, member, domain.Account{Member: account, Login: opts.AccountLogin}, harness)
+	if err != nil {
+		return nil, err
+	}
 	release, err := s.reserveCapacity(ctx)
 	if err != nil {
 		return nil, err
@@ -406,6 +410,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 		Extras:          extras.repos,
 		LinearIssueURL:  opts.LinearIssueURL,
 	}
+	run.AccountLoginPerUse = perUse
 	if opts.RequestedAccount != account {
 		run.RequestedAccountMemberID = opts.RequestedAccount
 	}

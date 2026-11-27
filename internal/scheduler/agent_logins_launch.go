@@ -439,15 +439,8 @@ func (s *Scheduler) ChildLogin(ctx context.Context, workspace domain.WorkspaceID
 	inherits := i >= 0 && logins[i].Automatic && (owner == account || logins[i].Shared)
 	login := domain.Account{Member: account, Login: loginOf(inherited)}
 	if inherits {
-		var identity memberhome.LoginIdentity
-		var idErr error
-		switch {
-		case login.Login.Added():
-			identity, idErr = s.cfg.Logins.Identity(account, harness, login.Login)
-		case s.cfg.Homes != nil:
-			identity, idErr = s.cfg.Homes.DefaultIdentity(account, harness)
-		}
-		inherits = idErr == nil && !identity.PerUse()
+		perUse, perUseErr := s.loginPerUse(ctx, owner, login, harness)
+		inherits = perUseErr == nil && !perUse
 	}
 	if byEnv, envErr := s.EnvironmentSignsIn(ctx, workspace, harness, mode); envErr != nil || byEnv {
 		return "", envErr
@@ -458,6 +451,32 @@ func (s *Scheduler) ChildLogin(ctx context.Context, workspace domain.WorkspaceID
 		}
 	}
 	return s.StartLogin(ctx, workspace, owner, account, harness, mode, permission)
+}
+
+// loginPerUse reports whether login of agent, in a session in home's home,
+// is billed per use: a Console login, or home's own default login kept as
+// an API key or a Console profile once they keep login rows. Another
+// member's default login is shared only as a subscription, and a member
+// who keeps no rows is shown as before logins existed.
+func (s *Scheduler) loginPerUse(ctx context.Context, home domain.MemberID, login domain.Account, agent string) (bool, error) {
+	var identity memberhome.LoginIdentity
+	var err error
+	switch {
+	case login.Login.Added():
+		identity, err = s.cfg.Logins.Identity(login.Member, agent, login.Login)
+	case login.Member != home || s.cfg.Homes == nil:
+		return false, nil
+	default:
+		var keeps []domain.AgentLogin
+		if keeps, err = s.cfg.Store.ListAgentLogins(ctx, login.Member, agent); err != nil || len(keeps) == 0 {
+			return false, err
+		}
+		identity, err = s.cfg.Homes.DefaultIdentity(login.Member, agent)
+	}
+	if err != nil {
+		return false, fmt.Errorf("scheduler: whether the login is billed per use: %w", err)
+	}
+	return identity.PerUse(), nil
 }
 
 func loginOf(id domain.LoginID) domain.LoginID {

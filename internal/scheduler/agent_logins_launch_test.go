@@ -15,6 +15,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/harness"
 	"github.com/3xDevOps/cloudfield/internal/memberhome"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
+	"github.com/3xDevOps/cloudfield/internal/protocol"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
 	"github.com/3xDevOps/cloudfield/internal/secretstore"
 	acp "github.com/coder/acp-go-sdk"
@@ -795,5 +796,39 @@ func TestALoginWithNoRowGoesWithItsVolume(t *testing.T) {
 	e.rt.mu.Unlock()
 	if _, statErr := os.Lstat(dir); !removed || !errors.Is(statErr, fs.ErrNotExist) {
 		t.Fatalf("volume removed %v, directory %v; want both gone", removed, statErr)
+	}
+}
+
+// A session records whether its login is billed per use when its account
+// is set: a Console login, and a default login kept as an API key once its
+// owner keeps login rows. Before then the default login is not marked, as
+// before logins existed.
+func TestASessionRecordsWhetherItsLoginIsBilledPerUse(t *testing.T) {
+	e := newLoginShareEnv(t)
+	perUse := func(login domain.LoginID) bool {
+		t.Helper()
+		run, err := e.launchOn(t, domain.Account{Member: e.member.ID, Login: login}, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored, err := e.db.GetRun(t.Context(), run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if protocol.RunFromDomain(stored).AccountLoginPerUse != stored.AccountLoginPerUse {
+			t.Fatal("the snapshot does not carry the stored mark")
+		}
+		return stored.AccountLoginPerUse
+	}
+	if perUse("") {
+		t.Fatal("Ada's API-key default with no login rows is marked billed per use")
+	}
+	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	console := e.addLogin(t, e.member.ID, "lgn-console000", "console", "")
+	if !perUse("") {
+		t.Fatal("Ada's API-key default beside added logins is not marked billed per use")
+	}
+	if !perUse(console.Login) || perUse(work.Login) {
+		t.Fatal("want the Console login marked billed per use and the subscription login not")
 	}
 }

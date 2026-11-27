@@ -23,8 +23,9 @@ type Run struct {
 	// AccountLoginName its name; both empty for the default login.
 	AccountLogin     string `json:"account_login,omitempty"`
 	AccountLoginName string `json:"account_login_name,omitempty"`
-	// AccountLoginPerUse: the added login is billed per use (a Console
-	// login), not by a subscription's windows.
+	// AccountLoginPerUse: the login is billed per use, not by a
+	// subscription's windows: a Console login, or a default login kept as
+	// an API key or a Console profile by a member who added logins.
 	AccountLoginPerUse bool   `json:"account_login_per_use,omitempty"`
 	Task               string `json:"task"`
 	Title              string `json:"title,omitempty"`
@@ -306,6 +307,7 @@ func RunFromDomain(r *domain.Run) Run {
 
 		RequestedAccountMemberID: string(r.RequestedAccountMemberID),
 		AccountLogin:             string(r.AccountLogin),
+		AccountLoginPerUse:       r.AccountLoginPerUse,
 		FallbackAccountMemberIDs: FallbackIDs(r.Fallback),
 		NoFallback:               r.Fallback.Disabled,
 	}
