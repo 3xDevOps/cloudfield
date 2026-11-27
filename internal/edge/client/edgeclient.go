@@ -209,12 +209,7 @@ func (e *RefusedError) Is(target error) bool {
 // refusal builds the error for a response from origin that is not a
 // success. body is what could be read of the response.
 func (c *Client) refusal(op, origin string, resp *http.Response, body []byte) *RefusedError {
-	var eb struct {
-		edgeproto.ErrorBody
-		Retired *struct {
-			Replacement string `json:"replacement"`
-		} `json:"retired"`
-	}
+	var eb edgeproto.ErrorBody
 	status := resp.StatusCode
 	msg := http.StatusText(status)
 	fromEdge := resp.Header.Get(edgeproto.HeaderVersion) != ""
