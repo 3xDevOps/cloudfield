@@ -1,5 +1,7 @@
 package protocol
 
+import "time"
+
 // A member's logins of an agent: the default login in their home and the
 // logins they added. Only Claude Code has added logins. Every method acts on
 // the caller's own logins; a login id of another member reads as not found.
@@ -21,6 +23,16 @@ const (
 	// MethodAgentLoginShare sets whether the caller's account shares reach
 	// a login; turning it off moves teammates' running sessions off it.
 	MethodAgentLoginShare = "agent.login.share"
+)
+
+// A sign-in agent.login.add reserved waits AgentLoginSignInOpenWithin for
+// its terminal; its container then takes up to AgentLoginSignInProvision to
+// start and the sign-in up to AgentLoginSignInTimeout to run.
+// agent.login.result waits through all three.
+const (
+	AgentLoginSignInOpenWithin = 10 * time.Minute
+	AgentLoginSignInProvision  = 5 * time.Minute
+	AgentLoginSignInTimeout    = 15 * time.Minute
 )
 
 type AgentLoginShareParams struct {

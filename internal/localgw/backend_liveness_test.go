@@ -276,6 +276,33 @@ func TestSSHBackendSlowCallFailsAlone(t *testing.T) {
 	}
 }
 
+// agent.login.result waits while a sign-in's terminal opens, its container
+// starts and the member signs in, so it is answered past callTimeout.
+func TestSSHBackendWaitsOutALoginSignIn(t *testing.T) {
+	if bound, want := callBound(protocol.MethodAgentLoginResult), protocol.AgentLoginSignInOpenWithin+protocol.AgentLoginSignInProvision+protocol.AgentLoginSignInTimeout; bound <= want {
+		t.Fatalf("agent.login.result bound = %v, want more than the sign-in's %v", bound, want)
+	}
+	oldTimeout := callTimeout
+	callTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { callTimeout = oldTimeout })
+	home := testhome.Isolate(t)
+	server := listen(t)
+	serveControl(t, server, func(method string) json.RawMessage {
+		if method == protocol.MethodAgentLoginResult {
+			time.Sleep(3 * callTimeout)
+		}
+		return json.RawMessage(`{}`)
+	})
+	b := NewSSHBackend(cli.Config{Addr: server.Addr().String(), KnownHosts: filepath.Join(home, "known_hosts")})
+	t.Cleanup(func() { _ = b.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, perr := b.Call(ctx, protocol.MethodAgentLoginResult, nil); perr != nil {
+		t.Fatalf("agent.login.result answered after %v = %v, want its answer", 3*callTimeout, perr)
+	}
+}
+
 // A config reload relinks to the same server while a request waits on a
 // dial; the request follows the new config instead of failing.
 func TestSSHBackendRequestFollowsARelinkDuringADial(t *testing.T) {

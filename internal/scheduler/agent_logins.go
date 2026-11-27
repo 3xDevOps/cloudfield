@@ -20,6 +20,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/harness"
 	"github.com/3xDevOps/cloudfield/internal/memberhome"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
+	"github.com/3xDevOps/cloudfield/internal/protocol"
 	"github.com/3xDevOps/cloudfield/internal/ptyhost"
 	"github.com/3xDevOps/cloudfield/internal/quota"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
@@ -31,9 +32,9 @@ import (
 // container; loginSignInTimeout is how long the sign-in may then run;
 // loginSignInKept is how long its result waits to be collected.
 const (
-	loginSignInOpenWithin = 10 * time.Minute
-	loginSignInProvision  = 5 * time.Minute
-	loginSignInTimeout    = 15 * time.Minute
+	loginSignInOpenWithin = protocol.AgentLoginSignInOpenWithin
+	loginSignInProvision  = protocol.AgentLoginSignInProvision
+	loginSignInTimeout    = protocol.AgentLoginSignInTimeout
 	loginSignInKept       = 10 * time.Minute
 )
 

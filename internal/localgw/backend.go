@@ -279,6 +279,8 @@ func callBound(method string) time.Duration {
 		return protocol.TerminalExecTimeout + callTimeout
 	case protocol.MethodDictationTranscribe:
 		return protocol.DictationTimeout + callTimeout
+	case protocol.MethodAgentLoginResult:
+		return protocol.AgentLoginSignInOpenWithin + protocol.AgentLoginSignInProvision + protocol.AgentLoginSignInTimeout + callTimeout
 	}
 	return callTimeout
 }
