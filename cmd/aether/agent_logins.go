@@ -550,7 +550,7 @@ func renameLogin(args []string) error {
 
 func removeLogin(args []string) error {
 	yes := len(args) == 2 && args[1] == "--yes"
-	if len(args) != 1 && !yes {
+	if (len(args) != 1 && !yes) || strings.HasPrefix(args[0], "-") {
 		return errors.New("usage: cloudfield agent logins remove <login> [--yes]")
 	}
 	interactive := term.IsTerminal(int(os.Stdin.Fd()))
@@ -567,7 +567,7 @@ func removeLoginOf(c *protocol.Client, logins []protocol.AgentLogin, name string
 	if err != nil {
 		return err
 	}
-	if !yes {
+	if !yes && id != string(domain.DefaultLogin) {
 		login := logins[slices.IndexFunc(logins, func(l protocol.AgentLogin) bool { return l.ID == id })]
 		_, _ = fmt.Fprintf(out, "login %s\nRemoving it deletes its files from Cloudfield and does not sign it out at Anthropic; "+
 			"Cloudfield refuses while a session is on it. Remove? [y/N]: ", describeLogin(login))
