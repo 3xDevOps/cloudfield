@@ -66,7 +66,7 @@ type lazyRun struct {
 
 	alive, shm string
 	workIter   int
-	explained  map[uint64]bool
+	explained  map[uint64][2]int
 	dFallback  bool
 
 	cycles, failed, rewriteRejected int
@@ -164,24 +164,26 @@ func (r *lazyRun) setup() error {
 		"head -c %dM /dev/urandom >/dev/shm/fill; echo SHM $(sha256sum </dev/shm/fill | cut -d' ' -f1); "+
 		"AETHER_LAZY_GUEST=work AETHER_LAZY_MIB=%d setsid %s </dev/null >/var/tmp/lazy-work.log 2>&1 & "+
 		"echo MEM $(awk '/^MemTotal:/ {print $2}' /proc/meminfo) $(cat /sys/fs/cgroup/session/memory.max 2>&1) $(cat /sys/kernel/mm/transparent_hugepage/enabled); "+
-		"grep 'System RAM' /proc/iomem | sed 's/^/IOMEM /'; dmesg | grep -iE 'kvm|clock|steal' | head -30 | sed 's/^/BOOTDMESG /'",
+		"grep 'System RAM' /proc/iomem | sed 's/^/IOMEM /'; grep -E ' (wall_clock|hv_clock_boot|_text|__bss_start|__bss_stop)$' /proc/kallsyms | sed 's/^/KSYM /'",
 		pattern, lazyGuest, shm, work, lazyGuest), 5*time.Minute)
 	if err != nil || code != 0 {
 		return fmt.Errorf("guest setup: exit %d, %v: %s", code, err, out)
 	}
 	r.shm = lazyField(out, "SHM")
-	r.explained = map[uint64]bool{}
+	// The guest kernel's wall_clock is the 12-byte struct pvclock_wall_clock
+	// it gave KVM by MSR_KVM_WALL_CLOCK_NEW; KVM writes it each time the
+	// MSR is set, as a restore does. The kernel is loaded unrelocated, so
+	// its physical address is the symbol's less __START_KERNEL_map.
+	r.explained = map[uint64][2]int{}
 	for line := range strings.SplitSeq(out, "\n") {
-		if strings.HasPrefix(line, "IOMEM ") || strings.HasPrefix(line, "BOOTDMESG ") || strings.HasPrefix(line, "MEM ") {
+		if strings.HasPrefix(line, "IOMEM ") || strings.HasPrefix(line, "KSYM ") || strings.HasPrefix(line, "MEM ") {
 			r.say("SETUP %s", line)
 		}
-		if m := regexp.MustCompile(`(kvm-clock|stealtime): cpu \d+, msr ([0-9a-f]+)`).FindStringSubmatch(line); m != nil {
-			gpa, _ := strconv.ParseUint(m[2], 16, 64)
-			off := gpa &^ 4095
-			if gpa >= 4<<30 {
-				off -= 1 << 30
+		if m := regexp.MustCompile(`^KSYM ([0-9a-f]{16}) \S wall_clock$`).FindStringSubmatch(line); m != nil {
+			addr, _ := strconv.ParseUint(m[1], 16, 64)
+			if gpa := addr - 0xffffffff80000000; addr > 0xffffffff80000000 && gpa < 3<<30 {
+				r.explained[gpa&^4095] = [2]int{int(gpa & 4095), int(gpa&4095) + 12}
 			}
-			r.explained[off] = true
 		}
 	}
 	for deadline := time.Now().Add(3 * time.Minute); ; time.Sleep(time.Second) {
@@ -201,10 +203,9 @@ func (r *lazyRun) setup() error {
 	r.alive = lazyField(out, "ALIVE")
 	r.workIter = 0
 	pages := make([]string, 0, len(r.explained))
-	for off := range r.explained {
-		pages = append(pages, fmt.Sprintf("%#x", off))
+	for off, span := range r.explained {
+		pages = append(pages, fmt.Sprintf("%#x[%#x,%#x)", off, span[0], span[1]))
 	}
-	slices.Sort(pages)
 	r.say("SETUP booted_ms=%.0f pattern_mib=%d shm_mib=%d work_mib=%d bin=%q boot_memory=%q shm_sha256=%s alive=%q host_written_pages=%v",
 		ms(booted), pattern, shm, work, r.bin, scratchMemory, r.shm, r.alive, pages)
 	return nil

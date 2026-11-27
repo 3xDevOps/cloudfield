@@ -232,8 +232,9 @@ type lazyCompareResult struct {
 }
 
 // lazyCompare compares two memory files page by page; a hole reads as
-// zeros. explained are the offsets of pages the host writes by itself.
-func lazyCompare(orig, rest string, explained map[uint64]bool) (lazyCompareResult, error) {
+// zeros. explained holds, by page offset, the byte range in that page the
+// host writes by itself; a page that differs only there is explained.
+func lazyCompare(orig, rest string, explained map[uint64][2]int) (lazyCompareResult, error) {
 	var res lazyCompareResult
 	a, err := os.Open(orig)
 	if err != nil {
@@ -272,11 +273,15 @@ func lazyCompare(orig, rest string, explained map[uint64]bool) (lazyCompareResul
 				continue
 			}
 			d := lazyDiffPage{off: uint64(off) + uint64(p), origZero: bytes.Equal(pa, zero), restZero: bytes.Equal(pb, zero)}
-			d.explained = explained[d.off]
+			span, known := explained[d.off]
+			d.explained = known
 			var detail []string
 			for i := range pa {
 				if pa[i] != pb[i] {
 					d.bytes++
+					if i < span[0] || i >= span[1] {
+						d.explained = false
+					}
 					if len(detail) < 72 {
 						detail = append(detail, fmt.Sprintf("%03x:%02x>%02x", i, pa[i], pb[i]))
 					}
