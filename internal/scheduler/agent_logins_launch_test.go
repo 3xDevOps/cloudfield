@@ -826,6 +826,44 @@ func TestAnAddedLoginSessionsConfigVolumeGoesWithItsContainer(t *testing.T) {
 	})
 }
 
+// A login a merge gave another member moves to them only once the volume
+// of its old path is gone: moved, its directory no longer names that
+// volume, so a later reconcile could not remove it.
+func TestAMergedLoginMovesOnlyOnceItsVolumeIsGone(t *testing.T) {
+	e := newLoginShareEnv(t)
+	ctx := t.Context()
+	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	old, _ := e.logins.Path(e.member.ID, "claude", work.Login)
+	moved, _ := e.logins.Path(e.owner.ID, "claude", work.Login)
+	if err := e.db.DeleteAgentLogin(ctx, e.member.ID, "claude", work.Login); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.AddAgentLogin(ctx, domain.AgentLogin{MemberID: e.owner.ID, Agent: "claude", ID: work.Login, Name: "work", CreatedAt: time.Now()}, ""); err != nil {
+		t.Fatal(err)
+	}
+	e.rt.mu.Lock()
+	e.rt.volumeErr = errors.New("test: daemon unreachable")
+	e.rt.mu.Unlock()
+	if err := e.sched.ReconcileLogins(ctx, ""); err == nil {
+		t.Fatal("reconcile reported nothing while the volume stays")
+	}
+	if _, err := os.Lstat(old); err != nil {
+		t.Fatalf("the login's directory while its volume stays: %v; want it left where it was", err)
+	}
+	e.rt.mu.Lock()
+	e.rt.volumeErr = nil
+	e.rt.mu.Unlock()
+	if err := e.sched.ReconcileLogins(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	e.rt.mu.Lock()
+	removed := slices.Contains(e.rt.removedVolumes, old)
+	e.rt.mu.Unlock()
+	if _, err := os.Lstat(moved); !removed || err != nil {
+		t.Fatalf("volume of the old path removed %v, moved directory %v; want both", removed, err)
+	}
+}
+
 // A login directory whose row is gone goes with the volume its sessions'
 // mounts came from, which removing their containers leaves.
 func TestALoginWithNoRowGoesWithItsVolume(t *testing.T) {

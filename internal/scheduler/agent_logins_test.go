@@ -560,3 +560,39 @@ func TestALoginWithoutADirectoryDoesNotBlockASignIn(t *testing.T) {
 		t.Fatalf("a sign-in beside a login whose directory is gone: %v", err)
 	}
 }
+
+// A sign-in that adds nothing removes its login's Docker volume with its
+// directory. A volume that stays keeps the directory, through which the
+// next reconcile finds and removes both.
+func TestASignInThatAddsNothingRemovesItsVolume(t *testing.T) {
+	for _, volumeStays := range []bool{false, true} {
+		e := newSignInEnv(t)
+		var dir string
+		_, _, err := e.signIn(t, "work", func(spec runtime.Spec) {
+			dir, _ = e.logins.Path(e.member.ID, "claude", domain.LoginID(strings.TrimPrefix(spec.Name, "aether-login-")))
+			if volumeStays {
+				e.rt.mu.Lock()
+				e.rt.volumeErr = errors.New("test: daemon unreachable")
+				e.rt.mu.Unlock()
+			}
+		})
+		if err == nil {
+			t.Fatal("a sign-in that saved nothing added a login")
+		}
+		if _, statErr := os.Lstat(dir); volumeStays != (statErr == nil) {
+			t.Fatalf("volume stays %v: the sign-in's directory: %v", volumeStays, statErr)
+		}
+		e.rt.mu.Lock()
+		e.rt.volumeErr = nil
+		e.rt.mu.Unlock()
+		if err := e.sched.ReconcileLogins(t.Context(), ""); err != nil {
+			t.Fatal(err)
+		}
+		e.rt.mu.Lock()
+		removed := slices.Contains(e.rt.removedVolumes, dir)
+		e.rt.mu.Unlock()
+		if _, statErr := os.Lstat(dir); !removed || !errors.Is(statErr, fs.ErrNotExist) {
+			t.Fatalf("volume stays %v: volume removed %v, directory %v; want both gone", volumeStays, removed, statErr)
+		}
+	}
+}

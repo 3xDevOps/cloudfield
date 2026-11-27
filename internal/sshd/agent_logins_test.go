@@ -270,6 +270,8 @@ type fakeLoginSignIns struct {
 	reconciled []domain.MemberID
 	volumes    []domain.LoginID
 	volumeErr  error
+	// reconcileErr is what ReconcileLogins fails with, when set.
+	reconcileErr error
 }
 
 func (f *fakeLoginSignIns) RemoveLoginVolume(_ context.Context, _ domain.MemberID, _ string, id domain.LoginID) error {
@@ -287,7 +289,7 @@ func (f *fakeLoginSignIns) EndLoginSignIns(context.Context, domain.MemberID) err
 
 func (f *fakeLoginSignIns) ReconcileLogins(_ context.Context, member domain.MemberID) error {
 	f.reconciled = append(f.reconciled, member)
-	return nil
+	return f.reconcileErr
 }
 
 // A removal refused for a login in use names the owner's own sessions,
@@ -379,6 +381,33 @@ func TestRelaunchOnALoginTurnedAutomaticOffIsRefusedUpFront(t *testing.T) {
 	}
 	if _, perr := e.call(t, e.member.ID, protocol.MethodRunRelaunch, protocol.RunIDParams{RunID: string(run.ID)}); perr != nil {
 		t.Fatalf("relaunch once the login is automatic again: %v", perr)
+	}
+}
+
+// Removing a member removes each of their logins with its Docker volume,
+// and keeps the directory of one whose volume stays, so the next start
+// finds and removes both.
+func TestMemberRemovalRemovesEachLoginWithItsVolume(t *testing.T) {
+	for _, volumeStays := range []bool{false, true} {
+		e := newLoginEnv(t)
+		asSuperAdmin(t, e.testEnv)
+		_, bob := addMember(t, e.testEnv, "Bob", domain.RoleCollaborator, false)
+		e.seed(t, bob.ID, "lgn-work000000", "work", "bob@work.example.test")
+		signIns := &fakeLoginSignIns{}
+		if volumeStays {
+			signIns.reconcileErr = errors.New("login lgn-work000000: volume is in use")
+		}
+		e.srv.cfg.LoginSignIns = signIns
+		if err := controlClient(t, e.testEnv).Call(protocol.MethodMemberRemove, protocol.MemberRemoveParams{MemberID: string(bob.ID)}, nil); err != nil {
+			t.Fatalf("member.remove: %v", err)
+		}
+		if !slices.Equal(signIns.reconciled, []domain.MemberID{bob.ID}) {
+			t.Fatalf("logins reconciled for %v; want Bob's, which removes each with its volume", signIns.reconciled)
+		}
+		dir, _ := e.logins.Path(bob.ID, "claude", "lgn-work000000")
+		if _, err := os.Lstat(dir); volumeStays != (err == nil) {
+			t.Fatalf("volume stays %v: Bob's login directory: %v", volumeStays, err)
+		}
 	}
 }
 
