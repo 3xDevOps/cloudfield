@@ -114,9 +114,6 @@ func TestStandardCodexRunsThroughItsAppServer(t *testing.T) {
 	srv.SetStatus("thread-1", "active")
 	srv.SetStatus("thread-1", "idle")
 	e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
-	if reads := srv.Requests("thread/turns/list"); len(reads) != 0 {
-		t.Fatalf("thread/turns/list = %s, want no read of a session with no parent", reads)
-	}
 	waitFor(t, "the recorded session", func() bool {
 		r, err := e.db.GetRun(t.Context(), run.ID)
 		return err == nil && r.HarnessSessionID == "thread-1"

@@ -1755,27 +1755,6 @@ with no parent sends no message, and the server forwards none of a Codex
 one's. A subsession that a handoff detached from its parent still sends its
 message or has it read, and the server discards it.
 
-`run.report` carries the agent's last message in one case: the turn end of a
-Standard subsession, which the server forwards to its parent as the
-provisional report ([subsessions](#subsessions)). The server sets
-`AETHER_SUBSESSION=1` in the container of a session another session started.
-Only there does a Claude Code `Stop` hook's `run.report` carry `last_message`,
-the first 4 KiB of the payload's `last_assistant_message`. For a stop that was
-held, the server forwards the held stop's message, not the one that follows
-the reminder, unless a prompt started a new turn first, typed into the
-reminder's continuation or after Esc: that turn's end forwards its own
-message. The server keeps the held message in memory only, so after a server
-restart the stop that follows the reminder forwards its own. A Claude Code
-`SessionEnd` hook's `run.report` carries `session_end: true` and forwards
-nothing: `/clear` and `/exit` end no turn, and a turn cut off with Esc sends
-no `Stop`. For Codex, which loads no hooks, the server reads the thread's
-last turn from the app-server, for a subsession only. A `completed` turn
-forwards its last agent message, and an `interrupted` one, as after Esc,
-forwards nothing. If the read fails, the report reads `(none)` and the server
-logs the error. A session with no parent sends and reads neither. A
-subsession that a handoff detached from its parent still does, and the server
-discards the message.
-
 Coordination also does not provide a universal inbound terminal hook. When a
 human messages a Standard session, Cloudfield delivers the message through the
 agent's serialized PTY input path and records the delivery separately.
