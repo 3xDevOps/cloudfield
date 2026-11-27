@@ -203,11 +203,13 @@ func (s *Scheduler) workspaceVariables(ctx context.Context, workspace domain.Wor
 }
 
 // signInKeys are the variables that sign agent in, in mode, whatever its
-// login.
+// login, as the installed agent names them.
 func signInKeys(agent string, mode domain.LaunchMode) []string {
 	switch {
 	case agent == "claude":
-		return []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"}
+		return []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_ORGANIZATION_ID",
+			"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+			"CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD", "CLAUDE_CODE_USE_MANTLE", "CLAUDE_CODE_USE_GATEWAY"}
 	case agent == "codex" && mode == domain.LaunchHeadless:
 		return []string{"CODEX_API_KEY"}
 	}
@@ -216,11 +218,15 @@ func signInKeys(agent string, mode domain.LaunchMode) []string {
 
 // signsIn reports whether env signs agent in, in mode, whatever its login.
 // Claude Code reads a CLAUDE_CODE_USE_ switch as on only when it is 1, true,
-// yes or on, in any case.
+// yes or on, in any case, and signs in by workload identity federation only
+// when both its rule and its organization are set.
 func signsIn(env map[string]string, agent string, mode domain.LaunchMode) bool {
 	return slices.ContainsFunc(signInKeys(agent, mode), func(key string) bool {
-		if strings.HasPrefix(key, "CLAUDE_CODE_USE_") {
+		switch {
+		case strings.HasPrefix(key, "CLAUDE_CODE_USE_"):
 			return slices.Contains([]string{"1", "true", "yes", "on"}, strings.ToLower(strings.TrimSpace(env[key])))
+		case key == "ANTHROPIC_FEDERATION_RULE_ID" || key == "ANTHROPIC_ORGANIZATION_ID":
+			return env["ANTHROPIC_FEDERATION_RULE_ID"] != "" && env["ANTHROPIC_ORGANIZATION_ID"] != ""
 		}
 		return env[key] != ""
 	})

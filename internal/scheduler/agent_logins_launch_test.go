@@ -156,6 +156,11 @@ func TestLaunchOnAnAddedLoginRefusals(t *testing.T) {
 		{name: "isolated Console", own: true, permission: domain.PermissionIsolated, wantText: "Isolated session cannot use a Console login"},
 		{name: "a workspace key pays", own: true, file: workLogin, variables: map[string]string{"ANTHROPIC_API_KEY": "test-not-a-key"}, wantText: "would not pay"},
 		{name: "Microsoft Foundry pays", own: true, file: workLogin, variables: map[string]string{"CLAUDE_CODE_USE_FOUNDRY": "True"}, wantText: "would not pay"},
+		{name: "Claude Platform on AWS pays", own: true, file: workLogin, variables: map[string]string{"CLAUDE_CODE_USE_ANTHROPIC_AWS": "1"}, wantText: "would not pay"},
+		{name: "Claude Platform on Google Cloud pays", own: true, file: workLogin, variables: map[string]string{"CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD": "yes"}, wantText: "would not pay"},
+		{name: "Bedrock Mantle pays", own: true, file: workLogin, variables: map[string]string{"CLAUDE_CODE_USE_MANTLE": "on"}, wantText: "would not pay"},
+		{name: "a gateway pays", own: true, file: workLogin, variables: map[string]string{"CLAUDE_CODE_USE_GATEWAY": "true"}, wantText: "would not pay"},
+		{name: "workload identity federation pays", own: true, file: workLogin, variables: map[string]string{"ANTHROPIC_FEDERATION_RULE_ID": "fdrl_test", "ANTHROPIC_ORGANIZATION_ID": "org-test"}, wantText: "would not pay"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newLoginShareEnv(t)
@@ -503,7 +508,7 @@ func TestAnAddedLoginSessionLeavesNoVariableToPay(t *testing.T) {
 	}
 	waitFor(t, "the session's container", func() bool { return e.rt.byName(string(run.ID)) != nil })
 	spec := e.rt.byName(string(run.ID)).spec
-	for _, key := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_PROFILE"} {
+	for _, key := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_PROFILE", "CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_MANTLE", "ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_ORGANIZATION_ID"} {
 		if v, ok := spec.Env[key]; !ok || v != "" {
 			t.Errorf("%s = %q, set %v; want set empty", key, v, ok)
 		}
@@ -527,7 +532,8 @@ func TestAWorkspaceSwitchSetOffLeavesAnAddedLoginToPay(t *testing.T) {
 	e := newLoginShareEnv(t)
 	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
 	if err := e.db.SetWorkspaceEnvironment(t.Context(), e.ws.ID, domain.WorkspaceEnvironment{Variables: map[string]string{
-		"CLAUDE_CODE_USE_BEDROCK": "0", "CLAUDE_CODE_USE_VERTEX": "false", "CLAUDE_CODE_USE_FOUNDRY": "off",
+		"CLAUDE_CODE_USE_BEDROCK": "0", "CLAUDE_CODE_USE_VERTEX": "false", "CLAUDE_CODE_USE_FOUNDRY": "off", "CLAUDE_CODE_USE_MANTLE": "0",
+		"ANTHROPIC_FEDERATION_RULE_ID": "fdrl_test",
 	}}); err != nil {
 		t.Fatal(err)
 	}
