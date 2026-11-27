@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ func TestPrintLoginsInPriorityOrder(t *testing.T) {
 		{
 			AgentLogin: protocol.AgentLogin{ID: "lgn-test1", Name: "work", Kind: "subscription", Plan: "max", Email: "ada@work.example.test", OrganizationID: "org-test1", OrganizationName: "Test Team", Automatic: true, Shared: true, Position: 3},
 			Usage:      &protocol.UsageProvider{Provider: "claude", Status: "stale", Error: "usage endpoint answered 429; showing the last read", Windows: []protocol.UsageWindow{{Label: "5h", UsedPercent: 12}, {Label: "7d", UsedPercent: 40.4}}},
+			Sessions:   []string{"run-test1", "run-test2"},
 		},
 		{
 			AgentLogin: protocol.AgentLogin{ID: "default", Name: "default", Kind: "subscription", Plan: "pro", Email: "ada@home.example.test", Automatic: true, Shared: false, Position: 0},
@@ -35,10 +37,10 @@ func TestPrintLoginsInPriorityOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `#  LOGIN    KIND          PLAN  EMAIL                  ORGANISATION  USAGE           AUTOMATIC  SHARES  BILLED
-1  work     subscription  max   ada@work.example.test  Test Team     5h 12%, 7d 40%  on         on      -
-2  default  subscription  pro   ada@home.example.test  -             not read        on         off     -
-3  console  console       -     ada@org.example.test   org-test2     unavailable     off        on      per use
+	want := `#  LOGIN    KIND          PLAN  EMAIL                  ORGANISATION  USAGE           AUTOMATIC  SHARES  BILLED   SESSIONS
+1  work     subscription  max   ada@work.example.test  Test Team     5h 12%, 7d 40%  on         on      -        2
+2  default  subscription  pro   ada@home.example.test  -             not read        on         off     -        0
+3  console  console       -     ada@org.example.test   org-test2     unavailable     off        on      per use  0
 usage of login work: usage endpoint answered 429; showing the last read
 usage of login default: rpc error -32010: account.usage: usage service not configured
 usage of login console: no usage for a Console login
@@ -434,5 +436,37 @@ func TestAgentLoginRefusesADashBeforeConnecting(t *testing.T) {
 		if err := agentLogin(args); err == nil || err.Error() != "usage: cloudfield agent login <name> [--as <login> | --attach <login-id>]" {
 			t.Errorf("agentLogin(%q) = %v; want the usage, as before --as", args, err)
 		}
+	}
+}
+
+func TestReadLoginsListsYourSessionsOnEachLogin(t *testing.T) {
+	runs := &fakeReply{result: protocol.RunListResult{Runs: []protocol.Run{
+		{ID: "run-default", Harness: "claude", MemberID: "m-ada", AccountMemberID: "m-ada"},
+		{ID: "run-work", Harness: "claude", MemberID: "m-ada", AccountMemberID: "m-ada", AccountLogin: "lgn-test1", AccountLoginName: "work"},
+		{ID: "run-bo", Harness: "claude", MemberID: "m-ada", AccountMemberID: "m-bo"},
+		{ID: "run-codex", Harness: "codex", MemberID: "m-ada", AccountMemberID: "m-ada"},
+	}}}
+	c := fakeControlMethods(t, map[string]*fakeReply{
+		protocol.MethodAgentLoginList: {result: protocol.AgentLoginListResult{Agent: "claude", Logins: []protocol.AgentLogin{
+			{ID: "lgn-test1", Name: "work"}, {ID: "default", Name: "default"}, {ID: "lgn-test2", Name: "idle"},
+		}}},
+		protocol.MethodServerInfo:   {result: protocol.ServerInfoResult{Member: protocol.Member{ID: "m-ada"}}},
+		protocol.MethodRunList:      runs,
+		protocol.MethodAccountUsage: {result: protocol.AccountUsageResult{}},
+	})
+	logins, err := readLogins(c, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string][]string{}
+	for _, l := range logins {
+		got[l.ID] = l.Sessions
+	}
+	want := map[string][]string{"lgn-test1": {"run-work"}, "default": {"run-default"}, "lgn-test2": {}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("sessions per login = %v, want %v", got, want)
+	}
+	if got, want := string(runs.params()), `{"member_id":"m-ada","active_only":true}`; got != want {
+		t.Errorf("run.list params = %s, want %s: your sessions that have not ended", got, want)
 	}
 }

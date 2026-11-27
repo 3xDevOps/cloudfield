@@ -5,11 +5,13 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -273,8 +275,8 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 
 	// One login: the default, read from the home; no row is written and
 	// agent login without --as says what it said before.
-	if out := logins(); out != "#  LOGIN    KIND  PLAN  EMAIL  ORGANISATION  USAGE   AUTOMATIC  SHARES  BILLED\n"+
-		"1  default  -     -     -      -             5h 12%  on         on      -\n" {
+	if out := logins(); out != "#  LOGIN    KIND  PLAN  EMAIL  ORGANISATION  USAGE   AUTOMATIC  SHARES  BILLED  SESSIONS\n"+
+		"1  default  -     -     -      -             5h 12%  on         on      -       0\n" {
 		t.Fatalf("agent logins with only the default login:\n%s", out)
 	}
 	if out, stderr, code := ada.cli("agent", "logins", "claude", "--json"); code != 0 || !strings.Contains(out, `"id":"default"`) || !strings.Contains(out, `"used_percent":12`) {
@@ -362,9 +364,9 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 		t.Fatalf("--as default = %d:\n%s", code, shown)
 	}
 
-	if out := logins(); out != "#  LOGIN    KIND          PLAN  EMAIL                  ORGANISATION  USAGE   AUTOMATIC  SHARES  BILLED\n"+
-		"1  default  -             -     -                      -             5h 12%  on         on      -\n"+
-		"2  work     subscription  max   ada@work.example.test  Test Org      5h 40%  on         on      -\n" {
+	if out := logins(); out != "#  LOGIN    KIND          PLAN  EMAIL                  ORGANISATION  USAGE   AUTOMATIC  SHARES  BILLED  SESSIONS\n"+
+		"1  default  -             -     -                      -             5h 12%  on         on      -       0\n"+
+		"2  work     subscription  max   ada@work.example.test  Test Org      5h 40%  on         on      -       0\n" {
 		t.Fatalf("agent logins after adding work:\n%s", out)
 	}
 
@@ -383,9 +385,9 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 			t.Fatalf("agent logins %v = %d %q %q; want %q", step.args, code, out, stderr, step.out)
 		}
 	}
-	if out := logins(); out != "#  LOGIN    KIND          PLAN  EMAIL                  ORGANISATION  USAGE   AUTOMATIC  SHARES  BILLED\n"+
-		"1  job      subscription  max   ada@work.example.test  Test Org      5h 40%  off        off     -\n"+
-		"2  default  -             -     -                      -             5h 12%  on         on      -\n" {
+	if out := logins(); out != "#  LOGIN    KIND          PLAN  EMAIL                  ORGANISATION  USAGE   AUTOMATIC  SHARES  BILLED  SESSIONS\n"+
+		"1  job      subscription  max   ada@work.example.test  Test Org      5h 40%  off        off     -       0\n"+
+		"2  default  -             -     -                      -             5h 12%  on         on      -       0\n" {
 		t.Fatalf("agent logins after rename, order and auto:\n%s", out)
 	}
 
@@ -483,6 +485,23 @@ func TestIntegrationSessionOnANamedLogin(t *testing.T) {
 	ctrl, client := srv.control(t, e.ada.key)
 	defer func() { _ = client.Close() }()
 	onDefault := e.launch(t, ctrl, "on the default login", "claude").ID
+
+	out, stderr, code = ada.cli("agent", "logins", "--json")
+	t.Logf("$ cloudfield agent logins --json\n%s", out)
+	var listed []struct {
+		ID       string   `json:"id"`
+		Sessions []string `json:"sessions"`
+	}
+	if err := json.Unmarshal([]byte(out), &listed); code != 0 || err != nil {
+		t.Fatalf("agent logins --json = %d %q %q: %v", code, out, stderr, err)
+	}
+	on := map[string][]string{}
+	for _, l := range listed {
+		on[l.ID] = l.Sessions
+	}
+	if !reflect.DeepEqual(on, map[string][]string{"default": {onDefault}, string(second): {onSecond}}) {
+		t.Errorf("sessions per login = %v; want %s on default and %s on second", on, onDefault, onSecond)
+	}
 
 	out, stderr, code = ada.cli("sessions")
 	t.Logf("$ cloudfield sessions\n%s", out)

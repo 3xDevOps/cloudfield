@@ -275,7 +275,7 @@ func agentLogins(args []string) error {
 	}
 	const usage = "usage: cloudfield agent logins [<agent>] [--json]"
 	fs := newFlagSet("agent logins")
-	jsonOut := fs.Bool("json", false, "print the logins and their usage as JSON")
+	jsonOut := fs.Bool("json", false, "print the logins, their usage and the ids of your sessions on each as JSON")
 	agent := addedLoginsAgent
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		agent, args = args[0], args[1:]
@@ -287,42 +287,66 @@ func agentLogins(args []string) error {
 		return errors.New(usage)
 	}
 	return withControl(func(c *protocol.Client) error {
-		logins, err := listLogins(c, agent)
+		logins, err := readLogins(c, agent)
 		if err != nil {
 			return err
 		}
-		usage := make([]loginUsage, len(logins))
-		for i, l := range logins {
-			usage[i].AgentLogin = l
-			var read protocol.AccountUsageResult
-			if err := c.Call(protocol.MethodAccountUsage, protocol.AccountUsageParams{Login: l.ID}, &read); err != nil {
-				usage[i].UsageError = err.Error()
-				continue
-			}
-			for _, p := range read.Providers {
-				if p.Provider == agent {
-					usage[i].Usage = &p
-				}
-			}
-		}
 		if *jsonOut {
-			return json.NewEncoder(os.Stdout).Encode(usage)
+			return json.NewEncoder(os.Stdout).Encode(logins)
 		}
-		return printLogins(os.Stdout, usage)
+		return printLogins(os.Stdout, logins)
 	})
 }
 
-// loginUsage is a login and its usage as account.usage read it, or the
-// error it returned.
+// loginUsage is a login, its usage as account.usage read it or the error it
+// returned, and the caller's sessions on it that have not ended.
 type loginUsage struct {
 	protocol.AgentLogin
 	Usage      *protocol.UsageProvider `json:"usage,omitempty"`
 	UsageError string                  `json:"usage_error,omitempty"`
+	Sessions   []string                `json:"sessions"`
+}
+
+func readLogins(c *protocol.Client, agent string) ([]loginUsage, error) {
+	logins, err := listLogins(c, agent)
+	if err != nil {
+		return nil, err
+	}
+	var info protocol.ServerInfoResult
+	if err := c.Call(protocol.MethodServerInfo, struct{}{}, &info); err != nil {
+		return nil, err
+	}
+	var runs protocol.RunListResult
+	if err := c.Call(protocol.MethodRunList, protocol.RunListParams{MemberID: info.Member.ID, ActiveOnly: true}, &runs); err != nil {
+		return nil, err
+	}
+	usage := make([]loginUsage, len(logins))
+	for i, l := range logins {
+		usage[i].AgentLogin = l
+		usage[i].Sessions = []string{}
+		for _, r := range runs.Runs {
+			// A run on the default login records no login.
+			if r.AccountMemberID == info.Member.ID && r.Harness == agent && cmp.Or(r.AccountLogin, string(domain.DefaultLogin)) == l.ID {
+				usage[i].Sessions = append(usage[i].Sessions, r.ID)
+			}
+		}
+		var read protocol.AccountUsageResult
+		if err := c.Call(protocol.MethodAccountUsage, protocol.AccountUsageParams{Login: l.ID}, &read); err != nil {
+			usage[i].UsageError = err.Error()
+			continue
+		}
+		for _, p := range read.Providers {
+			if p.Provider == agent {
+				usage[i].Usage = &p
+			}
+		}
+	}
+	return usage, nil
 }
 
 func printLogins(w io.Writer, logins []loginUsage) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "#\tLOGIN\tKIND\tPLAN\tEMAIL\tORGANISATION\tUSAGE\tAUTOMATIC\tSHARES\tBILLED")
+	_, _ = fmt.Fprintln(tw, "#\tLOGIN\tKIND\tPLAN\tEMAIL\tORGANISATION\tUSAGE\tAUTOMATIC\tSHARES\tBILLED\tSESSIONS")
 	var problems []string
 	for i, l := range logins {
 		usage := "-"
@@ -346,8 +370,8 @@ func printLogins(w io.Writer, logins []loginUsage) error {
 		if l.PerUse {
 			billed = "per use"
 		}
-		_, _ = fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", i+1, l.Name, cmp.Or(l.Kind, "-"), cmp.Or(l.Plan, "-"), cmp.Or(l.Email, "-"),
-			cmp.Or(l.OrganizationName, l.OrganizationID, "-"), usage, onOff(l.Automatic), onOff(l.Shared), billed)
+		_, _ = fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\n", i+1, l.Name, cmp.Or(l.Kind, "-"), cmp.Or(l.Plan, "-"), cmp.Or(l.Email, "-"),
+			cmp.Or(l.OrganizationName, l.OrganizationID, "-"), usage, onOff(l.Automatic), onOff(l.Shared), billed, len(l.Sessions))
 	}
 	if err := tw.Flush(); err != nil {
 		return err
