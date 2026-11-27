@@ -1208,6 +1208,13 @@ entry and the fix, when:
 - an entry does not have three fields, or an origin does not parse;
 - an origin cannot stand in a signed notice: a port with a leading zero, or
   a host name longer than 253 bytes;
+- a retired origin is an IPv6 address. Such a pair cannot be retired: mark
+  it retiring to move people, then take it out of the served pairs with no
+  retired entry. Behind a reverse proxy its addresses then answer `421
+  Misdirected Request` without naming a replacement, and with the edge's own
+  certificates their TLS handshake fails. Its sign-ins are not deleted:
+  people sign those devices out on the Devices page (`/devices`) of a served
+  sign-in origin;
 - a retired origin has the host name of a served origin, whatever the port:
   remove its pair from `--origin-pairs`, or swap first for the first pair;
 - a host name is named in two entries;
