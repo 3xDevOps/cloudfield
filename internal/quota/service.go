@@ -323,15 +323,13 @@ func (s *Service) readProvider(ctx context.Context, account domain.Account, cred
 		s.clearState(key, cred.fingerprint)
 		return credentialProvider(provider, cred, now), nil
 	}
-	atVendor := false
-	defer func() { flight.cached = flight.cached || !atVendor }()
-
 	if state.success && !state.retryAt.IsZero() {
 		if now.Before(state.retryAt) {
 			return staleProvider(state.provider, now, state.failureError, state.retryAt), nil
 		}
 	}
 	if state.success && state.retryAt.IsZero() && !flight.refresh && now.Sub(state.fetchedAt) < cacheTTL && !windowsExpired(state.provider.Windows, now) {
+		flight.cached = true
 		return cloneProvider(state.provider), nil
 	}
 	if state.success && windowsExpired(state.provider.Windows, now) && now.Sub(state.lastAttempt) < requestFloor {
@@ -344,7 +342,6 @@ func (s *Service) readProvider(ctx context.Context, account domain.Account, cred
 		return cachedOrUnavailable(state, provider, cred, now, "quota request cooldown", state.lastAttempt.Add(requestFloor)), nil
 	}
 
-	atVendor = true
 	s.markAttempt(key, cred.fingerprint, now)
 	var result usageResult
 	var err error
