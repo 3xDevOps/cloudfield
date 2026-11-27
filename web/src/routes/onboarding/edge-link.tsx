@@ -52,6 +52,12 @@ function signedInPhase(status: EdgeStatus, edge: string | undefined, chosen?: st
   return { name: 'signed-in', edges, all, chosen: chosen ?? (edges.length === 1 ? edges[0].edge : null) }
 }
 
+/** phase with each edge's notice as status reports it. */
+function withNotices(phase: Extract<Phase, { name: 'signed-in' }>, status: EdgeStatus): Phase {
+  const notice = (e: SignedInEdge) => ({ ...e, retiring: status.edges.find((s) => s.edge === e.edge)?.retiring })
+  return { ...phase, edges: phase.edges.map(notice), all: phase.all.map(notice) }
+}
+
 /** The gateway's edge sign-in as edge.status reports it, started here and
  * polled until it ends. With `edge`, only that edge counts. */
 function useEdgeSignIn(client: Api, edge?: string): SignIn {
@@ -65,7 +71,7 @@ function useEdgeSignIn(client: Api, edge?: string): SignIn {
     setError(null)
     void (async () => {
       try {
-        const status = await client.localEdgeStatus()
+        const status = await client.localEdgeStatus(true)
         if (ignore) return
         const login = !edge || status.login?.edge === edge ? status.login : undefined
         if (login?.state === 'pending') {
@@ -108,17 +114,28 @@ function useEdgeSignIn(client: Api, edge?: string): SignIn {
               setError('Sign-in was replaced by another window. Try again.')
               setPhase({ name: 'signed-out' })
             } else if (login.state === 'signed_in' && login.account) {
-              setError(null)
-              const row = { edge: login.edge, account: login.account }
-              const rows = status.edges.some((e) => e.edge === login.edge && e.account) ? status.edges : [...status.edges, row]
-              // The gateway's own spelling of the edge, not a handed claim's.
+              // Matched on the gateway's own spelling of the edge, not a
+              // handed claim's; an answer without its entry yet is polled again.
               const only = edge === undefined ? undefined : login.edge
-              setPhase(
-                signedInPhase({ ...status, edges: rows }, only, login.edge) ?? {
-                  name: 'signed-in',
-                  edges: [row],
-                  all: [row],
-                  chosen: login.edge,
+              if (!status.edges.some((e) => e.edge === login.edge && e.account)) {
+                poll()
+                return
+              }
+              client.localEdgeStatus(true).then(
+                (full) => {
+                  if (!live) return
+                  const next = signedInPhase(full, only, login.edge)
+                  if (!next) {
+                    poll()
+                    return
+                  }
+                  setError(null)
+                  setPhase(next)
+                },
+                (err: unknown) => {
+                  if (!live) return
+                  setError(message(err))
+                  poll()
                 },
               )
             } else if (login.state === 'failed') {
@@ -143,6 +160,21 @@ function useEdgeSignIn(client: Api, edge?: string): SignIn {
       clearTimeout(timer)
     }
   }, [client, edge, waitingEdge, waitingCode])
+
+  // Notices are asked for on entering and when the window gets focus,
+  // never while polling.
+  const signedIn = phase.name === 'signed-in'
+  useEffect(() => {
+    if (!signedIn) return
+    const refresh = () => {
+      client.localEdgeStatus(true).then(
+        (status) => setPhase((p) => (p.name === 'signed-in' ? withNotices(p, status) : p)),
+        (err: unknown) => setError(message(err)),
+      )
+    }
+    window.addEventListener('focus', refresh)
+    return () => window.removeEventListener('focus', refresh)
+  }, [client, signedIn])
 
   const signIn = async () => {
     setStarting(true)

@@ -1091,7 +1091,9 @@ export const api = {
   localLinkReset: () => local<{ deleted: string }>('link.reset'),
   /** Starts a sign-in at the edge; edge.status reports how it ends. */
   localEdgeLogin: (edge?: string) => local<EdgeLogin>('edge.login', edge ? { edge } : {}),
-  localEdgeStatus: () => local<EdgeStatus>('edge.status'),
+  /** With `notices`, the gateway asks each signed-in edge for its retiring
+   * notice: only for a screen that shows it, never in a polling loop. */
+  localEdgeStatus: (notices = false) => local<EdgeStatus>('edge.status', notices ? { notices } : {}),
   localEdgeServers: (edge: string) =>
     local<{ edge: string; servers: EdgeServer[] }>('edge.servers', { edge }),
   localEdgeHostKey: (serverID: string, edge: string) =>

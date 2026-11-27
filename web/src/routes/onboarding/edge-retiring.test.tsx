@@ -84,10 +84,20 @@ afterEach(() => {
 })
 
 describe('a signed-in edge that says its address is retiring', () => {
-  it('shows nothing without a notice', async () => {
+  it('shows nothing without a notice, and asks for notices on entering', async () => {
     seed()
-    await open()
+    const client = await open()
     expect(noticeText()).toBeNull()
+    expect(client.localEdgeStatus).toHaveBeenCalledWith(true)
+  })
+
+  it('asks for notices again when the window gets focus', async () => {
+    seed()
+    const client = await open()
+    vi.mocked(client.localEdgeStatus).mockResolvedValue({ edges: [{ edge, account, retiring: { state: 'retired', replacement: next } }] })
+    window.dispatchEvent(new Event('focus'))
+    await vi.waitFor(() => expect(noticeText()).toContain('old.example.test says it is retired'))
+    expect(client.localEdgeStatus).toHaveBeenLastCalledWith(true)
   })
 
   it('shows the notice as the old address says it, as text only', async () => {
@@ -138,6 +148,27 @@ describe('a signed-in edge that says its address is retiring', () => {
     expect(await screen.findByText('WDJB-MJHT')).toBeDefined()
     done = true
     await vi.waitFor(() => expect(noticeText()).not.toBeNull(), { timeout: 5000 })
+    expect(vi.mocked(client.localEdgeStatus).mock.calls.filter(([notices]) => notices).length).toBe(2)
+  })
+
+  it('keeps waiting while a finished sign-in has no entry yet', async () => {
+    vi.spyOn(window, 'open').mockReturnValue(null)
+    const login = { edge, signin_origin: edge, user_code: 'WDJB-MJHT', verification_uri: `${edge}/device` }
+    let answers = 0
+    const client = fakeApi({
+      localEdgeStatus: vi.fn(async (): Promise<EdgeStatus> => {
+        answers++
+        if (answers === 1) return { edges: [], login: { ...login, state: 'pending' } }
+        if (answers === 2) return { edges: [], login: { ...login, state: 'signed_in', account } }
+        return { edges: [{ edge, account }], login: { ...login, state: 'signed_in', account } }
+      }),
+      localEdgeServers: vi.fn(async () => ({ edge, servers: [] })),
+    })
+    render(<EdgeSignIn client={client} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} />)
+    expect(await screen.findByText('WDJB-MJHT')).toBeDefined()
+    await vi.waitFor(() => expect(answers).toBe(2), { timeout: 5000 })
+    expect(screen.getByText('WDJB-MJHT')).toBeDefined()
+    await vi.waitFor(() => expect(screen.getByText((_, el) => el?.tagName === 'P' && /^Signed in to old\.example\.test as/.test(el.textContent ?? ''))).toBeDefined(), { timeout: 5000 })
   })
 
   it('finishes a sign-in for a claim that spells its edge differently from the gateway', async () => {
