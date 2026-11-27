@@ -337,6 +337,79 @@ The server gateway performs the equivalent identity lookup on each request.
 WhoIs failures are refused before dispatch; a tagged node is denied and an
 unavailable identity service is reported as `-32004`.
 
+### Compressed responses
+
+Nothing between the server and `cloudfield gui` compresses: SSH runs
+without compression and the edge relay's WebSockets have it off. A 1,000-event
+`workspace.timeline` page or a 600-session `run.list` is about 350 KB of
+JSON, so the gateway asks the server to gzip large answers.
+
+The control channel (`aether-control`) carries one JSON request line and
+gets one response frame back. A caller asks for compression per request with
+one more member on the request object:
+
+```json
+{"jsonrpc":"2.0","id":7,"method":"run.list","params":{},"accept_encoding":"gzip"}
+```
+
+The server may then answer with a gzip frame instead of a JSON line: the
+16-byte ASCII header `gzip <n>\n`, with `n` as ten zero-padded decimal digits,
+followed by `n` bytes holding one gzip member (RFC 1952) whose content is the
+response object, without its newline:
+
+```text
+gzip 0000021634\n<21634 bytes of gzip>
+```
+
+A JSON response always starts with `{`, so a caller that asked tells the two
+apart by the first bytes. A caller that does not send `accept_encoding` gets
+the JSON line, byte for byte as before, and a server that predates the field
+ignores it and answers with the JSON line, so either side may be older with
+no error and no extra round trip. Only `cloudfield gui` asks
+(`Client.AcceptGzip` in `internal/protocol/client.go`, called in
+`internal/localgw/backend.go`); every other caller of the channel, the CLI
+among them, reads JSON lines.
+
+The server compresses a response only when all of these hold
+(`WriteResponse` in `internal/protocol/compress.go`):
+
+- the request asked for it;
+- the call succeeded: errors are always JSON lines;
+- the method is `workspace.timeline`, `run.list` or `changes.list`
+  (`gzipMethods` in `internal/sshd/control.go`);
+- the JSON line is at least 8 KiB;
+- the gzip frame is smaller than the line.
+
+It uses `compress/gzip` at the default level 6 and reserves a quarter of the
+line's size for the frame, beside the encoded line it already holds. Measured
+on one CPU of a Ryzen 7600X (`BenchmarkGzipLevels` in
+`internal/protocol/compress_test.go`), a 365 KB timeline page costs 1.5 ms to
+compress and 0.5 ms to decompress and goes out as 41 KB; level 1 takes 0.4 ms
+and sends 45 KB, which wins only on links faster than about 35 Mbit/s. Under
+8 KiB compressing costs several times what encoding the response does, and the
+response fits in the first TCP round trip either way.
+
+The gateway holds a frame to the same limit as the line it replaces, 96 MiB
+(`MaxLineBytes`), or the larger limit of `files.read`, `run.patch` and the
+other blob methods (`responseLineLimit` in `internal/protocol/client.go`): a
+header naming more bytes is refused before anything is read, and
+decompression stops one byte past the limit with
+`protocol: line exceeds <limit> bytes`, so a small frame cannot expand
+without bound.
+
+The list of methods is short on purpose. Compressing a response that holds
+both text an attacker can write and a secret lets someone who sees the
+encrypted stream's sizes, a network observer or the edge relay, recover the
+secret by changing the text and watching the size. The three methods carry
+session tasks, titles and status, agent reports, mail metadata and, on the
+timeline, notices addressed to the reader; no event payload or session record
+has a token, invite code or credential field. A secret reaches them only if a
+member or agent writes one into a task, title or report. `run.acp.history` stays a JSON line because a transcript holds
+tool output, which can include files and environment values, beside text an
+agent fetched from anywhere. File reads, patches, configuration and home
+files stay JSON lines for the same reason, and because base64 and diffs gain
+little.
+
 ## Routes
 
 | Method | Path | Purpose |

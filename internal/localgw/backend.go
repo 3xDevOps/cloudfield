@@ -407,6 +407,7 @@ func (b *sshBackend) callOnce(ctx context.Context, method string, params json.Ra
 		b.invalidate(conn)
 		return nil, endToEnd(cfg, err)
 	}
+	client.AcceptGzip()
 	result, answered, err := roundTrip(ctx, client, method, params)
 	if answered {
 		b.keepControl(conn, client)

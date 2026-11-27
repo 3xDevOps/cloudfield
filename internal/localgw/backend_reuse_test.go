@@ -382,3 +382,29 @@ func TestSSHBackendKeepsAtMostMaxIdleControls(t *testing.T) {
 		t.Fatalf("%d control channels kept after %d calls at once, want %d", kept, calls, maxIdleControls)
 	}
 }
+
+// The gateway asks every server for compressed answers; one that does not
+// know the field answers with plain JSON lines, which the gateway reads as
+// before, on a new channel and on a kept one.
+func TestSSHBackendReadsPlainAnswersFromAServerWithoutCompression(t *testing.T) {
+	home := testhome.Isolate(t)
+	server := listen(t)
+	big, err := json.Marshal(map[string]string{"text": strings.Repeat("plain answer ", 64<<10)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveControlChannels(t, server, func(string) json.RawMessage { return big }, false)
+	b := NewSSHBackend(cli.Config{Addr: server.Addr().String(), KnownHosts: filepath.Join(home, "known_hosts")})
+	t.Cleanup(func() { _ = b.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for range 2 {
+		got, perr := b.Call(ctx, protocol.MethodRunList, nil)
+		if perr != nil {
+			t.Fatal(perr)
+		}
+		if string(got) != string(big) {
+			t.Fatalf("run.list returned %d bytes, want the server's %d", len(got), len(big))
+		}
+	}
+}

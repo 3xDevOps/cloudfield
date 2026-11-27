@@ -178,6 +178,9 @@ type Request struct {
 	ID      json.RawMessage `json:"id"`
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
+	// AcceptEncoding, when EncodingGzip, lets the server answer with a gzip
+	// frame instead of a JSON line; servers that predate it ignore it.
+	AcceptEncoding string `json:"accept_encoding,omitempty"`
 }
 
 // Response is one JSON-RPC 2.0 response; exactly one of Result and Error

@@ -80,12 +80,12 @@ func (s *Server) serveControlFrame(ctx context.Context, member domain.MemberID, 
 			input.releaseSlot()
 		}
 	})
-	resp := s.handleRequest(context.WithValue(ctx, afterResponseKey{}, slot), member, line)
+	resp, compress := s.handleRequest(context.WithValue(ctx, afterResponseKey{}, slot), member, line)
 	// Do not answer or restart for an update after channel/server teardown.
 	if ctx.Err() != nil {
 		return false
 	}
-	return respond(ch, resp, slot) == nil
+	return respond(ch, resp, compress, slot) == nil
 }
 
 var errControlFrameBusy = errors.New("sshd: too many expanded control frames")
@@ -234,8 +234,8 @@ func (r *controlFrameReader) finish() {
 // server running the old image, reporting the update as applied, and
 // holding its one update slot for the rest of the process's life. The
 // client can reconnect; a swap with no restart cannot fix itself.
-func respond(w io.Writer, resp protocol.Response, slot *afterResponse) error {
-	err := writeJSONLine(w, resp)
+func respond(w io.Writer, resp protocol.Response, compress bool, slot *afterResponse) error {
+	err := protocol.WriteResponse(w, resp, compress)
 	if slot.fn != nil {
 		slot.fn()
 	}
@@ -273,18 +273,29 @@ func writeJSONLine(w io.Writer, v any) error {
 	return err
 }
 
-func (s *Server) handleRequest(ctx context.Context, member domain.MemberID, line []byte) protocol.Response {
+// gzipMethods are the methods whose result may go out as a gzip frame to
+// a caller that asks. Each is a large read whose text sits beside no
+// credential, token or invite code; docs/local-gateway.md#compressed-responses
+// says why each is here and why others are not.
+var gzipMethods = map[string]bool{
+	protocol.MethodWorkspaceTimeline: true,
+	protocol.MethodRunList:           true,
+	protocol.MethodChangesList:       true,
+}
+
+// handleRequest also reports whether the response may be compressed.
+func (s *Server) handleRequest(ctx context.Context, member domain.MemberID, line []byte) (protocol.Response, bool) {
 	req, resp, valid := protocol.ParseRequest(line)
 	if !valid {
-		return resp
+		return resp, false
 	}
 	result, rpcErr := s.dispatch(ctx, member, req.Method, req.Params)
 	if rpcErr != nil {
 		resp.Error = rpcErr
-		return resp
+		return resp, false
 	}
 	resp.Result = result
-	return resp
+	return resp, req.AcceptEncoding == protocol.EncodingGzip && gzipMethods[req.Method]
 }
 
 // dispatch runs one control-channel method for member: the SSH control
