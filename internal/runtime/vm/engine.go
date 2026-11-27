@@ -46,6 +46,7 @@ type Images interface {
 	ProgramDisk(home, executable, unit, path string) (vmimage.Disk, bool, error)
 	BuildProgram(home, executable, unit string) error
 	Sweep() error
+	DropKeptCheckoutDisks() error
 }
 
 const (

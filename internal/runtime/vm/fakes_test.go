@@ -250,6 +250,8 @@ func (f *fakeImages) BuildProgram(_, _, unit string) error {
 
 func (f *fakeImages) Sweep() error { return nil }
 
+func (f *fakeImages) DropKeptCheckoutDisks() error { return nil }
+
 func (f *fakeImages) roots() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

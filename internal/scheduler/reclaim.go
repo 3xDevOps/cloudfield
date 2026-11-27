@@ -36,8 +36,8 @@ func (s *Scheduler) reclaimDisk(ctx context.Context, keep domain.MemberID) {
 // full or below its floor plus reclaimHeadroom. It first frees what nobody
 // loses, unused images, caches past their budget or age and scratch, until
 // every filesystem is down to reclaimTargetUsed. Below the floor's headroom
-// it then frees what sessions and members would lose, and every cache,
-// until that headroom is back. It stops as soon as it is. The caller holds
+// it then frees the checkout disks kept for the next launch, what sessions
+// and members would lose, and every cache, until that headroom is back. It stops as soon as it is. The caller holds
 // reclaimMu.
 func (s *Scheduler) reclaimDiskLocked(ctx context.Context, keep domain.MemberID) {
 	if s.cfg.MinFreeBytes < 0 || ctx.Err() != nil {
@@ -67,6 +67,14 @@ func (s *Scheduler) reclaimDiskLocked(ctx context.Context, keep domain.MemberID)
 		return
 	}
 	floor := func(step string) bool { return recovered(step, 100) }
+	if vms, ok := s.cfg.Runtime.(vmImageSweeper); ok {
+		if err := vms.DropKeptCheckoutDisks(); err != nil {
+			slog.Warn("scheduler: disk reclaim: drop kept checkout disks", "error", err)
+		}
+		if floor("kept checkout disks") {
+			return
+		}
+	}
 	if s.reclaimSessions(ctx, keep, floor) {
 		return
 	}
