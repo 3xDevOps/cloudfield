@@ -448,14 +448,14 @@ func TestToolResultNoticeAtRetiringAddress(t *testing.T) {
 
 	set(nil, stored(false, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: oldRelay, Replacement: e.origin, Date: "2027-03-01"}))
 	blocks(1)
-	set(nil, stored(false, edgeproto.Notice{State: edgeproto.NoticeRetired, Origin: e.origin, Replacement: newRelay}))
-	blocks(1)
 
 	e.edge.version.Store(int64(edgeproto.VersionRelayOrigin))
+	both := []string{e.origin, newRelay}
+	set(both, stored(false, edgeproto.Notice{State: edgeproto.NoticeRetired, Origin: e.origin, Replacement: newRelay}))
+	blocks(1)
 	retiring := stored(false, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay, Date: "2027-03-01"})
 	set(nil, retiring)
 	blocks(1)
-	both := []string{e.origin, newRelay}
 	set(both, stored(true, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay}))
 	blocks(1)
 
