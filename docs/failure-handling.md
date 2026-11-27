@@ -337,9 +337,10 @@ otherwise the error ends `<n> available bytes; reserve <n> bytes plus ...`.
 Memory ceilings (`--run-memory`) are never counted, only what sessions hold
 now.
 
-- A launch takes 512 MiB while it runs. On a hosted test runner a 2 GiB
-  session VM held 159 MiB of the host once booted; what it grows to later is
-  memory the next check sees as used.
+- A launch takes 512 MiB while it runs, an Enhanced one until its agent has
+  started. On a hosted test runner a 2 GiB session VM held 159 MiB of the
+  host once booted; what it grows to later is memory the next check sees as
+  used.
 - The wake of a saved session VM takes the size of its saved memory on
   disk, which the restore loads back: 918 MiB on disk for a VM that held
   934 MiB, and 938 MiB held again after the wake. After the wake it keeps

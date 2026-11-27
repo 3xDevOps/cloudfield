@@ -13,10 +13,30 @@ import (
 // opening is a launch's first open running after the launch returned, so the
 // run takes prompts while its agent starts.
 type opening struct {
-	// done is closed once the open ended and every prompt held for it was
-	// delivered or refused.
+	// done is closed once the open ended and everything held for it ran.
 	done chan struct{}
 	held []func()
+}
+
+func (d *acpDriver) Start(ctx context.Context, entry *supervised, att runtime.Attachment) error {
+	if err := d.s.cfg.PTY.StartSession(ctx, ptyhost.RunSession(entry.runID), att); err != nil {
+		return err
+	}
+	if !d.continuationOwed(entry) {
+		// A Background run takes no prompt, so nothing waits on its launch
+		// returning early.
+		if d.oneShot(entry) || !d.openBehindLaunch(ctx, entry) {
+			d.connect(ctx, entry, openNew)
+		}
+		return nil
+	}
+	// The move that started this container reports a failed restore as its
+	// own error, so it is recorded here rather than reported.
+	if err := d.openRestored(ctx, entry, openContinue); err != nil {
+		d.setRun(entry.runID, &acpRun{err: err})
+		d.notice(entry.runID, "error", "Enhanced agent failed", err.Error())
+	}
+	return nil
 }
 
 // openBehindLaunch opens entry's first session without holding the launch,
@@ -64,6 +84,20 @@ func (d *acpDriver) openBehindLaunch(ctx context.Context, entry *supervised) boo
 		}
 	}()
 	return true
+}
+
+// afterOpening runs f once the launch's open of run's first session has
+// ended, at once when none is running.
+func (d *acpDriver) afterOpening(run domain.RunID, f func()) {
+	d.mu.Lock()
+	o := d.opening[run]
+	if o != nil {
+		o.held = append(o.held, f)
+	}
+	d.mu.Unlock()
+	if o == nil {
+		f()
+	}
 }
 
 // hold keeps prompt for the session the launch is still opening and reports

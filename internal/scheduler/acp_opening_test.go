@@ -169,6 +169,23 @@ func TestTheMemoryBrakeLeavesASessionWhoseAgentStartsRunning(t *testing.T) {
 	}
 }
 
+func TestALaunchKeepsItsMemoryClaimUntilItsAgentHasStarted(t *testing.T) {
+	t.Parallel()
+	e, rt := newACPEnv(t)
+	claims := func() int {
+		e.sched.capacityGate <- struct{}{}
+		defer func() { <-e.sched.capacityGate }()
+		return len(e.sched.memoryClaims)
+	}
+	run, open := e.launchOpening(t, rt, "")
+	if got := claims(); got != 1 {
+		t.Fatalf("%d memory claims while the agent starts, want the launch's", got)
+	}
+	open(nil)
+	e.opened(t, run.ID)
+	waitFor(t, "the launch's memory claim to end", func() bool { return claims() == 0 })
+}
+
 func TestEnhancedRunPausedAndResumedWhileItsAgentStartsKeepsItsTask(t *testing.T) {
 	t.Parallel()
 	e, rt := newACPEnv(t)

@@ -130,27 +130,6 @@ func (d *acpDriver) lockOp(run domain.RunID) func() {
 	}
 }
 
-func (d *acpDriver) Start(ctx context.Context, entry *supervised, att runtime.Attachment) error {
-	if err := d.s.cfg.PTY.StartSession(ctx, ptyhost.RunSession(entry.runID), att); err != nil {
-		return err
-	}
-	if !d.continuationOwed(entry) {
-		// A Background run takes no prompt, so nothing waits on its launch
-		// returning early.
-		if d.oneShot(entry) || !d.openBehindLaunch(ctx, entry) {
-			d.connect(ctx, entry, openNew)
-		}
-		return nil
-	}
-	// The move that started this container reports a failed restore as its
-	// own error, so it is recorded here rather than reported.
-	if err := d.openRestored(ctx, entry, openContinue); err != nil {
-		d.setRun(entry.runID, &acpRun{err: err})
-		d.notice(entry.runID, "error", "Enhanced agent failed", err.Error())
-	}
-	return nil
-}
-
 func (d *acpDriver) continuationOwed(entry *supervised) bool {
 	d.s.mu.Lock()
 	defer d.s.mu.Unlock()
