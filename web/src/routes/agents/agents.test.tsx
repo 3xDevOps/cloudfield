@@ -296,6 +296,22 @@ describe('Claude Code logins', () => {
     expect(api.accountList).not.toHaveBeenCalled()
   })
 
+  it('lists a lone default login with a switch off, so it can be turned back on', async () => {
+    vi.mocked(api.agentLoginList).mockResolvedValue([{ id: 'default', name: 'default', kind: 'subscription', automatic: false, shared: true, position: 0 }])
+    vi.mocked(api.agentLoginAutomatic).mockResolvedValue({})
+    vi.mocked(api.accountList).mockResolvedValue({ accounts: [], shared_with: [] })
+    mount()
+    await flush()
+    const row = within(within(claudeRow()).getByRole('region', { name: 'Claude Code logins' })).getByRole('listitem', { name: 'Login default' })
+    expect(within(row).queryByRole('button', { name: 'Rename default' })).toBeNull()
+    expect(within(row).queryByRole('button', { name: 'Remove default' })).toBeNull()
+    expect(within(row).getByRole('switch', { name: 'Use for shares' }).getAttribute('aria-checked')).toBe('true')
+    const automatic = within(row).getByRole('switch', { name: 'Automatic' })
+    expect(automatic.getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(automatic)
+    expect(api.agentLoginAutomatic).toHaveBeenCalledWith('claude', 'default', true)
+  })
+
   it('lists several logins under the Claude Code row and names the teammates shares reach', async () => {
     vi.mocked(api.agentLoginList).mockResolvedValue([
       { id: 'default', name: 'default', kind: 'subscription', automatic: true, shared: true, position: 0 },

@@ -6710,7 +6710,9 @@ signed in offers its terminal login method, typed as the ACP server command
 
 **Several logins.** Where `server.info` lists the `logins` feature, the
 installed Claude Code row adds **Add login**. A member with only the default
-login sees nothing else new. With more, the row's status reads "Installed · 3
+login sees nothing else new, unless a switch of that login is off: the server
+keeps its row then, and the list below shows it with its switches, so they can
+be turned back on. With more, the row's status reads "Installed · 3
 logins" ("Installed · 3 logins · default login signed out" while
 `login_problem` names the default one), the row offers **Run** while any
 login is found (an added login whose kind the list reads counts as
