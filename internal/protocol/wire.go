@@ -19,11 +19,19 @@ type Run struct {
 	// AccountMemberID's vendor login backs the run; MemberID remains the
 	// owner and actor.
 	AccountMemberID string `json:"account_member_id"`
-	Task            string `json:"task"`
-	Title           string `json:"title,omitempty"`
-	Harness         string `json:"harness"`
-	Mode            string `json:"mode"`
-	Model           string `json:"model,omitempty"`
+	// AccountLogin is the added login of the account the run spends, and
+	// AccountLoginName its name; both empty for the default login.
+	AccountLogin     string `json:"account_login,omitempty"`
+	AccountLoginName string `json:"account_login_name,omitempty"`
+	// AccountLoginPerUse: the login is billed per use, not by a
+	// subscription's windows: a Console login, or a default login kept as
+	// an API key or a Console profile by a member who added logins.
+	AccountLoginPerUse bool   `json:"account_login_per_use,omitempty"`
+	Task               string `json:"task"`
+	Title              string `json:"title,omitempty"`
+	Harness            string `json:"harness"`
+	Mode               string `json:"mode"`
+	Model              string `json:"model,omitempty"`
 	// RefusedModel is the model the run asked for and the agent refused,
 	// ModelError why; Model is then the one the session runs on, empty for
 	// the agent's default.
@@ -300,6 +308,8 @@ func RunFromDomain(r *domain.Run) Run {
 		BaseCheckedAt:       rfc3339ValuePtr(r.BaseCheckedAt),
 
 		RequestedAccountMemberID: string(r.RequestedAccountMemberID),
+		AccountLogin:             string(r.AccountLogin),
+		AccountLoginPerUse:       r.AccountLoginPerUse,
 		FallbackAccountMemberIDs: FallbackIDs(r.Fallback),
 		NoFallback:               r.Fallback.Disabled,
 	}
@@ -385,6 +395,11 @@ const FeaturePermission = "permission"
 // reports its administrator as super_admin and serves workspace.access.*. An
 // older server reports admin for the same role.
 const FeatureWorkspaceAccess = "workspace-access"
+
+// FeatureLogins marks a server that keeps added logins: it serves
+// agent.login.*, honours login on run.launch and reports account_login on
+// runs. An older server ignores login and launches on the default login.
+const FeatureLogins = "logins"
 
 // CapabilityRunRepos is listed in a gateway's capability methods but is not an RPC method.
 const CapabilityRunRepos = "run.repos"
@@ -508,6 +523,10 @@ type RunLaunchParams struct {
 	Permission string `json:"permission,omitempty"`
 	// Empty means the caller's own account.
 	AccountMemberID string `json:"account_member_id,omitempty"`
+	// Login names one of the account's logins, "default" or an added
+	// login's id; only the account's owner may name one. Empty starts from
+	// the account's first login the launcher may use, in its owner's order.
+	Login string `json:"login,omitempty"`
 	// CachedBase retries a transient base-capture failure with the accepted
 	// mirror commit; one launch consumes it.
 	CachedBase string `json:"cached_base,omitempty"`

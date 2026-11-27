@@ -53,13 +53,18 @@ func (off ChildChoicesOff) Covers(harness string, account MemberID) bool {
 // ChildReservation is one child run a run asked for. RunID is minted at
 // reservation, before the run row exists. TreeKey is the root run's ID.
 type ChildReservation struct {
-	RunID          RunID
-	ParentRunID    RunID
-	RootRunID      RunID
-	TreeKey        string
-	WorkspaceID    WorkspaceID
-	OwnerID        MemberID
-	AccountID      MemberID
+	RunID       RunID
+	ParentRunID RunID
+	RootRunID   RunID
+	TreeKey     string
+	WorkspaceID WorkspaceID
+	OwnerID     MemberID
+	AccountID   MemberID
+	// AccountLogin is the parent's login of AccountID the child would
+	// inherit ("default" for its default login), checked again at
+	// dispatch; empty when the child named the account and starts from its
+	// first eligible login.
+	AccountLogin   LoginID
 	Harness        string
 	Mode           LaunchMode
 	Model          string

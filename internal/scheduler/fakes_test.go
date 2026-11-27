@@ -45,8 +45,15 @@ type fakeRuntime struct {
 	startHook   func(c *fakeContainer)
 	startDelay  time.Duration
 	stopHook    func()
-	commitErr   error
-	commits     []fakeCommitCall
+	// destroyHook runs at the start of every Destroy.
+	destroyHook func(id runtime.ID)
+	// removedVolumes are the base directories whose subpath volume
+	// RemoveSubpathVolume removed; volumeErr fails it, as an unreachable
+	// daemon does.
+	removedVolumes []string
+	volumeErr      error
+	commitErr      error
+	commits        []fakeCommitCall
 	// heldImages are tags the fake daemon refuses to remove, as Docker does
 	// while a container still uses them.
 	heldImages map[string]bool
@@ -284,7 +291,30 @@ func (r *fakeRuntime) Stop(_ context.Context, id runtime.ID, _ time.Duration) er
 	return nil
 }
 
+func (r *fakeRuntime) RemoveSubpathVolume(_ context.Context, hostPath string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.volumeErr != nil {
+		return r.volumeErr
+	}
+	for _, c := range r.containers {
+		for _, m := range c.spec.Mounts {
+			if m.Subpath != "" && m.HostPath == hostPath {
+				return errors.New("volume is in use")
+			}
+		}
+	}
+	r.removedVolumes = append(r.removedVolumes, hostPath)
+	return nil
+}
+
 func (r *fakeRuntime) Destroy(_ context.Context, id runtime.ID) error {
+	r.mu.Lock()
+	hook := r.destroyHook
+	r.mu.Unlock()
+	if hook != nil {
+		hook(id)
+	}
 	r.mu.Lock()
 	if r.destroyErr != nil {
 		r.mu.Unlock()
