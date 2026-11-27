@@ -2,6 +2,7 @@ package sshd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -74,6 +75,15 @@ func TestRunOptionSetNeedsNoLeaseAndYieldsToAnotherMembersControl(t *testing.T) 
 	if perr = set(e.member.ID, e.run.ID, "opus", ""); perr == nil || perr.Code != protocol.CodeInvalidState || perr.Message != want {
 		t.Fatalf("model of a Standard session whose agent cannot switch to Enhanced = %+v, want CodeInvalidState and %q", perr, want)
 	}
+	e.runs.mu.Lock()
+	e.runs.unswitchable, e.runs.switchErr = nil, errors.New("scheduler: unknown harness")
+	e.runs.mu.Unlock()
+	if perr = set(e.member.ID, e.run.ID, "opus", ""); perr == nil || perr.Code != protocol.CodeInvalidState || perr.Message != want {
+		t.Fatalf("model of a Standard session whose agent is no longer defined = %+v, want CodeInvalidState and %q", perr, want)
+	}
+	e.runs.mu.Lock()
+	e.runs.switchErr = nil
+	e.runs.mu.Unlock()
 	background := &domain.Run{WorkspaceID: e.ws.ID, MemberID: e.member.ID, Task: "t", Harness: "claude", Mode: domain.LaunchHeadless, Status: domain.RunRunning}
 	if err = e.store.CreateRun(t.Context(), background); err != nil {
 		t.Fatal(err)

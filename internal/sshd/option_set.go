@@ -31,11 +31,9 @@ func (s *Server) runOptionSet(ctx context.Context, member domain.MemberID, raw j
 	case run.Mode == domain.LaunchTUI:
 		message := fmt.Sprintf("%s: session %[2]s is a Standard session, where the model and effort change only inside the agent's own terminal: "+
 			"run cloudfield attach %[2]s and change them there", protocol.MethodRunOptionSet, run.ID)
-		switchable, switchErr := s.cfg.Runs.AgentSwitchable(ctx, run.MemberID, run.AccountMember(), run.Harness)
-		if switchErr != nil {
-			return nil, rpcError(switchErr)
-		}
-		if switchable {
+		// An agent whose definition is gone cannot switch either, and the
+		// refusal stands without the lookup.
+		if switchable, switchErr := s.cfg.Runs.AgentSwitchable(ctx, run.MemberID, run.AccountMember(), run.Harness); switchErr == nil && switchable {
 			message += fmt.Sprintf(", or run cloudfield session switch %s --mode enhanced first", run.ID)
 		}
 		return nil, &protocol.Error{Code: protocol.CodeInvalidState, Message: message}

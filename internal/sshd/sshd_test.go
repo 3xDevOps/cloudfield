@@ -385,6 +385,7 @@ type fakeRuns struct {
 	sharedLaunches map[string]scheduler.SharedLaunch
 	sharedRefusals map[string]string
 	unswitchable   map[string]bool
+	switchErr      error
 	acpStream      scheduler.ACPStream
 	acpPending     map[domain.RunID][]acphost.Request
 	sudo           map[domain.RunID][]domain.RunInputRequest
@@ -503,7 +504,7 @@ func (f *fakeRuns) WakeRefusal(agent string, mode domain.LaunchMode) error {
 func (f *fakeRuns) AgentSwitchable(_ context.Context, _, _ domain.MemberID, harness string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return !f.unswitchable[harness], nil
+	return !f.unswitchable[harness], f.switchErr
 }
 
 func (f *fakeRuns) LaunchWithOptions(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode, opts domain.LaunchOptions) (*domain.Run, error) {
