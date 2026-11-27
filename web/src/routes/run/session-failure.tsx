@@ -165,40 +165,6 @@ export function SessionFailureCallout({ run, session, switchable, shells, nav }:
   const failure = sessionFailure(session)
   if (!failure || isTerminal(run.status)) return null
   const target = { kind: 'failure' as const, workspace_id: run.workspace_id, run_id: run.id, failure: failure.kind, seq: failure.seq, label: failure.kind === 'auth' ? 'Agent not signed in' : failure.title }
-  if (failure.kind === 'auth') {
-    const label = session?.state?.auth?.authStatus?.label
-    const methods = session?.state?.auth_methods ?? []
-    return (
-      <Callout
-        tone="needs-you"
-        title={signedOut ? signedOutTitle(signedOut) : 'The agent is not signed in'}
-        actions={
-          <>
-            {own && <Button size="sm" variant="secondary" onClick={() => useStore.getState().navigate('agents')}>Sign in on Agents</Button>}
-            <LoginActions run={run} command={session?.state?.agent_command} methods={methods} shells={shells} nav={nav} />
-            <AskAssistantButton size="sm" variant="secondary" ask={{ draft: 'Help me sign the agent in', attachments: [target] }}>Ask the assistant</AskAssistantButton>
-          </>
-        }
-      >
-        {signedOut ? (
-          <>
-            <p>Sign in again on the Agents page, or from a terminal in this session, then send your message again.</p>
-            {signedOut.login_blocks_launch && <p className="mt-1 font-code text-ui-sm break-words">{signedOut.login_problem}</p>}
-          </>
-        ) : own ? (
-          <p>{label ? `${label}. ` : ''}Log the agent in from a terminal in this session, then send your message again.</p>
-        ) : (
-          <p>{label ? `${label}. ` : ''}This session signs in with another member's account. They sign in again on their Agents page or with <code className="font-code">aether agent login {run.harness}</code>; then send your message again.</p>
-        )}
-        {methods.length > 0 && (
-          <ul className="mt-1 list-disc pl-5 text-ui-sm">
-            {methods.map((method) => <li key={method.id}>{method.name}{method.description ? `: ${method.description}` : ''}</li>)}
-          </ul>
-        )}
-        {failure.detail && <pre className="mt-1 font-code text-ui-sm break-words whitespace-pre-wrap text-muted">{failure.detail}</pre>}
-      </Callout>
-    )
-  }
   const retry = async () => {
     setRetrying(true)
     try {
@@ -210,15 +176,56 @@ export function SessionFailureCallout({ run, session, switchable, shells, nav }:
       setRetrying(false)
     }
   }
+  const retryButton = (variant?: 'secondary') => (
+    <Button size="sm" variant={variant} disabled={retrying} hint="Pauses and resumes the session, which starts the agent again" onClick={() => void retry()}>
+      {retrying ? 'Retrying…' : 'Retry Enhanced'}
+    </Button>
+  )
+  if (failure.kind === 'auth') {
+    // Signing in restarts no agent that failed to start, and its composer has no box to send from.
+    const stopped = !session?.live
+    const then = stopped ? 'then choose Retry Enhanced' : 'then send your message again'
+    const label = session?.state?.auth?.authStatus?.label
+    const methods = session?.state?.auth_methods ?? []
+    return (
+      <Callout
+        tone="needs-you"
+        title={signedOut ? signedOutTitle(signedOut) : 'The agent is not signed in'}
+        actions={
+          <>
+            {own && <Button size="sm" variant="secondary" onClick={() => useStore.getState().navigate('agents')}>Sign in on Agents</Button>}
+            <LoginActions run={run} command={session?.state?.agent_command} methods={methods} shells={shells} nav={nav} />
+            {stopped && retryButton('secondary')}
+            <AskAssistantButton size="sm" variant="secondary" ask={{ draft: 'Help me sign the agent in', attachments: [target] }}>Ask the assistant</AskAssistantButton>
+          </>
+        }
+      >
+        {signedOut ? (
+          <>
+            <p>Sign in again on the Agents page, or from a terminal in this session, {then}.</p>
+            {signedOut.login_blocks_launch && <p className="mt-1 font-code text-ui-sm break-words">{signedOut.login_problem}</p>}
+          </>
+        ) : own ? (
+          <p>{label ? `${label}. ` : ''}Log the agent in from a terminal in this session, {then}.</p>
+        ) : (
+          <p>{label ? `${label}. ` : ''}This session signs in with another member's account. They sign in again on their Agents page or with <code className="font-code">aether agent login {run.harness}</code>; {then}.</p>
+        )}
+        {methods.length > 0 && (
+          <ul className="mt-1 list-disc pl-5 text-ui-sm">
+            {methods.map((method) => <li key={method.id}>{method.name}{method.description ? `: ${method.description}` : ''}</li>)}
+          </ul>
+        )}
+        {failure.detail && <pre className="mt-1 font-code text-ui-sm break-words whitespace-pre-wrap text-muted">{failure.detail}</pre>}
+      </Callout>
+    )
+  }
   return (
     <Callout
       tone="failed"
       title={failure.title}
       actions={
         <>
-          <Button size="sm" disabled={retrying} hint="Pauses and resumes the session, which starts the agent again" onClick={() => void retry()}>
-            {retrying ? 'Retrying…' : 'Retry Enhanced'}
-          </Button>
+          {retryButton()}
           <OpenInStandard run={run} switchable={switchable} nav={nav} />
           <AskAssistantButton size="sm" variant="secondary" ask={{ draft: 'Fix this', attachments: [target] }}>Fix this</AskAssistantButton>
         </>

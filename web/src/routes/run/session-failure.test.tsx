@@ -109,7 +109,8 @@ describe('a launched session whose agent failed to start', () => {
     renderCallout(failed('the agent refused: Authentication required; sign in again on the Agents page'))
     expect(screen.getByText('The agent is not signed in')).toBeDefined()
     expect(screen.getByText(/Authentication required; sign in again on the Agents page/)).toBeDefined()
-    for (const name of ['Sign in on Agents', 'Open a terminal']) expect(screen.getByRole('button', { name })).toBeDefined()
+    expect(screen.getByText(/then choose Retry Enhanced/)).toBeDefined()
+    for (const name of ['Sign in on Agents', 'Open a terminal', 'Retry Enhanced']) expect(screen.getByRole('button', { name })).toBeDefined()
   })
 })
 
