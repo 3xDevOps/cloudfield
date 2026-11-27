@@ -2,13 +2,18 @@
 
 For whoever continues this work. The ranked causes, their outcomes and what was rejected are in [README.md](README.md).
 
-## State
+## State (2026-11-27, 20:30Z)
 
-- Merged: #1178 (gateway reuses control channels for reads), #1180 (Lanes reads history without rereads; `no_rereads`, `older_time`), #1189 (failed agent-mail and subsessions reads show Retry).
-- In the merge queue: #1196 (Lanes budget follows the window; Load more).
+- Merged: #1178 (gateway reuses control channels for reads), #1180 (Lanes reads history without rereads; `no_rereads`, `older_time`), #1189 (failed agent-mail and subsessions reads show Retry), #1196 (Lanes budget follows the window; Load more), #1211 (lane history re-read after an event could not be applied), #1212 (lane history stuck at loading after a member change), #1216 (origin note without a credential).
 - Closed without merging, reasons in README "Tried and rejected": #1193 (cold open), #1208 (keep Lanes history).
-- Next, approved: two correctness fixes found on main (an event the client fails to apply is dropped while the stream stays live, `drain` in `web/src/store/sync.ts`; a lane history stuck at loading after an identity change, `readBack` in `web/src/routes/board/lanes/use-lane-data.ts`), then cause 4, compression between server and gateway (negotiated; both mixed-version directions tested; CPU cost on one CPU with a size threshold; security review: does any response mix attacker-chosen text with secrets).
-- Not to build without asking: the duplicate budget read on reload (`useTeamRefresh`, `web/src/routes/team/sync.ts`), paging `run.list`, the session-view polls, and anything a real recording from the owner would change (the HAR asked for in README has not arrived).
+- Waiting on the owner:
+  - #1214, compression of `workspace.timeline` pages (draft). Decision: accept the residual side channel or not. If yes: one fresh review of its last push (it changed how the timeline's reader filter caches sessions) and CI before merge; measure the gain on a real link first if a recording exists.
+  - The duplicate budget read on reload (`useTeamRefresh`, `web/src/routes/team/sync.ts`): six requests saved per reload, no time anyone feels.
+  - Paging `run.list` (351 KB for 600 sessions on every cold open; changes what lists show).
+  - The session-view polls (`dev.terminal.list`, `run.room.status`).
+  - Whether to hide a workspace origin's credential from `workspace.list`, the dashboard and `cloudfield link`, or refuse such an origin (#1216's description lists every place it is still shown).
+  - Anything a real recording changes: the HAR of Lanes filling in, asked for in README, has not arrived, so the reread share, the link's round-trip time and its throughput on the owner's server are still not established.
+- Known and not fixed (found by reviewers, present on main): a late `coord.messages.list` answer is applied without checking the signed-in member or a newer read (#1189's description); a reconnect replay during a repair can reset lane history (#1211's first review).
 
 ## Running the measurements
 

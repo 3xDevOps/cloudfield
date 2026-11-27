@@ -52,12 +52,12 @@ is not established here.
 | --- | --- |
 | 1 Lanes pages mostly rereads | Merged, #1180: `no_rereads` and `older_time` on `workspace.timeline`. 6h: 43% of visible bars never coloured to 0%; 24h: 70% to 0%. |
 | 2 Three round trips per call | Merged, #1178: the gateway reuses control channels for an explicit list of reads when the server was heard from in the last second. 453 to 151 ms a read on a 150 ms link; Lanes' five pages 2,330 to 828 ms. |
-| 3 Serial reads and the 5,000 budget | #1196 (ready, in the merge queue on 2026-11-27): the budget follows the window (5,000 / 10,000 / 25,000) with **Load more**; numbers in [evidence/cause3-budget.txt](evidence/cause3-budget.txt). Pages cannot be read in parallel: each cursor comes from the page before. |
-| 4 No compression | Not started. Approved in principle: negotiated, both mixed-version directions tested, CPU cost measured on one CPU with a size threshold, security review. |
+| 3 Serial reads and the 5,000 budget | Merged, #1196: the budget follows the window (5,000 / 10,000 / 25,000) with **Load more**; numbers in [evidence/cause3-budget.txt](evidence/cause3-budget.txt). Pages cannot be read in parallel: each cursor comes from the page before. |
+| 4 No compression | Built as draft #1214, **waiting on the owner**: gzip of `workspace.timeline` pages only, when the gateway asks and the page holds one access domain (372,010 to 29,977 bytes for a 1,000-event page; 1.0 to 1.5 ms of CPU by the builder's benchmark). `run.list` cannot be compressed: it spans workspaces in one response, which gives a size probe across the workspace boundary. Open decision: accept the low-rated side channel of compressing a page that holds agent-written text beside command lines and steering text. Its last push has not had an independent review. |
 | 5 Cold open | **Tried and rejected**, #1193 (closed). See below. The duplicate budget read on reload remains. |
 | 6 Leaving Lanes drops its history | **Tried and rejected**, #1208 (closed). See below. |
 | 7 Session polls, 8 client work per page | Not built. 7 rides on cause 2 (each poll is one round trip when it follows other traffic). |
-| Follow-up | Merged, #1189: a failed agent-mail or subsessions read in session Details shows the server's error with Retry. |
+| Follow-ups | Merged: #1189 (a failed agent-mail or subsessions read in session Details shows the server's error with Retry); #1211 (Lanes reads its history again after an event could not be applied); #1212 (a lane history stuck at loading after a member change reads again); #1216 (the note for a changed workspace origin leaves out an address that can hold a credential). |
 
 Running totals on the seeded store over a 150 ms link, main before the first fix against #1196's head ([evidence/running-totals.txt](evidence/running-totals.txt)): Lanes 6h settles in 3.2 s with 44% of visible bars never coloured, now 1.4 s with 0%; 24h 2.8 s / 70%, now 1.9 s / 0%; 7d 2.9 s / 68%, now 2.0 s / 0% with the whole window loaded; cold open until sessions show 2,562 ms, now 1,538 ms.
 
