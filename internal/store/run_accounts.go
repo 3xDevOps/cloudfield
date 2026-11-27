@@ -33,9 +33,10 @@ const RunAccountLaunchReason = "launch"
 // move. Earlier segments are never rewritten. The run keeps the member whose
 // account it first asked for in requested_account_member_id, cleared when
 // the run moves back to it; a move between two logins of one member leaves
-// it alone. A run already on account is left as it is. It returns the run's
-// current segment.
-func (d *DB) SetRunAccount(ctx context.Context, id domain.RunID, account domain.Account, reason string, at time.Time) (int, error) {
+// it alone. perUse is whether account's login is billed per use. A run
+// already on account is left as it is. It returns the run's current
+// segment.
+func (d *DB) SetRunAccount(ctx context.Context, id domain.RunID, account domain.Account, perUse bool, reason string, at time.Time) (int, error) {
 	startedAt, err := encodeTime(at)
 	if err != nil {
 		return 0, fmt.Errorf("store: set session account: %w", err)
@@ -89,8 +90,8 @@ func (d *DB) SetRunAccount(ctx context.Context, id domain.RunID, account domain.
 		}
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE runs SET account_member_id = ?, account_login = ?, requested_account_member_id = NULLIF(?, '') WHERE id = ?`,
-		account.Member, account.Login, requested, id); err != nil {
+		`UPDATE runs SET account_member_id = ?, account_login = ?, account_login_per_use = ?, requested_account_member_id = NULLIF(?, '') WHERE id = ?`,
+		account.Member, account.Login, perUse, requested, id); err != nil {
 		return 0, fmt.Errorf("store: set session account: %w", mapConstraint(err, ErrNotFound))
 	}
 	if err := tx.Commit(); err != nil {

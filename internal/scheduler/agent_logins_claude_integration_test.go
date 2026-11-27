@@ -173,6 +173,9 @@ func runRealClaude(t *testing.T, claude string, plan *EnvironmentPlan, laid []ru
 		"DISABLE_TELEMETRY=1",
 		"DISABLE_AUTOUPDATER=1",
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+		// An image's ENV naming a profile the login does not hold; the
+		// plan's own value comes after it, as a container's does.
+		"ANTHROPIC_PROFILE=elsewhere",
 	}
 	for _, key := range []string{"CLAUDE_CONFIG_DIR", "ANTHROPIC_CONFIG_DIR"} {
 		if v, ok := plan.Env[key]; ok {

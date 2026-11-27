@@ -65,6 +65,9 @@ func (c *Client) dial(ctx context.Context, op, serverID, path string) (net.Conn,
 		HTTPClient: &http.Client{Transport: transport, CheckRedirect: noRedirect},
 		HTTPHeader: header,
 	})
+	if resp != nil {
+		c.observe(resp)
+	}
 	if err != nil {
 		if resp == nil || resp.StatusCode == http.StatusSwitchingProtocols {
 			return nil, fmt.Errorf("%s: %s: %w", op, c.host, err)

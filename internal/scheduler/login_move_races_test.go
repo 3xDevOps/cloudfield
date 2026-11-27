@@ -365,7 +365,7 @@ func TestRestartAtEachStepOfALoginMove(t *testing.T) {
 			case "old container removed":
 				sc.ContainerID = ""
 			case "row recorded, old container":
-				if _, err = e.db.SetRunAccount(t.Context(), run.ID, second, usageLimitSegment, time.Now()); err != nil {
+				if _, err = e.db.SetRunAccount(t.Context(), run.ID, second, false, usageLimitSegment, time.Now()); err != nil {
 					t.Fatal(err)
 				}
 			case "new container started":

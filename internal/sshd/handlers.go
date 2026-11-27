@@ -20,6 +20,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/linear"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/runtime"
 	"github.com/3xDevOps/cloudfield/internal/scheduler"
 	"github.com/3xDevOps/cloudfield/internal/store"
 )
@@ -284,6 +285,7 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 
 func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protocol.RunLaunchParams, mode domain.LaunchMode, policy domain.AccountFallback,
 	created func(domain.RunID), skipped *[]protocol.SkippedAccount) (*domain.Run, *protocol.Error) {
+	ctx = runtime.WithSteps(ctx)
 	workspaces := append([]domain.WorkspaceID{domain.WorkspaceID(p.WorkspaceID)}, workspaceIDs(p.ExtraWorkspaceIDs)...)
 	authorize := func() (LaunchAdmission, *protocol.Error) {
 		admission, err := AuthorizeLaunch(ctx, s.cfg.Store, member, p.AccountMemberID, workspaces)
@@ -315,7 +317,14 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 			return nil, rpcError(cmp.Or(envErr, scheduler.EnvironmentPays(login)))
 		}
 	}
-	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Services.Usage, member, domain.Account{Member: domain.MemberID(p.AccountMemberID), Login: login}, p.Harness, policy)
+	account := cmp.Or(domain.MemberID(p.AccountMemberID), member)
+	measure := func() (fallback.Measured, error) {
+		if p.Login != "" {
+			return fallback.Measure(ctx, s.cfg.Store, s.cfg.Services.Usage, member, domain.Account{Member: account, Login: login}, p.Harness, policy)
+		}
+		return MeasureUnnamed(ctx, &s.cfg, member, domain.Account{Member: account, Login: login}, p.Harness, policy)
+	}
+	measured, err := measure()
 	if err != nil {
 		return nil, rpcError(err)
 	}
@@ -328,9 +337,18 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 	}
 	// An unnamed start is chosen again under the mutex: the login chosen
 	// before the usage read may have been turned off or removed meanwhile.
+	// Another choice is measured once more, holding the mutex for at most
+	// that read's bound, so Select decides on its own usage.
 	if p.Login == "" {
-		if login, perr = s.launchLogin(ctx, domain.WorkspaceID(p.WorkspaceID), member, domain.MemberID(p.AccountMemberID), p.Harness, p.Login, mode, permission); perr != nil {
+		again, perr := s.launchLogin(ctx, domain.WorkspaceID(p.WorkspaceID), member, domain.MemberID(p.AccountMemberID), p.Harness, p.Login, mode, permission)
+		if perr != nil {
 			return nil, perr
+		}
+		if again != login {
+			login = again
+			if measured, err = measure(); err != nil {
+				return nil, rpcError(err)
+			}
 		}
 	}
 	requested := admission.Account.ID
@@ -339,15 +357,9 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 			return nil, rpcError(err)
 		}
 	}
-	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, member, domain.Account{Member: requested, Login: login}, p.Harness, workspaces, policy, func(ctx context.Context, account domain.Account) (bool, error) {
-		if account.Login.Added() {
-			if signsIn, envErr := byEnv(); envErr != nil || signsIn {
-				return false, envErr
-			}
-		}
-		return s.cfg.Runs.FallbackLaunchable(ctx, member, requested, account, p.Harness, mode, permission)
-	})
-	account := chosen.Member
+	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, member, domain.Account{Member: requested, Login: login}, p.Harness, workspaces, policy,
+		Launchable(s.cfg.Runs, byEnv, member, requested, p.Harness, mode, permission))
+	account = chosen.Member
 	if excluded != nil {
 		slog.Warn("sshd: fallback accounts left out of a launch", "member", member, "error", excluded)
 	}
@@ -462,16 +474,12 @@ func (s *Server) runSnapshot(run *domain.Run) protocol.Run {
 				out.AccountLoginName = l.Name
 			}
 		}
-		if s.cfg.Logins != nil {
-			identity, idErr := s.cfg.Logins.Identity(run.AccountMember(), run.Harness, run.AccountLogin)
-			out.AccountLoginPerUse = idErr == nil && identity.PerUse()
-		}
 	}
 	if s.cfg.Runs != nil {
 		out.Paused = s.cfg.Runs.Paused(run.ID)
 		if sleep := s.cfg.Runs.Sleep(run.ID); sleep.AsleepSince != nil {
 			since := sleep.AsleepSince.UTC().Format(time.RFC3339Nano)
-			out.AsleepSince, out.AsleepSaved, out.Waking, out.WakeError = &since, sleep.Saved, sleep.Waking, sleep.WakeError
+			out.AsleepSince, out.AsleepSaved, out.AsleepInMemory, out.Waking, out.WakeError = &since, sleep.Saved, sleep.InMemory, sleep.Waking, sleep.WakeError
 		}
 		out.Cause = string(s.cfg.Runs.Cause(run.ID, run.Activity))
 		out.Wait = s.cfg.Runs.Wait(run.ID, run.Activity)

@@ -395,6 +395,8 @@ type fakeRuns struct {
 	whileTerminalStopped func()
 	// startLogins are what StartLogin answers, one per call, then "".
 	startLogins []domain.LoginID
+	// perUse are the logins LoginPerUse reports billed per use.
+	perUse map[domain.LoginID]bool
 	// environmentPays is what EnvironmentSignsIn answers.
 	environmentPays bool
 }
@@ -491,6 +493,12 @@ func (f *fakeRuns) CachedAgentModels(_ domain.MemberID, harness string) (protoco
 
 func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.MemberID, domain.Account, string, domain.LaunchMode, domain.Permission) (bool, error) {
 	return true, nil
+}
+
+func (f *fakeRuns) LoginPerUse(_ context.Context, _ domain.MemberID, login domain.Account, _ string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.perUse[login.Login], nil
 }
 
 func (f *fakeRuns) StartLogin(context.Context, domain.WorkspaceID, domain.MemberID, domain.MemberID, string, domain.LaunchMode, domain.Permission) (domain.LoginID, error) {

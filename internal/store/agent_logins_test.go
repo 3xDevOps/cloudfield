@@ -43,7 +43,7 @@ func countRows(t *testing.T, db *DB, table string) int {
 // A member's first added login writes the default login's row before it;
 // removing the last added one leaves the member with no row at all, as a
 // member who never added one, unless they turned a switch of the default
-// login off: its row then keeps that choice.
+// login off: its row then keeps that choice until the switch is on again.
 func TestAgentLoginsOrderAndLeaveNoRowWhenNoneAreLeft(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
@@ -95,10 +95,14 @@ func TestAgentLoginsOrderAndLeaveNoRowWhenNoneAreLeft(t *testing.T) {
 	if n := countRows(t, db, "agent_logins"); n != 0 {
 		t.Fatalf("agent_logins rows after removing every added login = %d; want 0", n)
 	}
-	for _, off := range []func(domain.LoginID) error{
-		func(id domain.LoginID) error { return db.SetAgentLoginAutomatic(ctx, ada.ID, "claude", id, false) },
-		func(id domain.LoginID) error { return db.SetAgentLoginShared(ctx, ada.ID, "claude", id, false) },
+	for _, set := range []func(domain.LoginID, bool) error{
+		func(id domain.LoginID, on bool) error {
+			return db.SetAgentLoginAutomatic(ctx, ada.ID, "claude", id, on)
+		},
+		func(id domain.LoginID, on bool) error { return db.SetAgentLoginShared(ctx, ada.ID, "claude", id, on) },
 	} {
+		off := func(id domain.LoginID) error { return set(id, false) }
+		on := func(id domain.LoginID) error { return set(id, true) }
 		last := addLogin(t, db, ada.ID, "last")
 		if err := off(domain.DefaultLogin); err != nil {
 			t.Fatal(err)
@@ -110,8 +114,11 @@ func TestAgentLoginsOrderAndLeaveNoRowWhenNoneAreLeft(t *testing.T) {
 		if err != nil || len(logins) != 1 || logins[0].ID != domain.DefaultLogin || (logins[0].Automatic && logins[0].Shared) {
 			t.Fatalf("logins after removing the last added login with a switch of the default off = %+v, %v; want the default's row, the switch still off", logins, err)
 		}
-		if _, err := db.db.ExecContext(ctx, `DELETE FROM agent_logins`); err != nil {
+		if err := on(domain.DefaultLogin); err != nil {
 			t.Fatal(err)
+		}
+		if n := countRows(t, db, "agent_logins"); n != 0 {
+			t.Fatalf("agent_logins rows once the lone default's switch is on again = %d; want 0", n)
 		}
 	}
 }

@@ -839,8 +839,7 @@ func (s *Scheduler) commitMove(ctx context.Context, entry *supervised, f *UsageF
 		if launchErr := s.mayLaunch(ctx, member, workspaces); launchErr != nil {
 			return 0, launchErr
 		}
-		target := &domain.Run{AccountMemberID: to.Member, AccountLogin: to.Login, Harness: run.Harness}
-		if authErr := fallback.ResolveRunLogin(ctx, s.cfg.Store, member, target, workspaces); authErr != nil {
+		if authErr := fallback.ResolveLoginShared(ctx, s.cfg.Store, member, to, run.Harness, workspaces); authErr != nil {
 			return 0, authErr
 		}
 	}
@@ -850,7 +849,11 @@ func (s *Scheduler) commitMove(ctx context.Context, entry *supervised, f *UsageF
 	if killed {
 		return 0, errors.New("the session is being killed")
 	}
-	seq, err := s.cfg.Store.SetRunAccount(ctx, run.ID, to, m.segment(), time.Now().UTC())
+	perUse, err := s.LoginPerUse(ctx, run.HomeMember(), to, run.Harness)
+	if err != nil {
+		return 0, err
+	}
+	seq, err := s.cfg.Store.SetRunAccount(ctx, run.ID, to, perUse, m.segment(), time.Now().UTC())
 	if err != nil {
 		return 0, fmt.Errorf("record the session's account: %w", err)
 	}

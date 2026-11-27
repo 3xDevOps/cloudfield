@@ -172,12 +172,7 @@ func (d *DB) DeleteAgentLogin(ctx context.Context, member domain.MemberID, agent
 		if rowErr := requireRow(res, "remove login"); rowErr != nil {
 			return rowErr
 		}
-		// The default login's row goes with the last added login only while
-		// both its switches are on: one its owner turned off keeps holding
-		// that choice.
-		_, delErr = tx.ExecContext(ctx, `DELETE FROM agent_logins WHERE member_id = ?1 AND agent = ?2 AND id = ?3 AND automatic = 1 AND shared = 1
-			AND NOT EXISTS (SELECT 1 FROM agent_logins WHERE member_id = ?1 AND agent = ?2 AND id <> ?3)`, member, agent, domain.DefaultLogin)
-		return delErr
+		return dropLoneDefault(ctx, tx, member, agent)
 	})
 	if err != nil {
 		return fmt.Errorf("store: remove login: %w", err)
@@ -218,19 +213,37 @@ func (d *DB) OrderAgentLogins(ctx context.Context, member domain.MemberID, agent
 }
 
 func (d *DB) SetAgentLoginAutomatic(ctx context.Context, member domain.MemberID, agent string, id domain.LoginID, on bool) error {
-	res, err := d.db.ExecContext(ctx, `UPDATE agent_logins SET automatic = ? WHERE member_id = ? AND agent = ? AND id = ?`, boolToInt(on), member, agent, id)
-	if err != nil {
-		return fmt.Errorf("store: set login automatic: %w", err)
-	}
-	return requireRow(res, "set login automatic")
+	return d.setAgentLoginSwitch(ctx, member, agent, id, "automatic", on)
 }
 
 func (d *DB) SetAgentLoginShared(ctx context.Context, member domain.MemberID, agent string, id domain.LoginID, on bool) error {
-	res, err := d.db.ExecContext(ctx, `UPDATE agent_logins SET shared = ? WHERE member_id = ? AND agent = ? AND id = ?`, boolToInt(on), member, agent, id)
-	if err != nil {
-		return fmt.Errorf("store: set login shared: %w", err)
-	}
-	return requireRow(res, "set login shared")
+	return d.setAgentLoginSwitch(ctx, member, agent, id, "shared", on)
+}
+
+func (d *DB) setAgentLoginSwitch(ctx context.Context, member domain.MemberID, agent string, id domain.LoginID, column string, on bool) error {
+	return d.inTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `UPDATE agent_logins SET `+column+` = ? WHERE member_id = ? AND agent = ? AND id = ?`, boolToInt(on), member, agent, id)
+		if err != nil {
+			return fmt.Errorf("store: set login %s: %w", column, err)
+		}
+		if err = requireRow(res, "set login "+column); err != nil {
+			return err
+		}
+		if err = dropLoneDefault(ctx, tx, member, agent); err != nil {
+			return fmt.Errorf("store: set login %s: %w", column, err)
+		}
+		return nil
+	})
+}
+
+// dropLoneDefault removes member's default login row when it is their only
+// one with both switches on, so a member with no added login and nothing
+// turned off keeps no row, as before they added one. A switch its owner
+// turned off keeps the row holding that choice.
+func dropLoneDefault(ctx context.Context, tx *sql.Tx, member domain.MemberID, agent string) error {
+	_, err := tx.ExecContext(ctx, `DELETE FROM agent_logins WHERE member_id = ?1 AND agent = ?2 AND id = ?3 AND automatic = 1 AND shared = 1
+		AND NOT EXISTS (SELECT 1 FROM agent_logins WHERE member_id = ?1 AND agent = ?2 AND id <> ?3)`, member, agent, domain.DefaultLogin)
+	return err
 }
 
 func (d *DB) AgentLoginOwner(ctx context.Context, agent string, id domain.LoginID) (domain.MemberID, error) {

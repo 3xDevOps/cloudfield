@@ -18,7 +18,7 @@ func TestASessionIdleForSevenDaysIsClosedAndCanBeRelaunched(t *testing.T) {
 	e, _, sr := newSaveEnv(t, true)
 	asleep := e.launchACP(t, "say pong")
 	waitItems(t, e.sched, asleep.ID, "the task's turn", turnEnded("end_turn", 1))
-	e.sleepRun(t, asleep.ID)
+	e.saveRun(t, asleep.ID)
 	stuck := e.launchACP(t, acpmock.PromptWait)
 	waitFor(t, "the turn running", func() bool {
 		sess := e.sched.acp.session(stuck.ID)
@@ -57,7 +57,7 @@ func TestAnIdleSleepingVMIsClosedOnlyOnceItWakes(t *testing.T) {
 	e, _, _ := newSaveEnv(t, true)
 	run := e.launchACP(t, "say pong")
 	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
-	e.sleepRun(t, run.ID)
+	e.saveRun(t, run.ID)
 	var free atomic.Uint64
 	free.Store(1 << 30)
 	setFreeBytes(e, &free)

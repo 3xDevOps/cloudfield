@@ -362,6 +362,15 @@ What changes:
   launch before it in `monitor.log.1`, and `console.log` the guest's serial
   console, at most 1 MiB, with the 1 MiB before it in `console.log.1`. A boot
   or restore that fails shows the end of both.
+- [Docker inside sessions](#docker-inside-sessions) needs no Sysbox: the VM of a
+  session that is not Isolated starts the image's `dockerd` itself, and the
+  launch does not wait for it. A `docker` command run before `dockerd`
+  serves waits for its answer. If `dockerd` cannot start, `docker` commands
+  fail with `Cannot connect to the Docker daemon`; the reason is in
+  `/var/log/aether-dockerd.log` in the session, which the session's user can
+  read. The launch still succeeds unless the setup script fails, and then
+  its output ends with `dockerd exited <code>:` and the end of that log
+  ([vm-guest.md](vm-guest.md#sessions-and-processes)).
 - The VM gets the CPU limit rounded up to whole vCPUs, held to the exact
   limit by the unit's `CPUQuota`. The session gets the whole memory limit
   and swap of a quarter of it on its data disk, as a container does; the
@@ -508,7 +517,8 @@ What changes:
   until it next starts from its disk; every such cold start also takes the
   current browser image, so a VM running across an upgrade keeps its older
   browser until then.
-- An idle session's VM is saved to disk with every process
+- An idle session's VM is paused in memory, and saved to disk when the
+  host needs that memory or after an hour, with every process
   ([Sessions in VMs](failure-handling.md#sessions-in-vms)), and closing a
   session stops its VM, which keeps its disks
   ([Relaunching a closed session](failure-handling.md#relaunching-a-closed-session)). Closing a

@@ -114,7 +114,14 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 		refuse(err.Error())
 		return
 	}
-	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Usage, c.OwnerID, domain.Account{Member: c.AccountID, Login: login}, c.Harness, c.Fallback)
+	// A subsession names no login, so one billed per use serves it only
+	// when no login with readable usage left can.
+	perUse, err := s.cfg.Runs.LoginPerUse(ctx, c.OwnerID, domain.Account{Member: c.AccountID, Login: login}, c.Harness)
+	if err != nil {
+		refuse(err.Error())
+		return
+	}
+	measured, err := fallback.MeasureStart(ctx, s.cfg.Store, s.cfg.Usage, c.OwnerID, domain.Account{Member: c.AccountID, Login: login}, c.Harness, c.Fallback, perUse)
 	if err != nil {
 		refuse(err.Error())
 		return

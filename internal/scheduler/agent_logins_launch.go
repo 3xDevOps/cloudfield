@@ -134,8 +134,9 @@ func (s *Scheduler) addedLoginMounts(run *domain.Run, launcher domain.MemberID, 
 	env[profile.AccountConfig.Env] = path.Join(home, profile.AccountConfig.Dir)
 	env["ANTHROPIC_CONFIG_DIR"] = path.Join(home, memberhome.AnthropicProfileDir)
 	// The login's own profile is its directory's active one; a workspace
-	// variable naming another would sign Claude Code in with none.
-	delete(env, "ANTHROPIC_PROFILE")
+	// variable or image ENV naming another would sign Claude Code in with
+	// none. Claude Code reads an empty one as unset.
+	env["ANTHROPIC_PROFILE"] = ""
 	return append(mounts, config...), nil
 }
 
@@ -229,15 +230,41 @@ func (s *Scheduler) loginRefusal(ctx context.Context, member domain.MemberID, lo
 	}
 	// Beside added logins, a default login that holds no sign-in at all
 	// would start the agent signed out while another login could serve.
-	logins, err := s.cfg.Store.ListAgentLogins(ctx, login.Member, harnessName)
-	if err != nil || !slices.ContainsFunc(logins, func(l domain.AgentLogin) bool { return l.ID.Added() }) {
+	if added, err := s.keepsAddedLogin(ctx, harnessName, login.Member); err != nil || !added {
 		return "", err
 	}
-	// One whose files cannot be read is left to the checks above, as before.
-	if identity, idErr := s.cfg.Homes.DefaultIdentity(login.Member, harnessName); idErr == nil && identity.Kind == "" {
+	if s.defaultSignInMissing(login.Member, harnessName) {
 		return "it holds no sign-in", nil
 	}
 	return "", nil
+}
+
+// keepsAddedLogin reports whether any of members keeps an added login of
+// agent.
+func (s *Scheduler) keepsAddedLogin(ctx context.Context, agent string, members ...domain.MemberID) (bool, error) {
+	for _, member := range members {
+		logins, err := s.cfg.Store.ListAgentLogins(ctx, member, agent)
+		if err != nil {
+			return false, err
+		}
+		if slices.ContainsFunc(logins, func(l domain.AgentLogin) bool { return l.ID.Added() }) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// defaultSignInMissing reports whether member's default login of agent
+// holds no sign-in at all: no login file Cloudfield reads, and no
+// apiKeyHelper or variable that signs agent in set in
+// ~/.claude/settings.json. One whose files cannot be read is not reported.
+func (s *Scheduler) defaultSignInMissing(member domain.MemberID, agent string) bool {
+	identity, err := s.cfg.Homes.DefaultIdentity(member, agent)
+	if err != nil || identity.Kind != "" {
+		return false
+	}
+	settings, err := s.cfg.Homes.ClaudeSettings(member)
+	return err == nil && !settings.APIKeyHelper && !signsIn(settings.Env, agent, "")
 }
 
 // addedLoginRefusal is loginRefusal for an added login: it must still
@@ -316,9 +343,19 @@ func (s *Scheduler) checkAddedLogin(ctx context.Context, member domain.MemberID,
 		return err
 	}
 	if problem != "" {
-		return fmt.Errorf("scheduler: %w: login %s: %s; its owner signs in again with cloudfield agent login %s", ErrSignedOut, account.Login, problem, agent)
+		return fmt.Errorf("scheduler: %w: login %s: %s; %s", ErrSignedOut, logins[i].Name, problem, readdSteps(agent, logins[i].Name))
 	}
 	return nil
+}
+
+// addedLoginName is the name of account's added login of agent, or its id
+// when the name cannot be read.
+func (s *Scheduler) addedLoginName(ctx context.Context, account domain.Account, agent string) string {
+	logins, err := s.cfg.Store.ListAgentLogins(ctx, account.Member, agent)
+	if i := slices.IndexFunc(logins, func(l domain.AgentLogin) bool { return l.ID == account.Login }); err == nil && i >= 0 {
+		return logins[i].Name
+	}
+	return string(account.Login)
 }
 
 // EnvironmentSignsIn reports whether a variable of workspace signs agent
@@ -389,7 +426,7 @@ func (s *Scheduler) StartLogin(ctx context.Context, workspace domain.WorkspaceID
 		}
 		return "", fmt.Errorf("%w: none of this account's logins can serve you: %s", permissions.ErrDenied, strings.Join(refused, "; "))
 	}
-	return "", fmt.Errorf("%w: %s; name one with cloudfield session --login <name>", ErrNoStartLogin, strings.Join(refused, "; "))
+	return "", fmt.Errorf("%w: %s; name one with cloudfield session --login <name>, or let Cloudfield choose it with cloudfield agent logins auto <name> on", ErrNoStartLogin, strings.Join(refused, "; "))
 }
 
 // ChildLogin is the login a subsession of owner starts from on account.
@@ -412,15 +449,8 @@ func (s *Scheduler) ChildLogin(ctx context.Context, workspace domain.WorkspaceID
 	inherits := i >= 0 && logins[i].Automatic && (owner == account || logins[i].Shared)
 	login := domain.Account{Member: account, Login: loginOf(inherited)}
 	if inherits {
-		var identity memberhome.LoginIdentity
-		var idErr error
-		switch {
-		case login.Login.Added():
-			identity, idErr = s.cfg.Logins.Identity(account, harness, login.Login)
-		case s.cfg.Homes != nil:
-			identity, idErr = s.cfg.Homes.DefaultIdentity(account, harness)
-		}
-		inherits = idErr == nil && !identity.PerUse()
+		perUse, perUseErr := s.LoginPerUse(ctx, owner, login, harness)
+		inherits = perUseErr == nil && !perUse
 	}
 	if byEnv, envErr := s.EnvironmentSignsIn(ctx, workspace, harness, mode); envErr != nil || byEnv {
 		return "", envErr
@@ -431,6 +461,32 @@ func (s *Scheduler) ChildLogin(ctx context.Context, workspace domain.WorkspaceID
 		}
 	}
 	return s.StartLogin(ctx, workspace, owner, account, harness, mode, permission)
+}
+
+// LoginPerUse reports whether login of agent, in a session in home's home,
+// is billed per use: a Console login, or home's own default login kept as
+// an API key or a Console profile once they keep login rows. Another
+// member's default login is shared only as a subscription, and a member
+// who keeps no rows is shown as before logins existed.
+func (s *Scheduler) LoginPerUse(ctx context.Context, home domain.MemberID, login domain.Account, agent string) (bool, error) {
+	var identity memberhome.LoginIdentity
+	var err error
+	switch {
+	case login.Login.Added():
+		identity, err = s.cfg.Logins.Identity(login.Member, agent, login.Login)
+	case login.Member != home || s.cfg.Homes == nil:
+		return false, nil
+	default:
+		var keeps []domain.AgentLogin
+		if keeps, err = s.cfg.Store.ListAgentLogins(ctx, login.Member, agent); err != nil || len(keeps) == 0 {
+			return false, err
+		}
+		identity, err = s.cfg.Homes.DefaultIdentity(login.Member, agent)
+	}
+	if err != nil {
+		return false, fmt.Errorf("scheduler: whether the login is billed per use: %w", err)
+	}
+	return identity.PerUse(), nil
 }
 
 func loginOf(id domain.LoginID) domain.LoginID {
@@ -454,7 +510,10 @@ func (s *Scheduler) LoginInUse(ctx context.Context, account domain.Account) (map
 		return nil, errors.New("the server is still recovering its sessions; try again in a moment")
 	}
 	if !s.retainedListed.Load() {
-		return nil, errors.New("the server could not yet read the record of every kept session container, so one may still mount this login; try again in a few minutes, and see the server log if it persists")
+		if unread, _ := s.retainedUnread.Load().(string); unread != "" {
+			return nil, fmt.Errorf("the server could not read the record of a kept session container, so that container may still mount this login: %s; the server reads its records again every hour, and the server's operator repairs or removes that file if this persists", unread)
+		}
+		return nil, errors.New("the server has not yet read the record of every kept session container, so one may still mount this login; try again in a moment")
 	}
 	runs, err := s.cfg.Store.ListActiveRuns(ctx)
 	if err != nil {

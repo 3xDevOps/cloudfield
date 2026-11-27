@@ -225,8 +225,11 @@ type Scheduler struct {
 	recoveryReady     chan struct{}
 	recoveryReadyOnce sync.Once
 	// retainedListed is set once a pass over the terminal sidecars has read
-	// every one, so every retained container is in runs.
+	// every one, so every retained container is in runs. Until then
+	// retainedUnread holds the latest pass's first sidecar it could not
+	// settle, with why.
 	retainedListed atomic.Bool
+	retainedUnread atomic.Value
 	// recovering is set while Start recovers runs.
 	recovering atomic.Bool
 	// superCtx bounds every supervision goroutine; cancelling it never stops a
@@ -620,9 +623,13 @@ type supervised struct {
 	// memorySaving counts the saves running that sleeping does not mark: one
 	// the memory guard or an admission started, also once heldSave stopped
 	// waiting for it, and the save again after a failed wake.
-	asleepSaved  bool
-	saveFailedAt time.Time
-	memorySaving int
+	asleepSaved bool
+	// asleepResident is set while a sleeping VM is paused in the host's
+	// memory, where the sleep sweep left it, until the memory guard saves
+	// it or it stops.
+	asleepResident bool
+	saveFailedAt   time.Time
+	memorySaving   int
 	// frozenNotedAt is when the timeline last said the memory brake froze
 	// the session's VM. frozenSave is set while the memory guard saves the
 	// VM frozen, and admitting while a wake holding the lifecycle lock

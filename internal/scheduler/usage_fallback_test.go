@@ -928,7 +928,7 @@ func TestRestartSettlesAnInterruptedAccountMove(t *testing.T) {
 			if err = e.sched.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if _, err = e.db.SetRunAccount(t.Context(), run.ID, domain.AccountOf(e.owner.ID), usageLimitSegment, time.Now()); err != nil {
+			if _, err = e.db.SetRunAccount(t.Context(), run.ID, domain.AccountOf(e.owner.ID), false, usageLimitSegment, time.Now()); err != nil {
 				t.Fatal(err)
 			}
 			sc, err := e.sched.readSidecar(run.ID)
@@ -1486,21 +1486,23 @@ func TestNoFallbackReason(t *testing.T) {
 	}
 }
 
-// What Grace changes on her default login after a move chose it, while the
-// old container goes: automatic off governs the next choice, so the move
-// lands on it; off for shares, the move fails as a revoke in that gap does
-// and the run stays recorded on the account it ran on.
-func TestAMoveToALoginTurnedOffMeanwhile(t *testing.T) {
+// A move records its target only while the run's members may still use
+// that login: Grace turning her default login off for shares after the move
+// chose it, while the old container goes, fails the move, and the run stays
+// recorded on the account it ran on. Turning it automatic off governs the
+// next choice, not the move in flight, which carries on.
+func TestMoveIsNotRecordedOnALoginTurnedOffMeanwhile(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name string
-		off  func(context.Context, *shareEnv) error
+		name  string
+		turn  func(db store.Store, owner domain.MemberID) error
+		moves bool
 	}{
-		{"automatic off", func(ctx context.Context, e *shareEnv) error {
-			return e.db.SetAgentLoginAutomatic(ctx, e.owner.ID, "claude", domain.DefaultLogin, false)
+		{name: "off for shares", turn: func(db store.Store, owner domain.MemberID) error {
+			return db.SetAgentLoginShared(context.Background(), owner, "claude", domain.DefaultLogin, false)
 		}},
-		{"off for shares", func(ctx context.Context, e *shareEnv) error {
-			return e.db.SetAgentLoginShared(ctx, e.owner.ID, "claude", domain.DefaultLogin, false)
+		{name: "automatic off", moves: true, turn: func(db store.Store, owner domain.MemberID) error {
+			return db.SetAgentLoginAutomatic(context.Background(), owner, "claude", domain.DefaultLogin, false)
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1520,23 +1522,18 @@ func TestAMoveToALoginTurnedOffMeanwhile(t *testing.T) {
 			e.rt.mu.Lock()
 			e.rt.destroyHook = func(id runtime.ID) {
 				if id == old && turnedOff.CompareAndSwap(false, true) {
-					if setErr := tc.off(context.Background(), e); setErr != nil {
+					if setErr := tc.turn(e.db, e.owner.ID); setErr != nil {
 						panic(setErr)
 					}
 				}
 			}
 			e.rt.mu.Unlock()
 			_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
-			if tc.name == "automatic off" {
-				waitFor(t, "the move on Grace's account", func() bool {
-					row, getErr := e.db.GetRun(t.Context(), run.ID)
-					if getErr == nil && row.Status.Terminal() {
-						t.Fatalf("run %s (%q); want it moved to Grace's account", row.Status, row.Reason)
-					}
-					sc, scErr := e.sched.readSidecar(run.ID)
-					_, liveErr := e.sched.acp.live(t.Context(), run.ID)
-					return turnedOff.Load() && getErr == nil && scErr == nil && liveErr == nil && row.AccountMemberID == e.owner.ID && sc.AccountSwap == nil
-				})
+			if tc.moves {
+				e.assertMovedToOwner(t, run.ID, notes)
+				if !turnedOff.Load() {
+					t.Fatal("the switch was not turned while the old container went")
+				}
 				return
 			}
 			waitFor(t, "the move to give up", func() bool {

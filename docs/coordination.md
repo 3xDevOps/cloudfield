@@ -491,7 +491,12 @@ it shows the bodies
 `workspace.timeline` pages forward from `after_seq`, or with `newest: true`
 backward from `before_seq` (zero: the log head; pass the previous page's
 `older_seq`), always returning events oldest first. Its `run_id` filter also matches mail
-addressed to the session. A session snapshot's
+addressed to the session. `no_rereads: true` leaves out the `run.status`
+rereads that a `types` filter naming `run.status` otherwise returns
+([failure-handling.md](failure-handling.md)); a server that predates the
+field ignores it. A backward page that has `more` also carries `older_time`,
+the time of the event at `older_seq`: the page covers everything after it,
+including events a filter left out. A session snapshot's
 `unacked_messages` counts mail addressed to the session that it has not
 acknowledged, and `oldest_unacked_at` is when the oldest of it was sent.
 
@@ -1325,9 +1330,11 @@ failure or blocked report reaches its parent's inbox with kind `report`:
 `from_run_id` is the subsession, `outcome` is the reported outcome, `body` is
 its complete report summary, and `correlation_id` is the report ID. It uses the same durable delivery and
 acknowledgement as peer messages; if the inbox is full, report publication
-retries until it fits. A turn that ends without a report forwards the subsession's
-last message to the parent as a provisional report; the subsession's own later
-report retires it while unread. A subsession that ends without a final report sends
+retries until it fits. A turn that ends without a success,
+failure or blocked report forwards the subsession's
+last message to the parent as a provisional report, which names the session's
+last `needs-input`, `waiting` or `answered` report if it made one; the subsession's own later
+success, failure or blocked report retires it while unread. A subsession that ends without a final report sends
 one message saying so, with its latest report of any outcome (summary and
 time) and its branch. A live attached subsession that has been waiting (for
 anything), `answered`, or waiting on a `needs-input` answer for over an hour
@@ -1527,7 +1534,9 @@ What a report does depends on the session:
   task outranks it with the matching waiting
   state. While a needs-input or blocked report still waits on a member it
   is refused with `CodeInvalidParams` (`your needs-input or blocked report
-  is still open and stays shown; end your turn without another report`). Like waiting it is nonterminal,
+  is still open and stays shown; end your turn without another report`). After
+  a success or failure report in the same turn it is accepted and does not
+  replace it: the session keeps the reported outcome. Like waiting it is nonterminal,
   takes no `--evidence-ref` or `--for`, belongs to the turn that reported
   it, is refused with the same errors for a session that already finished or is
   ending and for a superseded key, and the next turn clears it. A

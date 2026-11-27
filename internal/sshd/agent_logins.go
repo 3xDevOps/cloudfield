@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/fallback"
 	"github.com/3xDevOps/cloudfield/internal/memberhome"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
@@ -46,6 +47,9 @@ type LoginSignIns interface {
 	// RevokeLogin moves teammates' running sessions off a login its owner
 	// turned off for shares.
 	RevokeLogin(login domain.Account)
+	// RemoveLoginVolume removes the volume the mounts of a login's
+	// directory come from.
+	RemoveLoginVolume(ctx context.Context, member domain.MemberID, agent string, id domain.LoginID) error
 }
 
 var errNoAddedLogins = &protocol.Error{Code: protocol.CodeUnavailable, Message: "this server keeps no added logins"}
@@ -256,6 +260,11 @@ func (s *Server) agentLoginRemove(ctx context.Context, member domain.MemberID, r
 	}
 	for _, l := range stored {
 		if l.Agent == p.Agent && l.ID == login.ID {
+			if signIns := s.cfg.LoginSignIns; signIns != nil {
+				if err := signIns.RemoveLoginVolume(ctx, l.Member, l.Agent, l.ID); err != nil {
+					return nil, rpcError(fmt.Errorf("remove login %q: %w", login.Name, err))
+				}
+			}
 			if err := s.cfg.Logins.Remove(l.Member, l.Agent, l.ID); err != nil {
 				return nil, rpcError(fmt.Errorf("remove login %q: %w", login.Name, err))
 			}
@@ -356,6 +365,40 @@ func (s *Server) launchLogin(ctx context.Context, workspace domain.WorkspaceID, 
 		return "", rpcError(err)
 	}
 	return login, nil
+}
+
+// MeasureUnnamed reads the usage fallback.Select decides on for member's
+// launch on login, which the launch did not name but was chosen for it: a
+// login billed per use is taken only when no candidate with readable usage
+// is left. An account whose owner keeps no login rows is measured as before
+// logins existed.
+func MeasureUnnamed(ctx context.Context, cfg *Config, member domain.MemberID, login domain.Account, harness string, policy domain.AccountFallback) (fallback.Measured, error) {
+	rows, err := cfg.Store.ListAgentLogins(ctx, login.Member, harness)
+	if err != nil {
+		return nil, err
+	}
+	perUse := false
+	if len(rows) > 0 {
+		if perUse, err = cfg.Runs.LoginPerUse(ctx, member, login, harness); err != nil {
+			return nil, err
+		}
+	}
+	return fallback.MeasureStart(ctx, cfg.Store, cfg.Services.Usage, member, login, harness, policy, perUse)
+}
+
+// Launchable is the fallback.Launchable of member's launch on requested: a
+// candidate the scheduler can launch on, never an added login where a
+// workspace variable signs the agent in (byEnv), as that variable would
+// pay instead.
+func Launchable(runs RunController, byEnv func() (bool, error), member, requested domain.MemberID, harness string, mode domain.LaunchMode, permission domain.Permission) fallback.Launchable {
+	return func(ctx context.Context, account domain.Account) (bool, error) {
+		if account.Login.Added() {
+			if signsIn, err := byEnv(); err != nil || signsIn {
+				return false, err
+			}
+		}
+		return runs.FallbackLaunchable(ctx, member, requested, account, harness, mode, permission)
+	}
 }
 
 // mayLaunch requires the permission a launch needs: a sign-in runs a

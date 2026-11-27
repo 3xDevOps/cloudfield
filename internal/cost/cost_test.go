@@ -447,7 +447,7 @@ func TestCostStaysWithTheAccountThatSpentIt(t *testing.T) {
 		if err = db.CreateRun(ctx, run); err != nil {
 			t.Fatal(err)
 		}
-		if _, err = db.SetRunAccount(ctx, run.ID, domain.AccountOf(grace.ID), "usage limit", moved); err != nil {
+		if _, err = db.SetRunAccount(ctx, run.ID, domain.AccountOf(grace.ID), false, "usage limit", moved); err != nil {
 			t.Fatal(err)
 		}
 		runs = append(runs, run)
@@ -534,7 +534,7 @@ func TestIncrementsAddUpPerAccount(t *testing.T) {
 	}
 	svc.handle(ctx, events.Event{WorkspaceID: ws.ID, RunID: run.ID, Payload: events.RunStatusPayload{From: domain.RunRunning, To: domain.RunCompleted}})
 	moved := time.Now().UTC().Add(time.Minute)
-	if _, err = db.SetRunAccount(ctx, run.ID, domain.AccountOf(grace.ID), "usage limit", moved); err != nil {
+	if _, err = db.SetRunAccount(ctx, run.ID, domain.AccountOf(grace.ID), false, "usage limit", moved); err != nil {
 		t.Fatal(err)
 	}
 	spend := func(at time.Time, in, out int64, usd float64) {

@@ -261,12 +261,20 @@ func TestALaunchIsAdmittedBeforeItReadsTheWorkspaceOrTheLogins(t *testing.T) {
 }
 
 // fakeLoginSignIns reports the sessions LoginInUse lists, fails to end
-// sign-ins with endErr, and records whose logins it reconciled.
+// sign-ins with endErr, records whose logins it reconciled, and records the
+// logins whose volume it removed, failing with volumeErr.
 type fakeLoginSignIns struct {
 	LoginSignIns
 	inUse      map[domain.RunID]domain.MemberID
 	endErr     error
 	reconciled []domain.MemberID
+	volumes    []domain.LoginID
+	volumeErr  error
+}
+
+func (f *fakeLoginSignIns) RemoveLoginVolume(_ context.Context, _ domain.MemberID, _ string, id domain.LoginID) error {
+	f.volumes = append(f.volumes, id)
+	return f.volumeErr
 }
 
 func (f *fakeLoginSignIns) LoginInUse(context.Context, domain.Account) (map[domain.RunID]domain.MemberID, error) {
@@ -301,10 +309,34 @@ func TestRemovingALoginInUseNamesTheOwnersSessionsAndCountsTheRest(t *testing.T)
 	}
 }
 
+// Removing a login removes the volume its sessions' mounts came from
+// before its directory and row; a volume the runtime will not remove keeps
+// the login, so the removal can be asked again.
+func TestRemovingALoginRemovesItsVolume(t *testing.T) {
+	e := newLoginEnv(t)
+	e.seed(t, e.member.ID, "lgn-work000000", "work", "ada@work.example.test")
+	signIns := &fakeLoginSignIns{volumeErr: errors.New("volume is in use")}
+	e.srv.cfg.LoginSignIns = signIns
+	params := protocol.AgentLoginParams{Agent: "claude", LoginID: "lgn-work000000"}
+	if _, perr := e.call(t, e.member.ID, protocol.MethodAgentLoginRemove, params); perr == nil || !strings.Contains(perr.Message, "volume is in use") {
+		t.Fatalf("removal whose volume stays: %v; want refused with the runtime's error", perr)
+	}
+	if _, ids := e.list(t, e.member.ID); !strings.Contains(ids, "lgn-work000000") {
+		t.Fatalf("logins after the refused removal = %s; want work kept", ids)
+	}
+	signIns.volumeErr = nil
+	if _, perr := e.call(t, e.member.ID, protocol.MethodAgentLoginRemove, params); perr != nil {
+		t.Fatal(perr)
+	}
+	if !slices.Equal(signIns.volumes, []domain.LoginID{"lgn-work000000", "lgn-work000000"}) {
+		t.Fatalf("volumes removed = %v; want work's, once per attempt", signIns.volumes)
+	}
+}
+
 // Reopening a teammate's session on an added login is refused by the
-// relaunch itself, in provisioning's words, once its owner turned the
-// login's automatic use off: the session would mount it without its owner
-// naming it.
+// relaunch itself once its owner turned the login automatic off or off for
+// shares: the session would mount it without its owner naming it. The
+// refusal says which switch and what to do instead.
 func TestRelaunchOnALoginTurnedAutomaticOffIsRefusedUpFront(t *testing.T) {
 	e := newLoginEnv(t)
 	ctx := context.Background()
@@ -325,13 +357,24 @@ func TestRelaunchOnALoginTurnedAutomaticOffIsRefusedUpFront(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, perr := e.call(t, e.member.ID, protocol.MethodRunRelaunch, protocol.RunIDParams{RunID: string(run.ID)})
-	if perr == nil || perr.Code != protocol.CodeDenied || !strings.Contains(perr.Message, "login lgn-work000000 of this account is not available to you") {
+	if perr == nil || perr.Code != protocol.CodeDenied || !strings.Contains(perr.Message, "login lgn-work000000 of this account is not available to you: its owner turned it automatic off") ||
+		!strings.Contains(perr.Message, "start a new session, or ask the login's owner to turn it on again") {
 		t.Fatalf("relaunch on a login turned automatic off: %v; want refused as provisioning refuses it", perr)
 	}
 	if calls := e.runs.Calls(); len(calls) != 0 {
 		t.Fatalf("scheduler calls after the refused relaunch = %v; want none", calls)
 	}
 	if err := e.db.SetAgentLoginAutomatic(ctx, grace.ID, "claude", "lgn-work000000", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.db.SetAgentLoginShared(ctx, grace.ID, "claude", "lgn-work000000", false); err != nil {
+		t.Fatal(err)
+	}
+	_, perr = e.call(t, e.member.ID, protocol.MethodRunRelaunch, protocol.RunIDParams{RunID: string(run.ID)})
+	if perr == nil || perr.Code != protocol.CodeDenied || !strings.Contains(perr.Message, "its owner turned it off for shares; a kept session cannot change login, so start a new session") {
+		t.Fatalf("relaunch on a login turned off for shares: %v; want refused, saying so", perr)
+	}
+	if err := e.db.SetAgentLoginShared(ctx, grace.ID, "claude", "lgn-work000000", true); err != nil {
 		t.Fatal(err)
 	}
 	if _, perr := e.call(t, e.member.ID, protocol.MethodRunRelaunch, protocol.RunIDParams{RunID: string(run.ID)}); perr != nil {
@@ -377,6 +420,68 @@ func TestAnUnnamedStartIsChosenAgainUnderTheMutex(t *testing.T) {
 	defer e.runs.mu.Unlock()
 	if n := len(e.runs.launchOptions); n != 1 || e.runs.launchOptions[0].AccountLogin != "" {
 		t.Fatalf("launches = %+v; want one on the login chosen under the mutex, the default", e.runs.launchOptions)
+	}
+}
+
+// usageByLogin reads each login's used share of its Claude five-hour
+// window.
+type usageByLogin map[domain.Account]float64
+
+func (u usageByLogin) Read(ctx context.Context, member domain.MemberID, refresh bool) ([]quota.Provider, error) {
+	return u.ReadLogin(ctx, domain.AccountOf(member), refresh)
+}
+
+func (u usageByLogin) ReadLogin(_ context.Context, account domain.Account, _ bool) ([]quota.Provider, error) {
+	resets := time.Now().Add(time.Hour)
+	return []quota.Provider{{Provider: "claude", Status: "ok", Windows: []quota.Window{{ID: "five_hour", UsedPercent: u[account], ResetsAt: &resets}}}}, nil
+}
+
+// When the start chosen again under the mutex differs from the one whose
+// usage was read, it is measured itself: a spent start then falls back to
+// the next login with usage left rather than being kept unmeasured.
+func TestAStartChosenAgainIsMeasuredAgain(t *testing.T) {
+	e := newLoginEnv(t)
+	e.seed(t, e.member.ID, "lgn-work000000", "work", "ada@work.example.test")
+	e.seed(t, e.member.ID, "lgn-spare00000", "spare", "ada@spare.example.test")
+	if err := e.db.SetAgentLoginAutomatic(context.Background(), e.member.ID, "claude", "lgn-work000000", false); err != nil {
+		t.Fatal(err)
+	}
+	installUsageStub(e.testEnv, usageByLogin{
+		{Member: e.member.ID, Login: "lgn-work000000"}: 10, domain.AccountOf(e.member.ID): 100, {Member: e.member.ID, Login: "lgn-spare00000"}: 20,
+	})
+	e.runs.mu.Lock()
+	e.runs.startLogins = []domain.LoginID{"lgn-work000000", ""}
+	e.runs.mu.Unlock()
+	if _, perr := e.call(t, e.member.ID, protocol.MethodRunLaunch, protocol.RunLaunchParams{WorkspaceID: string(e.ws.ID), Task: "t", Harness: "claude"}); perr != nil {
+		t.Fatalf("run.launch: %v", perr)
+	}
+	e.runs.mu.Lock()
+	defer e.runs.mu.Unlock()
+	if n := len(e.runs.launchOptions); n != 1 || e.runs.launchOptions[0].AccountLogin != "lgn-spare00000" {
+		t.Fatalf("launches = %+v; want one on spare, past the spent default chosen under the mutex", e.runs.launchOptions)
+	}
+}
+
+// A launch that names no login and starts on one billed per use takes a
+// login with readable usage left first; one that names the per-use login
+// keeps it.
+func TestAnUnnamedStartBilledPerUseYieldsToReadableUsage(t *testing.T) {
+	e := newLoginEnv(t)
+	e.seed(t, e.member.ID, "lgn-console000", "console", "ada@console.example.test")
+	installUsageStub(e.testEnv, usageByLogin{domain.AccountOf(e.member.ID): 10})
+	e.runs.mu.Lock()
+	e.runs.startLogins = []domain.LoginID{"lgn-console000", "lgn-console000"}
+	e.runs.perUse = map[domain.LoginID]bool{"lgn-console000": true}
+	e.runs.mu.Unlock()
+	for _, named := range []string{"", "lgn-console000"} {
+		if _, perr := e.call(t, e.member.ID, protocol.MethodRunLaunch, protocol.RunLaunchParams{WorkspaceID: string(e.ws.ID), Task: "t", Harness: "claude", Login: named}); perr != nil {
+			t.Fatalf("run.launch naming %q: %v", named, perr)
+		}
+	}
+	e.runs.mu.Lock()
+	defer e.runs.mu.Unlock()
+	if n := len(e.runs.launchOptions); n != 2 || e.runs.launchOptions[0].AccountLogin != "" || e.runs.launchOptions[1].AccountLogin != "lgn-console000" {
+		t.Fatalf("launches = %+v; want the unnamed one on the default login and the named one on console", e.runs.launchOptions)
 	}
 }
 

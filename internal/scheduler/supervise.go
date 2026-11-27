@@ -95,11 +95,22 @@ func (s *Scheduler) superviseWait(entry *supervised) {
 	// A sleep stopped the container, or stopped and started it since this
 	// wait began: the exit is the sleep's, and a wake waits anew.
 	if entry.sleepGen != gen || entry.sleeping || !entry.asleepSince.IsZero() {
+		// A VM that stopped while paused in memory sleeps on its disks.
+		stopped := entry.sleepGen == gen && entry.asleepResident
 		if entry.sleepGen == gen {
 			entry.waitStarted = false
 		}
+		if stopped {
+			entry.asleepResident = false
+			if err := s.writeSidecar(entry.sidecar()); err != nil {
+				slog.Warn("scheduler: record that a paused VM stopped", "run", entry.runID, "error", err)
+			}
+		}
 		s.mu.Unlock()
 		entry.lifecycleMu.Unlock()
+		if stopped {
+			s.publishSleep(entry)
+		}
 		return
 	}
 	// A move to another account replaced the container this waited on. A
