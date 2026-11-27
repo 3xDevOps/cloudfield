@@ -27,59 +27,58 @@ func TestRetiringNotice(t *testing.T) {
 		noDate   = "cloudfield: https://old.example.test says it is retiring and that its new address is https://new.example.test.\n"
 		withDate = "cloudfield: https://old.example.test says it is retiring on 2027-03-01 and that its new address is https://new.example.test.\n"
 		confirm  = "Confirm that address with whoever runs the edge before you sign in there.\n"
-		move     = "Move this machine there with:\n"
+		login    = "Sign in there with: cloudfield login --edge https://new.example.test\n"
+		guide    = "Moving links and the sync daemon, and signing out of https://old.example.test: " + movingGuide + "\n"
 	)
-	daemon := []string{"--repo", "/home/a b/app", "--server-id", testServerID, "--edge-url", oldEdge}
+	at := func(links ...cli.NamedLink) cli.Config { return cli.Config{Links: links} }
 	for _, tc := range []struct {
 		name     string
 		notice   edgeclient.Retiring
 		holdings cli.EdgeHoldings
-		daemon   []string
+		daemon   string
 		read     bool
 		want     string
 	}{
-		{"unknown, no date", edgeclient.Retiring{Replacement: newEdge}, cli.EdgeHoldings{SignedIn: []string{oldEdge}}, nil, true,
-			noDate + confirm},
-		{"unknown, with date", edgeclient.Retiring{Replacement: newEdge, Date: "2027-03-01"}, cli.EdgeHoldings{SignedIn: []string{oldEdge}}, nil, true,
-			withDate + confirm},
-		{"unknown, daemon and link at the old address", edgeclient.Retiring{Replacement: newEdge},
-			cli.EdgeHoldings{SignedIn: []string{oldEdge}, Config: cli.Config{EdgeURL: oldEdge, ServerID: testServerID}}, daemon, true,
-			noDate + confirm},
-		{"holdings unreadable", edgeclient.Retiring{Replacement: newEdge}, cli.EdgeHoldings{}, nil, false,
-			noDate + confirm},
-		{"token only: tokens at both", edgeclient.Retiring{Replacement: newEdge}, cli.EdgeHoldings{SignedIn: []string{oldEdge, newEdge + ":443"}}, nil, true,
-			noDate + move + "  cloudfield logout --edge https://old.example.test\n"},
-		{"token at the new address only", edgeclient.Retiring{Replacement: newEdge}, cli.EdgeHoldings{SignedIn: []string{newEdge}}, nil, true,
-			noDate},
-		{"default link, replacement is the built-in edge", edgeclient.Retiring{Replacement: edgeclient.DefaultURL, Date: "2027-03-01"},
-			cli.EdgeHoldings{SignedIn: []string{oldEdge}, Config: cli.Config{EdgeURL: oldEdge, ServerID: testServerID}}, nil, true,
-			"cloudfield: https://old.example.test says it is retiring on 2027-03-01 and that its new address is " + edgeclient.DefaultURL + ".\n" + move +
-				"  cloudfield login --edge " + edgeclient.DefaultURL + "\n" +
-				"  cloudfield link --edge " + edgeclient.DefaultURL + " " + testServerID + "\n" +
-				"  cloudfield logout --edge https://old.example.test\n"},
-		{"named link with --addr, replacement named by another link", edgeclient.Retiring{Replacement: newEdge},
-			cli.EdgeHoldings{SignedIn: []string{oldEdge}, Config: cli.Config{Addr: "box:2222", Links: []cli.NamedLink{
-				{Name: "work box", Addr: "10.0.0.5:2222", EdgeURL: oldEdge + ":443", ServerID: testServerID},
-				{Name: "other", EdgeURL: newEdge, ServerID: "aaaaaaaaaaaaaaaaaaaaaaaaaa"},
-				{Name: "ssh only", Addr: "plain:2222"},
-			}}}, nil, true,
-			noDate + move +
-				"  cloudfield login --edge https://new.example.test\n" +
-				"  cloudfield link --edge https://new.example.test --name 'work box' --addr 10.0.0.5:2222 " + testServerID + "\n" +
-				"  cloudfield logout --edge https://old.example.test\n"},
-		{"daemon unit at the old address", edgeclient.Retiring{Replacement: newEdge}, cli.EdgeHoldings{SignedIn: []string{oldEdge, newEdge}}, daemon, true,
-			noDate + move +
-				"  cloudfield daemon install --repo '/home/a b/app' --server-id " + testServerID + " --edge-url https://new.example.test\n" +
-				"  cloudfield logout --edge https://old.example.test\n"},
-		{"daemon unit at another address", edgeclient.Retiring{Replacement: newEdge}, cli.EdgeHoldings{SignedIn: []string{newEdge}},
-			[]string{"--server", "box:2222", "--repo", "/src"}, true, noDate},
-		{"replacement is the old address", edgeclient.Retiring{Replacement: oldEdge}, cli.EdgeHoldings{SignedIn: []string{oldEdge}}, nil, true, ""},
+		{"unknown, no date", edgeclient.Retiring{Replacement: newEdge}, cli.EdgeHoldings{SignedIn: []string{oldEdge}}, "", true,
+			noDate + confirm + guide},
+		{"unknown, with date", edgeclient.Retiring{Replacement: newEdge, Date: "2027-03-01"}, cli.EdgeHoldings{SignedIn: []string{oldEdge}}, "", true,
+			withDate + confirm + guide},
+		{"unknown, default link and daemon at the old address", edgeclient.Retiring{Replacement: newEdge},
+			cli.EdgeHoldings{SignedIn: []string{oldEdge}, Config: cli.Config{EdgeURL: oldEdge, ServerID: testServerID}}, oldEdge + ":443", true,
+			noDate + confirm + "The default link (server " + testServerID + ") still names https://old.example.test.\n" +
+				"The sync daemon's unit names https://old.example.test.\n" + guide},
+		{"holdings unreadable", edgeclient.Retiring{Replacement: newEdge}, cli.EdgeHoldings{}, "", false,
+			noDate + confirm + guide},
+		{"token at the new address", edgeclient.Retiring{Replacement: newEdge}, cli.EdgeHoldings{SignedIn: []string{oldEdge, newEdge}}, "", true,
+			noDate + guide},
+		{"token at another spelling of the new address", edgeclient.Retiring{Replacement: newEdge}, cli.EdgeHoldings{SignedIn: []string{oldEdge, newEdge + ":443"}}, "", true,
+			noDate + login + guide},
+		{"a named link at the new address, another at the old", edgeclient.Retiring{Replacement: newEdge},
+			cli.EdgeHoldings{SignedIn: []string{oldEdge}, Config: at(
+				cli.NamedLink{Name: "work box", Addr: "10.0.0.5:2222", EdgeURL: oldEdge + ":443", ServerID: testServerID},
+				cli.NamedLink{Name: "other", EdgeURL: newEdge, ServerID: "aaaaaaaaaaaaaaaaaaaaaaaaaa"},
+				cli.NamedLink{Name: "ssh only", Addr: "plain:2222"},
+			)}, "", true,
+			noDate + login + "The link \"work box\" (server " + testServerID + ") still names https://old.example.test.\n" + guide},
+		{"the built-in default named by a self-hosted address", edgeclient.Retiring{Replacement: edgeclient.DefaultURL}, cli.EdgeHoldings{SignedIn: []string{oldEdge}}, "", true,
+			"cloudfield: https://old.example.test says it is retiring and that its new address is " + edgeclient.DefaultURL + ".\n" + confirm + guide},
+		{"daemon unit at another address", edgeclient.Retiring{Replacement: newEdge}, cli.EdgeHoldings{SignedIn: []string{newEdge}}, "https://other.example.test", true,
+			noDate + guide},
+		{"replacement is the old address", edgeclient.Retiring{Replacement: oldEdge}, cli.EdgeHoldings{SignedIn: []string{oldEdge}}, "", true, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := retiringNotice(oldEdge, tc.notice, tc.holdings, tc.daemon, tc.read); got != tc.want {
 				t.Errorf("notice:\n%s\nwant:\n%s", got, tc.want)
 			}
 		})
+	}
+}
+
+// The notice for a hosted address offers sign-in at the built-in edge.
+func TestRetiringNoticeFromAHostedAddress(t *testing.T) {
+	got := retiringNotice(edgeclient.FormerURL, edgeclient.Retiring{Replacement: edgeclient.DefaultURL}, cli.EdgeHoldings{SignedIn: []string{edgeclient.FormerURL}}, "", true)
+	if want := "Sign in there with: cloudfield login --edge " + edgeclient.DefaultURL + "\n"; !strings.Contains(got, want) {
+		t.Fatalf("notice:\n%s\nwant it to contain %q", got, want)
 	}
 }
 
