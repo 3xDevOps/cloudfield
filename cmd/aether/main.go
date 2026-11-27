@@ -22,7 +22,8 @@ func main() {
 	selfupdate.RemoveOld()
 	useResolvConfEnv()
 	err := dispatch(os.Args[1:])
-	if err != nil {
+	var silent exitCode
+	if err != nil && !errors.As(err, &silent) {
 		fmt.Fprintln(os.Stderr, "aether:", err)
 		if output := setupOutput(err); output != "" {
 			fmt.Fprintf(os.Stderr, "setup script output:\n%s\n", strings.TrimRight(output, "\n"))
@@ -32,12 +33,21 @@ func main() {
 	if err != nil {
 		code := 1
 		var status *exitStatusError
-		if errors.As(err, &status) {
+		switch {
+		case errors.As(err, &status):
 			code = status.code
+		case errors.As(err, &silent):
+			code = int(silent)
 		}
 		os.Exit(code)
 	}
 }
+
+// exitCode ends the run with a status whose reason the command already
+// printed, such as a remote command's own.
+type exitCode int
+
+func (c exitCode) Error() string { return fmt.Sprintf("exit status %d", int(c)) }
 
 type exitStatusError struct {
 	code int

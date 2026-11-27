@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -115,6 +117,12 @@ func retiringEdge(t *testing.T, value string) *httptest.Server {
 	})
 	mux.HandleFunc("GET "+edgeproto.PathServers, func(w http.ResponseWriter, _ *http.Request) {
 		reply(w, edgeproto.ServersResponse{})
+	})
+	mux.HandleFunc("GET "+edgeproto.PathConnect, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(edgeproto.HeaderVersion, "1")
+		w.Header().Set(edgeproto.HeaderRetiring, value)
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(edgeproto.ErrorBody{Error: "server is blocked"})
 	})
 	edge = httptest.NewServer(mux)
 	t.Cleanup(edge.Close)
@@ -293,5 +301,38 @@ func TestLogoutAtARetiredAddress(t *testing.T) {
 				t.Fatalf("stdout:\n%s\nwant:\n%s", out, want)
 			}
 		})
+	}
+}
+
+// edge-ssh, which git runs, ends with the remote side's status: the notice
+// its edge answer carried is still printed once, after its own error, and
+// the status is kept.
+func TestEdgeSSHPrintsTheNoticeOnce(t *testing.T) {
+	if os.Getenv("AETHER_EDGE_SSH_NOTICE_HELPER") == "1" {
+		os.Args = []string{os.Args[0], "edge-ssh", "aether@" + cli.EdgeHost(testServerID), "git-upload-pack '/ws.git'"}
+		main()
+		return
+	}
+	testhome.Isolate(t)
+	edge := retiringEdge(t, newEdge)
+	if _, err := captureStdout(t, func() error { return dispatch([]string{"login", "--edge", edge.URL, "--label", "laptop"}) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.Save(cli.Config{EdgeURL: edge.URL, ServerID: testServerID, User: "aether", Repo: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$")
+	cmd.Env = append(os.Environ(), "AETHER_EDGE_SSH_NOTICE_HELPER=1")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 255 {
+		t.Fatalf("edge-ssh = %v, want exit status 255; stderr: %s", err, stderr.String())
+	}
+	out := stderr.String()
+	if strings.Count(out, "says it is retiring") != 1 || strings.Count(out, "aether edge-ssh: ") != 1 || strings.Contains(out, "aether: exit status") ||
+		strings.Index(out, "aether edge-ssh: ") > strings.Index(out, "says it is retiring") {
+		t.Fatalf("stderr = %q, want the refusal, then the notice once", out)
 	}
 }
