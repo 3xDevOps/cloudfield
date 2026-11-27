@@ -26,9 +26,9 @@ type Phase =
   | { name: 'checking' }
   | { name: 'signed-out' }
   | { name: 'waiting'; login: EdgeLogin }
-  | { name: 'signed-in'; edges: SignedInEdge[]; chosen: string | null; all: SignedInEdge[] }
+  | { name: 'signed-in'; edges: SignedInEdge[]; chosen: string | null }
 
-type SignedInEdge = { edge: string; account: EdgeAccount; retiring?: EdgeStatusNotice }
+type SignedInEdge = { edge: string; account: EdgeAccount }
 
 // Pre-wrapped: a server's refusal lists the commands that fix it, one per line.
 function ErrorLine({ children }: { children: string }) {
@@ -43,19 +43,41 @@ type SignIn = {
   signIn: () => Promise<void>
 }
 
-/** Every edge edge.status reports this machine signed in to, and among them
- * the ones that count, only `edge` when the sign-in is for it. */
+/** The edges edge.status reports this machine signed in to, only `edge`
+ * when the sign-in is for it; null when there is none. */
 function signedInPhase(status: EdgeStatus, edge: string | undefined, chosen?: string): Phase | null {
-  const all = status.edges.flatMap((e) => (e.account ? [{ edge: e.edge, account: e.account, retiring: e.retiring }] : []))
-  const edges = all.filter((e) => !edge || e.edge === edge)
+  const edges = status.edges.flatMap((e) => (e.account && (!edge || e.edge === edge) ? [{ edge: e.edge, account: e.account }] : []))
   if (edges.length === 0) return null
-  return { name: 'signed-in', edges, all, chosen: chosen ?? (edges.length === 1 ? edges[0].edge : null) }
+  return { name: 'signed-in', edges, chosen: chosen ?? (edges.length === 1 ? edges[0].edge : null) }
 }
 
-/** phase with each edge's notice as status reports it. */
-function withNotices(phase: Extract<Phase, { name: 'signed-in' }>, status: EdgeStatus): Phase {
-  const notice = (e: SignedInEdge) => ({ ...e, retiring: status.edges.find((s) => s.edge === e.edge)?.retiring })
-  return { ...phase, edges: phase.edges.map(notice), all: phase.all.map(notice) }
+/** edge.status with each edge's retiring notice, for the screen that shows
+ * them: asked while active, and again when the window gets focus. The
+ * latest request wins; a failed one keeps the last answer. */
+function useEdgeNotices(client: Api, active: boolean): EdgeStatus | null {
+  const [status, setStatus] = useState<EdgeStatus | null>(null)
+  useEffect(() => {
+    if (!active) return
+    let latest = 0
+    let live = true
+    const ask = () => {
+      const n = ++latest
+      client.localEdgeStatus(true).then(
+        (answer) => {
+          if (live && n === latest) setStatus(answer)
+        },
+        () => {},
+      )
+    }
+    setStatus(null)
+    ask()
+    window.addEventListener('focus', ask)
+    return () => {
+      live = false
+      window.removeEventListener('focus', ask)
+    }
+  }, [client, active])
+  return active ? status : null
 }
 
 /** The gateway's edge sign-in as edge.status reports it, started here and
@@ -71,7 +93,7 @@ function useEdgeSignIn(client: Api, edge?: string): SignIn {
     setError(null)
     void (async () => {
       try {
-        const status = await client.localEdgeStatus(true)
+        const status = await client.localEdgeStatus()
         if (ignore) return
         const login = !edge || status.login?.edge === edge ? status.login : undefined
         if (login?.state === 'pending') {
@@ -116,28 +138,13 @@ function useEdgeSignIn(client: Api, edge?: string): SignIn {
             } else if (login.state === 'signed_in' && login.account) {
               // Matched on the gateway's own spelling of the edge, not a
               // handed claim's; an answer without its entry yet is polled again.
-              const only = edge === undefined ? undefined : login.edge
-              if (!status.edges.some((e) => e.edge === login.edge && e.account)) {
+              const next = signedInPhase(status, edge === undefined ? undefined : login.edge, login.edge)
+              if (!next) {
                 poll()
                 return
               }
-              client.localEdgeStatus(true).then(
-                (full) => {
-                  if (!live) return
-                  const next = signedInPhase(full, only, login.edge)
-                  if (!next) {
-                    poll()
-                    return
-                  }
-                  setError(null)
-                  setPhase(next)
-                },
-                (err: unknown) => {
-                  if (!live) return
-                  setError(message(err))
-                  poll()
-                },
-              )
+              setError(null)
+              setPhase(next)
             } else if (login.state === 'failed') {
               setError(login.error ?? 'sign in failed')
               setPhase({ name: 'signed-out' })
@@ -160,21 +167,6 @@ function useEdgeSignIn(client: Api, edge?: string): SignIn {
       clearTimeout(timer)
     }
   }, [client, edge, waitingEdge, waitingCode])
-
-  // Notices are asked for on entering and when the window gets focus,
-  // never while polling.
-  const signedIn = phase.name === 'signed-in'
-  useEffect(() => {
-    if (!signedIn) return
-    const refresh = () => {
-      client.localEdgeStatus(true).then(
-        (status) => setPhase((p) => (p.name === 'signed-in' ? withNotices(p, status) : p)),
-        (err: unknown) => setError(message(err)),
-      )
-    }
-    window.addEventListener('focus', refresh)
-    return () => window.removeEventListener('focus', refresh)
-  }, [client, signedIn])
 
   const signIn = async () => {
     setStarting(true)
@@ -288,7 +280,13 @@ export function EdgeSignIn({
   const claimEdge = claim === undefined ? undefined : parseClaim(claim)?.edge
   const signIn = useEdgeSignIn(client, claimEdge)
   const { phase, setPhase } = signIn
-  const signedIn = phase.name === 'signed-in' ? phase.all : []
+  const notices = useEdgeNotices(client, phase.name === 'signed-in')
+  const chosenGone =
+    notices !== null && phase.name === 'signed-in' && phase.chosen !== null &&
+    !notices.edges.some((e) => e.edge === phase.chosen && e.account)
+  useEffect(() => {
+    if (chosenGone && notices) setPhase(signedInPhase(notices, claimEdge) ?? { name: 'signed-out' })
+  }, [chosenGone, notices, claimEdge, setPhase])
   const picked = phase.name === 'signed-in' ? phase.edges.find((e) => e.edge === phase.chosen) : undefined
   const signedOut = phase.name === 'signed-out'
   useEffect(() => {
@@ -322,15 +320,15 @@ export function EdgeSignIn({
         />
       )}
       {phase.name === 'signed-in' &&
-        phase.edges.map((e) => e.edge !== picked?.edge && retiringNotice(e, phase.all))}
+        phase.edges.map((e) => e.edge !== picked?.edge && retiringNotice(e.edge, notices))}
       {picked && (
         <ServerPicker
           key={`${picked.edge} ${claim ?? ''}`}
           client={client}
           edge={picked.edge}
           account={picked.account}
-          notice={retiringNotice(picked, signedIn)}
-          retired={picked.retiring?.state === 'retired'}
+          notice={retiringNotice(picked.edge, notices)}
+          retired={notices?.edges.find((e) => e.edge === picked.edge)?.retiring?.state === 'retired'}
           claim={claim}
           onHand={onHand}
           onLinked={onLinked}
@@ -497,11 +495,14 @@ function JoinPanel({
   )
 }
 
-function retiringNotice(e: SignedInEdge, all: SignedInEdge[]) {
-  if (!e.retiring) return null
+/** edge's notice and whether this machine is signed in at its replacement,
+ * both from the one answer notices. */
+function retiringNotice(edge: string, notices: EdgeStatus | null) {
+  const notice = notices?.edges.find((e) => e.edge === edge)?.retiring
+  if (!notice) return null
   // Tokens are per exact origin: another spelling is another sign-in.
-  const signedInThere = all.some((o) => o.edge === e.retiring!.replacement)
-  return <RetiringNotice key={e.edge} edge={e.edge} notice={e.retiring} signedInThere={signedInThere} />
+  const signedInThere = notices!.edges.some((o) => o.edge === notice.replacement && o.account)
+  return <RetiringNotice key={edge} edge={edge} notice={notice} signedInThere={signedInThere} />
 }
 
 /** What an edge address says of itself, as text: nothing authenticates

@@ -2,7 +2,8 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import type { EdgeStatusNotice, EdgeStatus, GatewayCapabilities, LinkStatus, ServerEdge } from '@/lib/types'
 import { forgetHandedLink } from '@/lib/url-state'
 import { OnboardingRoute } from '@/routes/onboarding'
-import { EdgeSignIn } from '@/routes/onboarding/edge-link'
+import { EdgeSignIn, JoinLink } from '@/routes/onboarding/edge-link'
+import { capability } from '@/lib/capability'
 import { useStore } from '@/store'
 import { fakeApi, serverInfo, workspace } from '@/test/fixtures'
 
@@ -84,11 +85,43 @@ afterEach(() => {
 })
 
 describe('a signed-in edge that says its address is retiring', () => {
-  it('shows nothing without a notice, and asks for notices on entering', async () => {
+  it('shows nothing without a notice, and asks for notices apart from the sign-in', async () => {
     seed()
     const client = await open()
     expect(noticeText()).toBeNull()
-    expect(client.localEdgeStatus).toHaveBeenCalledWith(true)
+    expect(vi.mocked(client.localEdgeStatus).mock.calls.map(([notices]) => !!notices)).toEqual([false, true])
+  })
+
+  it('takes the new address\'s sign-in from the same answer as the notice', async () => {
+    seed()
+    const client = await open({ state: 'retiring', replacement: next }, [next])
+    expect(noticeText()).toContain('You are already signed in at https://new.example.test.')
+    vi.mocked(client.localEdgeStatus).mockResolvedValue({ edges: [{ edge, account, retiring: { state: 'retiring', replacement: next } }] })
+    window.dispatchEvent(new Event('focus'))
+    await vi.waitFor(() => expect(noticeText()).toContain('Confirm that address with whoever runs the edge'))
+  })
+
+  it('keeps the latest answer when a slower earlier one arrives after it', async () => {
+    seed()
+    const client = await open()
+    let first: (s: EdgeStatus) => void = () => {}
+    vi.mocked(client.localEdgeStatus)
+      .mockImplementationOnce(() => new Promise((resolve) => (first = resolve)))
+      .mockResolvedValueOnce({ edges: [{ edge, account, retiring: { state: 'retired', replacement: next } }] })
+    window.dispatchEvent(new Event('focus'))
+    window.dispatchEvent(new Event('focus'))
+    await vi.waitFor(() => expect(noticeText()).toContain('says it is retired'))
+    first({ edges: [{ edge, account, retiring: { state: 'retiring', replacement: 'https://other.example.test' } }] })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(noticeText()).toContain('says it is retired')
+  })
+
+  it('goes back to signing in when the chosen edge was signed out elsewhere', async () => {
+    seed()
+    const client = await open()
+    vi.mocked(client.localEdgeStatus).mockResolvedValue({ edges: [] })
+    window.dispatchEvent(new Event('focus'))
+    expect(await screen.findByRole('button', { name: 'Sign in with GitHub' })).toBeDefined()
   })
 
   it('takes a sign-in at another spelling of the new address for none', async () => {
@@ -154,7 +187,37 @@ describe('a signed-in edge that says its address is retiring', () => {
     expect(await screen.findByText('WDJB-MJHT')).toBeDefined()
     done = true
     await vi.waitFor(() => expect(noticeText()).not.toBeNull(), { timeout: 5000 })
-    expect(vi.mocked(client.localEdgeStatus).mock.calls.filter(([notices]) => notices).length).toBe(2)
+    expect(vi.mocked(client.localEdgeStatus).mock.calls.filter(([notices]) => notices).length).toBe(1)
+  })
+
+  it('finishes a sign-in while the notices cannot be read', async () => {
+    vi.spyOn(window, 'open').mockReturnValue(null)
+    const login = { edge, signin_origin: edge, user_code: 'WDJB-MJHT', verification_uri: `${edge}/device` }
+    let done = false
+    const client = fakeApi({
+      localEdgeStatus: vi.fn(async (notices?: boolean): Promise<EdgeStatus> => {
+        if (notices) throw new Error('edge.status: the gateway is restarting')
+        return done ? { edges: [{ edge, account }], login: { ...login, state: 'signed_in', account } } : { edges: [], login: { ...login, state: 'pending' } }
+      }),
+      localEdgeServers: vi.fn(async () => ({ edge, servers: [] })),
+    })
+    render(<EdgeSignIn client={client} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} />)
+    expect(await screen.findByText('WDJB-MJHT')).toBeDefined()
+    done = true
+    await vi.waitFor(() => expect(screen.getByText((_, el) => el?.tagName === 'P' && /^Signed in to old\.example\.test as/.test(el.textContent ?? ''))).toBeDefined(), { timeout: 5000 })
+  })
+
+  it('asks for no notices on a join link', async () => {
+    const client = fakeApi({
+      localEdgeStatus: vi.fn(async (): Promise<EdgeStatus> => ({ edges: [{ edge, account }] })),
+      localEdgeServers: vi.fn(async () => ({ edge, servers: [] })),
+    })
+    const link = `${edge}/join/${serverEdge.server_id}/inv-7k2m9q4xbd#abcdefghijklmnop`
+    render(<JoinLink client={client} caps={capability(localCaps)} link={link} onLinked={vi.fn()} />)
+    await vi.waitFor(() => expect(client.localEdgeStatus).toHaveBeenCalled())
+    window.dispatchEvent(new Event('focus'))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(vi.mocked(client.localEdgeStatus).mock.calls.every(([notices]) => !notices)).toBe(true)
   })
 
   it('keeps waiting while a finished sign-in has no entry yet', async () => {
