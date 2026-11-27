@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/3xDevOps/cloudfield/internal/disk"
 )
 
 const (
@@ -74,6 +76,12 @@ func (s *Store) NewCacheDisk(ctx context.Context, pool, path string) (Disk, erro
 		return Disk{}, fmt.Errorf("vmimage: cache disk %s: %w", path, err)
 	}
 	return Disk{Path: path, Format: FormatRaw}, nil
+}
+
+// DropCacheDisk removes the cache disk at path and the link to the cache it
+// was made over. A snapshot SnapshotCache took of it stays whole.
+func DropCacheDisk(path string) error {
+	return errors.Join(removeIfExists(path), prunePins(path, ""))
 }
 
 func validPool(pool string) bool {
@@ -146,8 +154,9 @@ func (s *Store) extendsNewest(dir, snapshot string) bool {
 }
 
 // SnapshotCache links a stopped VM's cache disk, and a qcow2 one's base,
-// into the store for PromoteCache, so the VM may be deleted meanwhile. A VM
-// that starts again first takes a disk of its own with UnshareCache.
+// into the store for PromoteCache, so the disk may be deleted meanwhile. A
+// VM that starts again on that disk first takes one of its own with
+// UnshareCache.
 func (s *Store) SnapshotCache(disk Disk) (string, error) {
 	work, err := os.MkdirTemp(s.tmpDir(), fmt.Sprintf("snapshot-%d-", time.Now().UnixNano()))
 	if err != nil {
@@ -192,13 +201,51 @@ func (s *Store) UnshareCache(ctx context.Context, disk Disk) error {
 	return nil
 }
 
+// reservePromotion holds, until release, the room a promotion of cache may
+// take on the store's filesystem: a copy of cache, and for one read over
+// base a copy of base and cache's blocks again, which land in that copy's
+// holes. It refuses a promotion that would leave less free than disk
+// reclaim keeps, counting what the promotions under way hold: reclaim would
+// delete sessions' state to make up a dip that ends with the promotion.
+func (s *Store) reservePromotion(cache, base string) (release func(), err error) {
+	if s.minFree < 0 {
+		return func() {}, nil
+	}
+	info, err := os.Stat(cache)
+	if err != nil {
+		return nil, err
+	}
+	need := uint64(info.Sys().(*syscall.Stat_t).Blocks) * 512
+	if info, err = os.Stat(base); err == nil {
+		need = 2*need + uint64(info.Sys().(*syscall.Stat_t).Blocks)*512
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := disk.Filesystem(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	floor := disk.Reserve(data.TotalBytes, s.minFree) + disk.ReclaimHeadroom
+	if data.FreeBytes < floor+s.promoting+need {
+		return nil, fmt.Errorf("skipped: it may write %d bytes and other promotions hold %d more, and %s has %d free with %d to keep free",
+			need, s.promoting, s.dir, data.FreeBytes, floor)
+	}
+	s.promoting += need
+	return func() {
+		s.mu.Lock()
+		s.promoting -= need
+		s.mu.Unlock()
+	}, nil
+}
+
 // PromoteCache writes a snapshot SnapshotCache took as a raw disk, a copy
 // of a qcow2 one read over its base, and makes that pool's newest cache, or
 // drops the pool's caches when it takes more than cacheLimit, then deletes
 // the snapshot and every cache of the pool no disk uses. A snapshot that
 // does not extend the pool's newest cache changes nothing and is not copied,
 // so a session that started from an older cache never replaces what another
-// has promoted since.
+// has promoted since; nor does one the store's filesystem has no room to
+// write.
 func (s *Store) PromoteCache(pool, snapshot string) error {
 	defer func() { _ = os.RemoveAll(snapshot) }()
 	if !validPool(pool) {
@@ -213,7 +260,13 @@ func (s *Store) PromoteCache(pool, snapshot string) error {
 		return errors.Join(os.RemoveAll(snapshot), s.sweepCachesLocked(dir))
 	}
 	disk, cache, base := filepath.Join(snapshot, "disk.raw"), filepath.Join(snapshot, "cache"), filepath.Join(snapshot, "base.raw")
-	var err error
+	release, err := s.reservePromotion(cache, base)
+	if err != nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return errors.Join(fmt.Errorf("vmimage: promote cache: %w", err), os.RemoveAll(snapshot), s.sweepCachesLocked(dir))
+	}
+	defer release()
 	if _, statErr := os.Stat(base); statErr == nil {
 		top := filepath.Join(snapshot, "top.qcow2")
 		if err = copyDisk(ctx, cache, top); err == nil {

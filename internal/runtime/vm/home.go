@@ -9,6 +9,7 @@ import (
 
 	"github.com/3xDevOps/cloudfield/internal/guest/home"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
+	"github.com/3xDevOps/cloudfield/internal/vmimage"
 )
 
 // checkouts lists a spec's checkout and extra worktrees, in Docker's order.
@@ -52,29 +53,44 @@ func cachePool(m runtime.Mount) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// promoteCache makes the cache of a VM that stopped for good, by a clean
-// stop or a deletion while stopped or saved, its pool's newest, so the
-// member's next session starts from it. A save alone never promotes, and a
-// disk that may lack the guest's last writes never does. It links the disk
-// under the key's lock and copies and publishes it in the background. An
-// Isolated session's cache, an overlay in a container, never goes back.
-func (e *engine) promoteCache(rec *record) {
-	m, ok := cacheMount(rec.Mounts)
-	if !ok || !rec.CacheRan || !rec.CacheSynced || m.Overlay != "" {
-		return
-	}
-	snapshot, err := e.cfg.Images.SnapshotCache(rec.Cache)
-	if err != nil {
-		slog.Warn("vm runtime: link the cache of a stopped VM", "vm", rec.Key, "error", err)
-		return
-	}
-	rec.CacheRan = false
-	if err := e.store(rec); err != nil {
-		slog.Warn("vm runtime: record the cache promotion", "vm", rec.Key, "error", err)
-	}
-	e.promotions.Go(func() {
-		if err := e.cfg.Images.PromoteCache(cachePool(m), snapshot); err != nil {
-			slog.Warn("vm runtime: promote the cache of a stopped VM", "vm", rec.Key, "error", err)
+// retireCache takes the cache disk from a VM that stopped for good, by a
+// stop or a deletion while stopped or saved: its next cold start makes one
+// over its pool's newest cache. A disk that holds the guest's last writes
+// becomes that newest first, so the member's next session starts from it:
+// it is linked under the key's lock, then copied and published in the
+// background. A save alone never retires, and an Isolated session's cache,
+// an overlay in a container, never goes back.
+func (e *engine) retireCache(rec *record) {
+	if m, ok := cacheMount(rec.Mounts); ok && rec.CacheRan && rec.CacheSynced && m.Overlay == "" {
+		snapshot, err := e.cfg.Images.SnapshotCache(rec.Cache)
+		if err != nil {
+			slog.Warn("vm runtime: link the cache of a stopped VM", "vm", rec.Key, "error", err)
+		} else {
+			e.promotions.Go(func() {
+				if err := e.cfg.Images.PromoteCache(cachePool(m), snapshot); err != nil {
+					slog.Warn("vm runtime: promote the cache of a stopped VM", "vm", rec.Key, "error", err)
+				}
+			})
 		}
-	})
+	}
+	e.dropCache(rec)
+}
+
+// dropCache removes a stopped VM's cache disk. The record lets go of the
+// disk before the files do, so a server that stops in between leaves files
+// the next one removes.
+func (e *engine) dropCache(rec *record) {
+	if _, ok := cacheMount(rec.Mounts); !ok {
+		return
+	}
+	if rec.Cache.Path != "" {
+		rec.Cache, rec.CacheRan = vmimage.Disk{}, false
+		if err := e.store(rec); err != nil {
+			slog.Warn("vm runtime: record the removal of a stopped VM's cache disk", "vm", rec.Key, "error", err)
+			return
+		}
+	}
+	if err := vmimage.DropCacheDisk(e.path(rec.Key, cacheDisk)); err != nil {
+		slog.Warn("vm runtime: remove the cache disk of a stopped VM", "vm", rec.Key, "error", err)
+	}
 }
