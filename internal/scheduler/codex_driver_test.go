@@ -114,9 +114,6 @@ func TestStandardCodexRunsThroughItsAppServer(t *testing.T) {
 	srv.SetStatus("thread-1", "active")
 	srv.SetStatus("thread-1", "idle")
 	e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
-	if reads := srv.Requests("thread/turns/list"); len(reads) != 0 {
-		t.Fatalf("thread/turns/list = %s, want no read of a session with no parent", reads)
-	}
 	waitFor(t, "the recorded session", func() bool {
 		r, err := e.db.GetRun(t.Context(), run.ID)
 		return err == nil && r.HarnessSessionID == "thread-1"
@@ -280,6 +277,91 @@ func TestStandardCodexChildForwardsItsLastMessage(t *testing.T) {
 		calls := coord.provisionalReports()
 		return len(calls) == 1 && calls[0].run == child.ID && calls[0].message == "pong"
 	})
+}
+
+// A Standard Codex turn cut off with Esc is not asked for a report, nor is one
+// with no agent message, as a !command or /compact lists. A turn the agent
+// answered without a report is asked once, in a turn its app-server starts,
+// and a parent gets the asked turn's message.
+func TestStandardCodexTurnWithoutAReportIsAskedOnce(t *testing.T) {
+	shortProvisionalGrace(t)
+	e, rt, coord := newCodexEnv(t)
+	coord.remind = e.sched.Wake
+	parent, _ := e.launchFake(t, "parent")
+	child := launchChildRun(t, e, parent, "codex", domain.LaunchTUI)
+	srv, _ := rt.bridge(t, 1)
+	dialed(t, srv, 1)
+	srv.StartThread("thread-1", false, "")
+	waitFor(t, "the connected client", func() bool { return e.sched.Wakeable(child.ID) })
+	prompt := func() *domain.Run {
+		t.Helper()
+		if _, err := e.sched.Inject(t.Context(), child.ID, e.member.ID, domain.AgentPrompt{Text: "say pong"}, false, nil); err != nil {
+			t.Fatal(err)
+		}
+		e.waitAgentWorking(t, child.ID)
+		return e.waitStoreStatus(t, child.ID, domain.RunRunning)
+	}
+
+	prompt()
+	srv.EndTurn("thread-1", "interrupted", "looking")
+	e.waitStoreStatus(t, child.ID, domain.RunNeedsAttention)
+	prompt()
+	srv.EndTurn("thread-1", "completed")
+	e.waitStoreStatus(t, child.ID, domain.RunNeedsAttention)
+
+	working := prompt()
+	srv.EndTurn("thread-1", "completed", "pong")
+	waitFor(t, "the reminder's turn", func() bool { return len(srv.Requests("turn/start")) == 4 })
+	if r := e.waitStoreStatus(t, child.ID, domain.RunRunning); r.StatusSeq != working.StatusSeq {
+		t.Fatalf("status seq %d once reminded, want %d: the asked turn's end is not shown", r.StatusSeq, working.StatusSeq)
+	}
+	srv.EndTurn("thread-1", "completed", "reported")
+	e.waitStoreStatus(t, child.ID, domain.RunNeedsAttention)
+	want := []string{"say pong", "say pong", "say pong", reminderPrefix + " (answered, waiting, needs-input, blocked, success or failure) before ending the turn."}
+	if got := promptTexts(t, srv.Requests("turn/start")); !slices.Equal(got, want) {
+		t.Fatalf("turn/start inputs = %q, want %q", got, want)
+	}
+	waitFor(t, "the asked turn's message at the parent", func() bool {
+		calls := coord.provisionalReports()
+		return len(calls) > 0 && calls[len(calls)-1].run == child.ID && calls[len(calls)-1].message == "pong"
+	})
+}
+
+// A restarted server finds a Standard Codex thread idle after a turn nobody
+// reported. No turn ends there, so the session is not asked.
+func TestRecoveredStandardCodexIsNotAskedForAnOldTurn(t *testing.T) {
+	t.Parallel()
+	e, rt, coord := newCodexEnv(t)
+	run, _ := e.launchOn(t, "codex")
+	srv, _ := rt.bridge(t, 1)
+	dialed(t, srv, 1)
+	srv.StartThread("thread-1", false, "")
+	waitFor(t, "the connected client", func() bool { return e.sched.Wakeable(run.ID) })
+	if _, err := e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "say pong"}, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	e.waitAgentWorking(t, run.ID)
+	srv.EndTurn("thread-1", "completed", "pong")
+	waitFor(t, "the turn's end", func() bool { return len(coord.idleWakeRuns()) == 2 })
+	binDir := e.sched.coordinationSeam().binDir
+	if err := e.sched.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	cfg := e.cfg
+	cfg.PTY = newFakePTY()
+	s2, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s2.Close() })
+	s2.UseCoordination(coord, binDir)
+	coord.remind = s2.Wake
+	startScheduler(t, s2)
+	waitFor(t, "the idle thread's report", func() bool { return len(coord.idleWakeRuns()) == 3 })
+	if starts := srv.Requests("turn/start"); len(starts) != 1 {
+		t.Fatalf("turn/start = %s, want the member's prompt only", starts)
+	}
 }
 
 // A bridge whose attachment is lost while the terminal goes on is replaced.

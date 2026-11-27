@@ -110,8 +110,8 @@ func (d *appServerDriver) Deliver(ctx context.Context, run *domain.Run, member *
 	return "", d.pty.Annotate(ctx, ptyhost.RunSession(run.ID), member.DisplayName, member.Color, text)
 }
 
-// wake hands mail to the run's terminal. A turn it starts is the server's,
-// which does not answer a question the run shows.
+// wake hands mail or a report reminder to the run's terminal. A turn it
+// starts is the server's, which does not answer a question the run shows.
 func (d *appServerDriver) wake(ctx context.Context, run domain.RunID, prompt string) error {
 	client := d.connected(run)
 	if client == nil {
@@ -378,14 +378,39 @@ func (d *appServerDriver) status(entry *supervised, r *appServerRun, thread stri
 			case codexapp.Failed:
 				report.Reason = agentstatus.ReasonFailed
 			case codexapp.Idle:
-				if d.s.hasParent(entry.runID) {
+				if c := d.s.coordinationSeam(); c != nil && c.enabled {
 					ctx, cancel := context.WithTimeout(r.ctx, acpSteerTimeout)
 					message, interrupted, err := client.LastMessage(ctx, thread)
-					cancel()
 					if err != nil {
-						slog.Warn("scheduler: read a Codex subsession's last message", "run", entry.runID, "error", err)
+						slog.Warn("scheduler: read a Standard Codex session's last turn", "run", entry.runID, "error", err)
 					}
 					report.LastMessage, report.Interrupted = message, interrupted
+					d.s.mu.Lock()
+					working := entry.agentReport.State == agentstatus.Working
+					d.s.mu.Unlock()
+					// Only a turn that ends here is held, not the idle thread a
+					// connection finds, and only one the agent answered: a
+					// !command and /compact are completed turns too, with no
+					// agent message.
+					reminded := false
+					if working && message != "" {
+						reminder, holdErr := d.s.HoldTurnEnd(ctx, entry.runID, message)
+						if holdErr != nil {
+							slog.Warn("scheduler: check the ending turn's report", "run", entry.runID, "error", holdErr)
+						}
+						if reminder != "" {
+							remindErr := c.svc.RemindReport(ctx, entry.runID, reminder)
+							if remindErr != nil {
+								slog.Info("scheduler: the report reminder was not sent", "run", entry.runID, "error", remindErr)
+							}
+							reminded = remindErr == nil
+						}
+					}
+					cancel()
+					if reminded {
+						// The reminder's turn reports its own end.
+						continue
+					}
 				}
 			}
 			if status == codexapp.Idle || status == codexapp.Failed {

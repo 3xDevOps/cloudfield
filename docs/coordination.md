@@ -1632,7 +1632,20 @@ reported. If the server cannot check, the stop is applied. If neither a hook
 nor terminal output follows the hold for a minute, as when the answer never
 reached Claude Code, the server ends the turn itself. Enhanced sessions get
 the same rule as a [report reminder](enhanced-sessions.md#report-reminder)
-prompt. Background sessions, and Standard sessions of other agents, are not held.
+prompt. So does a Standard Codex session, which loads no hooks. When its
+thread goes idle, the server reads the thread's last turn from the app-server
+(`thread/turns/list`). If that turn is `completed`, has an agent message
+and owes a report, the server does not show it as ended: it sends the
+reminder as a new turn, under the reminder's admission, and applies the end
+of that turn whatever it reported. An `interrupted` turn, as after Esc, is
+never held, nor is a `!command` or `/compact`, which the app-server lists as
+a `completed` turn with no agent message. A session that was idle before a
+server restart is not asked again after it. If the read fails, the turn is
+not held and the server logs the error: Codex 0.131.0 refuses the read with
+`thread/turns/list requires experimentalApi capability`, and 0.167.2 answers
+it. If admission refuses the reminder, the turn ends as it would have.
+Background sessions, and Standard sessions of pi, oh-my-pi and OpenCode, are
+not held.
 
 `run.report` carries the agent's last message in one case: the turn end of a
 Standard subsession, which the server forwards to its parent as the
@@ -1647,13 +1660,14 @@ message. The server keeps the held message in memory only, so after a server
 restart the stop that follows the reminder forwards its own. A Claude Code
 `SessionEnd` hook's `run.report` carries `session_end: true` and forwards
 nothing: `/clear` and `/exit` end no turn, and a turn cut off with Esc sends
-no `Stop`. For Codex, which loads no hooks, the server reads the thread's
-last turn from the app-server, for a subsession only. A `completed` turn
-forwards its last agent message, and an `interrupted` one, as after Esc,
-forwards nothing. If the read fails, the report reads `(none)` and the server
-logs the error. A session with no parent sends and reads neither. A
-subsession that a handoff detached from its parent still does, and the server
-discards the message.
+no `Stop`. For Codex, the message comes from the same read of the thread's
+last turn. A `completed` turn forwards its last agent message, and an
+`interrupted` one, as after Esc, forwards nothing. A reminded turn forwards
+its own message, not the reminder turn's. If the read fails, the report reads
+`(none)` and the server logs the error. A Claude Code session with no parent
+sends no message, and the server forwards none of a Codex one's. A subsession
+that a handoff detached from its parent still sends its message or has it
+read, and the server discards it.
 
 Coordination also does not provide a universal inbound terminal hook. When a
 human messages a Standard session, Cloudfield delivers the message through the
