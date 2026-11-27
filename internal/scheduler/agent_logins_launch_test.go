@@ -1014,6 +1014,23 @@ func TestADefaultLoginSignedInBySettingsIsBilledPerUse(t *testing.T) {
 	}
 }
 
+// A subscription token set as CLAUDE_CODE_OAUTH_TOKEN under env in
+// ~/.claude/settings.json is no sign of a login billed per use.
+func TestADefaultLoginWithASubscriptionTokenInSettingsIsNotBilledPerUse(t *testing.T) {
+	e := newLoginShareEnv(t)
+	writeHomeFile(t, e.adaHome, ".claude.json", `{"numStartups":2}`)
+	writeHomeFile(t, e.adaHome, ".claude/.credentials.json", workLogin)
+	e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	writeHomeFile(t, e.adaHome, ".claude/settings.json", `{"env":{"CLAUDE_CODE_OAUTH_TOKEN":"test-setup-token"}}`)
+	run, err := e.launchOn(t, domain.Account{Member: e.member.ID}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.AccountLoginPerUse {
+		t.Fatal("Ada's default login with a subscription token in her settings is marked billed per use")
+	}
+}
+
 // Claude Code sends a subscription sign-in that expired with no refresh
 // token ahead of a Console sign-in beside it, and fails. Beside added
 // logins such a default login is passed over by a launch that names none.

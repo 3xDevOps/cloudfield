@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -490,8 +491,8 @@ func (s *Scheduler) ChildLogin(ctx context.Context, workspace domain.WorkspaceID
 // LoginPerUse reports whether login of agent, in a session in home's home,
 // is billed per use: a Console login, or, once home keeps login rows, home's
 // own default login kept as an API key or a Console profile or signed in by
-// ~/.claude/settings.json, which Claude Code prefers to its login file.
-// Another member's default login is shared only as a subscription, and a
+// ~/.claude/settings.json other than with a subscription token, which Claude
+// Code prefers to its login file. Another member's default login is shared only as a subscription, and a
 // member who keeps no rows is shown as before logins existed. A default
 // login whose files cannot be read is not billed per use: the flag only
 // orders and labels, and the read must not fail what would run.
@@ -525,8 +526,13 @@ func (s *Scheduler) loginBilling(ctx context.Context, home domain.MemberID, logi
 	if keeps, err := s.cfg.Store.ListAgentLogins(ctx, login.Member, agent); err != nil || len(keeps) == 0 {
 		return false, false, err
 	}
-	if key, _ := s.settingsSignIn(home, agent); key != "" {
-		return true, false, nil
+	if settings, settingsErr := s.cfg.Homes.ClaudeSettings(home); settingsErr == nil && agent == "claude" {
+		// A subscription's own token, as `claude setup-token` makes it.
+		env := maps.Clone(settings.Env)
+		delete(env, "CLAUDE_CODE_OAUTH_TOKEN")
+		if settings.APIKeyHelper || signingKey(env, agent, "") != "" {
+			return true, false, nil
+		}
 	}
 	identity, idErr := s.cfg.Homes.DefaultIdentity(login.Member, agent)
 	return identity.PerUse(), idErr != nil && identity.Kind == "", nil
