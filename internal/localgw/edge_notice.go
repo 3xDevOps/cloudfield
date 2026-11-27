@@ -3,9 +3,12 @@ package localgw
 import (
 	"context"
 	"errors"
+	"net/http"
+	"slices"
 	"sync"
 	"time"
 
+	"github.com/3xDevOps/cloudfield/internal/cli"
 	edgeclient "github.com/3xDevOps/cloudfield/internal/edge/client"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 )
@@ -35,80 +38,113 @@ type edgeNotice struct {
 // edgeNotices caches each signed-in edge's notice by relay origin.
 type edgeNotices struct {
 	mu  sync.Mutex
-	by  map[string]cachedNotice
+	by  map[string]*cachedNotice
 	now func() time.Time
 }
 
+// cachedNotice is one edge's entry. A result is kept only while the entry
+// is still the one in the map, so a late answer from before a logout or a
+// new sign-in is dropped.
 type cachedNotice struct {
 	notice *edgeNotice
 	// checked is when the edge was last asked, answered when it last
 	// answered.
 	checked, answered time.Time
+	// asking is closed when the ask in flight ends, nil without one.
+	asking chan struct{}
 }
 
 func newEdgeNotices() *edgeNotices {
-	return &edgeNotices{by: map[string]cachedNotice{}, now: time.Now}
+	return &edgeNotices{by: map[string]*cachedNotice{}, now: time.Now}
 }
 
-// lookup returns the notice of each of origins that has one, asking in
-// parallel every edge not asked within noticeRecheck.
-func (n *edgeNotices) lookup(ctx context.Context, dir string, origins []string) map[string]edgeNotice {
-	var wg sync.WaitGroup
+// lookup returns the notice of each of origins, the signed-in edges, that
+// has one. It forgets every other edge and asks, under life, each edge not
+// asked within noticeRecheck. Callers share an ask in flight and wait for
+// it at most noticeTimeout, and no longer than ctx.
+func (n *edgeNotices) lookup(life, ctx context.Context, dir string, origins []string) map[string]edgeNotice {
 	n.mu.Lock()
+	for origin := range n.by {
+		if !slices.Contains(origins, origin) {
+			delete(n.by, origin)
+		}
+	}
 	now := n.now()
+	var waits []chan struct{}
 	for _, origin := range origins {
 		entry := n.by[origin]
-		if now.Sub(entry.checked) < noticeRecheck {
-			continue
-		}
-		entry.checked = now
-		n.by[origin] = entry
-		wg.Go(func() {
-			notice, err := askNotice(ctx, dir, origin)
-			n.mu.Lock()
-			defer n.mu.Unlock()
-			entry, ok := n.by[origin]
-			if !ok {
-				return
-			}
-			if err == nil {
-				entry.notice, entry.answered = notice, n.now()
-			}
+		if entry == nil {
+			entry = &cachedNotice{}
 			n.by[origin] = entry
-		})
+		}
+		if entry.asking == nil && now.Sub(entry.checked) >= noticeRecheck {
+			entry.checked, entry.asking = now, make(chan struct{})
+			go n.ask(life, dir, origin, entry)
+		}
+		if entry.asking != nil {
+			waits = append(waits, entry.asking)
+		}
 	}
 	n.mu.Unlock()
-	wg.Wait()
+	timeout := time.NewTimer(noticeTimeout)
+	defer timeout.Stop()
+wait:
+	for _, done := range waits {
+		select {
+		case <-done:
+		case <-timeout.C:
+			break wait
+		case <-ctx.Done():
+			break wait
+		}
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	out := map[string]edgeNotice{}
 	now = n.now()
 	for _, origin := range origins {
-		if entry := n.by[origin]; entry.notice != nil && now.Sub(entry.answered) <= noticeMaxAge {
+		if entry := n.by[origin]; entry != nil && entry.notice != nil && now.Sub(entry.answered) <= noticeMaxAge {
 			out[origin] = *entry.notice
 		}
 	}
 	return out
 }
 
+func (n *edgeNotices) ask(life context.Context, dir, origin string, entry *cachedNotice) {
+	ctx, cancel := context.WithTimeout(life, noticeTimeout)
+	defer cancel()
+	notice, err := askNotice(ctx, dir, origin)
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	close(entry.asking)
+	entry.asking = nil
+	if err == nil && n.by[origin] == entry {
+		entry.notice, entry.answered = notice, n.now()
+	}
+}
+
 // askNotice reads origin's notice, nil when it carries none. A refusal
-// as retired is a notice too; any other failure is an error, which keeps
-// what the cache holds.
+// as retired is a notice too, and a 410 without a replacement clears it;
+// any other failure is an error, which keeps what the cache holds.
 func askNotice(ctx context.Context, dir, origin string) (*edgeNotice, error) {
 	client, err := edgeclient.New(dir, origin)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, noticeTimeout)
-	defer cancel()
+	defer client.CloseIdleConnections()
 	r, ok, err := client.RetiringNotice(ctx)
 	var refused *edgeclient.RefusedError
 	switch {
 	case errors.As(err, &refused) && refused.Retired != "":
+		if cli.SameEdge(origin, refused.Retired) {
+			return nil, nil
+		}
 		return &edgeNotice{State: edgeproto.NoticeRetired, Replacement: refused.Retired}, nil
+	case errors.As(err, &refused) && refused.Status == http.StatusGone:
+		return nil, nil
 	case err != nil:
 		return nil, err
-	case !ok:
+	case !ok || cli.SameEdge(origin, r.Replacement):
 		return nil, nil
 	}
 	return &edgeNotice{State: edgeproto.NoticeRetiring, Replacement: r.Replacement, Date: r.Date}, nil

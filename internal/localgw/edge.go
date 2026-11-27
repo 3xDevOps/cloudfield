@@ -264,9 +264,7 @@ func (g *Gateway) localEdgeStatus(r *http.Request, _ []byte) (any, *protocol.Err
 		}
 		edges = append(edges, entry)
 	}
-	if perr := g.addNotices(r.Context(), dir, edges); perr != nil {
-		return nil, perr
-	}
+	g.addNotices(r.Context(), dir, edges)
 	return struct {
 		Edges []signedInEdge `json:"edges"`
 		Login *loginView     `json:"login,omitempty"`
@@ -274,27 +272,23 @@ func (g *Gateway) localEdgeStatus(r *http.Request, _ []byte) (any, *protocol.Err
 }
 
 // addNotices sets each edge's notice, with whether this machine already
-// knows the replacement.
-func (g *Gateway) addNotices(ctx context.Context, dir string, edges []signedInEdge) *protocol.Error {
+// knows the replacement; what it holds being unreadable counts as not.
+func (g *Gateway) addNotices(ctx context.Context, dir string, edges []signedInEdge) {
 	origins := make([]string, len(edges))
 	for i, e := range edges {
 		origins[i] = e.Edge
 	}
-	notices := g.local.notices.lookup(ctx, dir, origins)
+	notices := g.local.notices.lookup(g.ctx, ctx, dir, origins)
 	if len(notices) == 0 {
-		return nil
+		return
 	}
 	holdings, err := cli.LoadEdgeHoldings(dir)
-	if err != nil {
-		return &protocol.Error{Code: protocol.CodeInternal, Message: err.Error()}
-	}
 	for i := range edges {
 		if notice, ok := notices[edges[i].Edge]; ok {
-			notice.Known = holdings.Known(edges[i].Edge, notice.Replacement)
+			notice.Known = err == nil && holdings.Known(edges[i].Edge, notice.Replacement)
 			edges[i].Retiring = &notice
 		}
 	}
-	return nil
 }
 
 func sessionOn(dir, origin string) (edgeclient.Session, error) {

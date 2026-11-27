@@ -98,6 +98,9 @@ func New(dir, edgeURL string) (*Client, error) {
 	}, nil
 }
 
+// CloseIdleConnections closes the connections c keeps open for reuse.
+func (c *Client) CloseIdleConnections() { c.http.CloseIdleConnections() }
+
 // Choose returns the client for edgeURL. An empty edgeURL means the only
 // edge dir holds a device token for; else the project's edge at the
 // origin dir holds a token for, DefaultURL before FormerURL; else at the
