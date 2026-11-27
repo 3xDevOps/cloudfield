@@ -2,12 +2,12 @@ import { useEffect, useMemo } from 'react'
 import { create } from 'zustand'
 import { api, ApiError, codeMethodNotFound } from '@/lib/api'
 import { message } from '@/lib/format'
-import { needsYouConditions } from '@/lib/needs-you'
+import { edgeNotice, type EdgeNeed, needsYouConditions } from '@/lib/needs-you'
 import { groupLabel } from '@/lib/status'
 import type { AttentionItem } from '@/lib/types'
 import { sameIdentity, useStore } from '@/store'
 import { queuedSteers } from '@/store/collaboration'
-import { useCapability, useDeviceNeeds } from '@/store/hooks'
+import { useCapability, useDeviceNeeds, useIsSuperAdmin } from '@/store/hooks'
 import { byChange, type RunTree, type SidebarGroup } from '@/store/selectors'
 
 interface Attention {
@@ -47,6 +47,14 @@ export function useAccountNeeds() {
   const viewer = useStore((s) => s.info?.member.id)
   const merges = useMemo(() => proposals.filter((proposal) => proposal.minted_id === viewer), [proposals, viewer])
   return { devices, merges }
+}
+
+/** The server's edge address is retiring or retired, for super admins, who move the server on its host.
+ * A standing notice, not a request, so it is not counted in the badge. */
+export function useEdgeNeed(): EdgeNeed | undefined {
+  const edge = useStore((s) => s.edge)
+  const superAdmin = useIsSuperAdmin()
+  return useMemo(() => (superAdmin ? edgeNotice(edge) : undefined), [edge, superAdmin])
 }
 
 /** The badge: what asks the viewer in a session, plus devices and merges, as the session list counts them. */

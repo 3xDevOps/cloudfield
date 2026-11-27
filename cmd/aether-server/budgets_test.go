@@ -42,7 +42,7 @@ func TestBudgetFlagsRejectInvalidValuesBeforeConfigWrites(t *testing.T) {
 			if err := serversetup.WriteConfig(path, map[string]string{tc.key: tc.value}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := applyConfigFile(serveFlagSet(), path, false); err == nil {
+			if _, _, err := applyConfigFile(serveFlagSet(), path, false); err == nil {
 				t.Fatal("edited config accepted invalid budget")
 			}
 		})
@@ -62,7 +62,7 @@ func TestBudgetConfigPrecedenceAndAutomaticReset(t *testing.T) {
 	if err := fs.Parse([]string{"--run-cpus=0", "--run-memory=0"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := applyConfigFile(fs, path, false); err != nil {
+	if _, _, err := applyConfigFile(fs, path, false); err != nil {
 		t.Fatal(err)
 	}
 	if *o.runCPUs != 0 || *o.runMemory != 0 || *o.runPids != 8192 || *o.minFreeDisk != -1 {
@@ -89,7 +89,7 @@ func TestContainerRuntimeFlagDefaultsToAutoAndTakesConfig(t *testing.T) {
 	if err := configSet(&bytes.Buffer{}, path, "container-runtime", "runc"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := applyConfigFile(fs, path, false); err != nil {
+	if _, _, err := applyConfigFile(fs, path, false); err != nil {
 		t.Fatal(err)
 	}
 	if *o.containerRuntime != "runc" {
