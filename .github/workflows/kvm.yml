@@ -11,15 +11,35 @@ name: VM tests
 on:
   workflow_call:
   workflow_dispatch:
+    inputs:
+      mems:
+        default: '[2048, 8192]'
+      filesystems:
+        default: '["ext4", "xfs"]'
+      cycles:
+        default: '12'
+      mincore_cycles:
+        default: '12'
+      churn_min:
+        default: '10'
+      n:
+        default: '10'
+      sections:
+        default: chain,timing,idle,baseline,frag,mincore,chcow
 
 permissions:
   contents: read
 
 jobs:
   kvm:
-    name: make test-kvm
+    name: fclazy ${{ matrix.fs }} ${{ matrix.mem }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 170
+    strategy:
+      fail-fast: false
+      matrix:
+        mem: ${{ fromJSON(inputs.mems) }}
+        fs: ${{ fromJSON(inputs.filesystems) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -55,7 +75,13 @@ jobs:
         run: |
           CGO_ENABLED=0 go build -o "$RUNNER_TEMP/aether-server" ./cmd/aether-server
           sudo "$RUNNER_TEMP/aether-server" vm install --vm-kernel "$PWD/dist/aether-vmlinux-x86_64"
-      - name: VM tests (real Cloud Hypervisor VMs)
+      - name: Firecracker lazy restore and diff snapshots
         env:
-          GOFLAGS: -v
-        run: sudo env "PATH=$PATH" "HOME=$HOME" "GOFLAGS=$GOFLAGS" make test-kvm
+          FCLAZY_MEM: ${{ matrix.mem }}
+          FCLAZY_FS: ${{ matrix.fs }}
+          FCLAZY_CYCLES: ${{ inputs.cycles }}
+          FCLAZY_MINCORE_CYCLES: ${{ inputs.mincore_cycles }}
+          FCLAZY_CHURN_MIN: ${{ inputs.churn_min }}
+          FCLAZY_N: ${{ inputs.n }}
+          FCLAZY_SECTIONS: ${{ inputs.sections }}
+        run: sudo env "PATH=$PATH" "HOME=$HOME" FCLAZY_MEM="$FCLAZY_MEM" FCLAZY_FS="$FCLAZY_FS" FCLAZY_CYCLES="$FCLAZY_CYCLES" FCLAZY_MINCORE_CYCLES="$FCLAZY_MINCORE_CYCLES" FCLAZY_CHURN_MIN="$FCLAZY_CHURN_MIN" FCLAZY_N="$FCLAZY_N" FCLAZY_SECTIONS="$FCLAZY_SECTIONS" bash scratch/fclazy/run.sh
