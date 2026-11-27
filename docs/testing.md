@@ -1022,8 +1022,8 @@ The target builds the test binaries and `aether-server` with
 `CGO_ENABLED=0`: the binaries also run inside the VMs, where there are no
 libraries. It builds them, and keeps the disks, in a new private directory
 under `$TMPDIR` (default `/tmp`) that it removes at the end: root runs that
-server, so no other user may be able to replace it. A test's VM gets at most 2 GiB; on a CI runner the tests take
-about 13 minutes.
+server, so no other user may be able to replace it. A VM in the default run gets at most 5 GiB; on a CI runner the tests take
+about 24 minutes.
 
 On a KVM host without Go, build on your machine, copy the directory over,
 and run each test binary there with the variables `make test-kvm` sets:
