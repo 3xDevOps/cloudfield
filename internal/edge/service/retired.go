@@ -137,7 +137,7 @@ func (s *Service) retiredAnswers(origin string, repl *pair, signin bool) (*retir
 // sessions and pending device authorizations a start deletes, beside
 // those with no recorded origin: those with the host name of
 // a retired sign-in origin, or of any sign-in origin the edge recorded
-// beside a retired relay origin that no served pair uses, whatever its
+// beside a retired relay origin that no served pair signs in at, whatever its
 // port. It refuses a retired pair whose
 // origins contradict the pairs the edge recorded, and rows without an
 // origin when the edge never recorded origins, since every row would have
@@ -200,19 +200,18 @@ func (s *Service) retiredSignIns(ctx context.Context, retired []Retired, pairing
 	for _, r := range retired {
 		retiredRelays[originHost(r.RelayOrigin)] = true
 	}
-	served := map[string]bool{}
+	servedSignin := map[string]bool{}
 	for _, p := range s.pairs {
-		served[canonicalHost(p.signinHost)] = true
-		served[canonicalHost(p.relayHost)] = true
+		servedSignin[canonicalHost(p.signinHost)] = true
 	}
 	for _, p := range pairings {
 		if !retiredRelays[originHost(p.RelayOrigin)] {
 			continue
 		}
-		if host := originHost(p.SigninOrigin); served[host] {
+		if host := originHost(p.SigninOrigin); servedSignin[host] {
 			slog.Warn("edge: keeping the sign-ins of a served sign-in origin once recorded beside a retired relay origin: "+
 				"those issued while it was paired with the retired relay origin cannot be told apart and stay valid; "+
-				"sign those devices out on the Devices page of the sign-in origin",
+				"revoke those device tokens on the Devices page of the sign-in origin, and sign those browsers out or let their sessions expire",
 				"signin_origin", p.SigninOrigin, "relay_origin", p.RelayOrigin)
 		} else {
 			signinHosts[host] = true

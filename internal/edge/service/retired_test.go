@@ -595,6 +595,29 @@ func TestRetiredHostChangedRole(t *testing.T) {
 	}
 }
 
+// TestRetiredDeletesAtServedRelayHost retires a relay origin the edge once
+// recorded beside a host that now serves only as a relay origin: rows
+// recorded at that host go, since no served pair signs in there.
+func TestRetiredDeletesAtServedRelayHost(t *testing.T) {
+	h := newRecordingHarness(t)
+	h.setGitHubUser(1, "owner", "owner@example.test", true)
+	h.browser(t).signIn(t)
+	for _, signin := range []string{testRelay, testSignin2} {
+		h.clock.Advance(time.Minute)
+		if _, err := h.svc.store.RecordPairs(context.Background(), edgestore.Run{Pairs: map[string]string{testRelay2: signin}}, h.clock.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.exec(t, `INSERT INTO devices (id, token_hash, account_id, public_key, label, created_at, last_used_at, signin_origin)
+		SELECT 'dev-relay', 'hash-relay', account_id, 'key', 'label', created_at, created_at, ? FROM web_sessions LIMIT 1`, testRelay)
+	if err := h.restartRetiring(t, Retired{SigninOrigin: testSignin2, RelayOrigin: testRelay2, Replacement: testRelay}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.column(t, `SELECT COUNT(*) FROM devices WHERE id = 'dev-relay'`); got != "0" {
+		t.Errorf("a device recorded at %s, now only a relay origin, survived retiring %s", testRelay, testRelay2)
+	}
+}
+
 // TestRetiredRelaySpelledTwice retires a relay origin the edge recorded
 // under two spellings with two sign-in origins: naming either sign-in
 // origin passes.
