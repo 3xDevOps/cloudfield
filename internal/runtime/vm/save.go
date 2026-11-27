@@ -85,13 +85,14 @@ func (e *engine) save(ctx context.Context, key string) error {
 	if synced {
 		// The second sync writes what the session wrote during the wait.
 		e.awaitReported(ctx, key)
-		// The guest still runs, so a caller that gave up loses nothing.
-		if err = ctx.Err(); err != nil {
-			return fmt.Errorf("vm runtime: save VM %s: %w", key, err)
-		}
-		synced = e.syncGuest(ctx, key)
+		synced = ctx.Err() == nil && e.syncGuest(ctx, key)
 	}
 	if !paused {
+		// The guest still runs, so a caller that gave up loses nothing. A
+		// frozen VM was thawed for this save and is saved all the same.
+		if err = ctx.Err(); err != nil && !frozen {
+			return fmt.Errorf("vm runtime: save VM %s: %w", key, err)
+		}
 		// Not cut short: a pause that lands after its caller gave up would
 		// leave the guest stopped behind an error.
 		if err = api.pause(context.WithoutCancel(ctx)); err != nil {

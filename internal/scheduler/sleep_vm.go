@@ -152,9 +152,13 @@ func (s *Scheduler) saveMarked(ctx context.Context, entry *supervised, saver run
 		}
 	} else {
 		s.mu.Lock()
-		entry.abortSleep = cancel
-		if entry.wakeWaits && s.superCtx.Err() == nil {
-			cancel()
+		// A save the memory guard or admission makes is for memory the host
+		// lacks: a wake waits for it, and is admitted like any other.
+		if entry.memorySaving == 0 {
+			entry.abortSleep = cancel
+			if entry.wakeWaits && s.superCtx.Err() == nil {
+				cancel()
+			}
 		}
 		s.mu.Unlock()
 		if detachErr = s.detachForSave(saveCtx, entry); park {

@@ -966,7 +966,8 @@ sooner:
   `0`. A pause that fails leaves the session running; Cloudfield tries again
   after another `--run-sleep-after`. A message, or any other use, that
   arrives while a VM is being paused or saved ends that sleep if the guest
-  has not stopped yet, and the session stays awake.
+  has not stopped yet, and the session stays awake. A save the server
+  makes because the host is short of memory is not ended.
 - A closed session's VM is stopped as soon as the close finishes, whatever
   `--run-sleep-after` is, and keeps its disks without its memory
   ([Relaunching a closed session](#relaunching-a-closed-session)). Closing
