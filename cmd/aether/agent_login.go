@@ -26,14 +26,11 @@ func agentLogin(args []string) error {
 	fs := newFlagSet("agent login")
 	as := fs.String("as", "", "add another login of the agent under this name instead of signing in its default login (Claude Code only; cloudfield agent logins lists them)")
 	attach := fs.String("attach", "", "return to the sign-in of a login --as started and did not finish, by the login id it printed")
-	name := ""
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		name, args = args[0], args[1:]
+	name, err := parseLeadingArg(fs, args)
+	if err != nil {
+		return fmt.Errorf("%w\n%s", err, usage)
 	}
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if name == "" || fs.NArg() > 0 {
+	if name == "" {
 		return errors.New(usage)
 	}
 	given := map[string]bool{}

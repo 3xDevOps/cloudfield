@@ -117,3 +117,15 @@ func TestSignInResultFollowsAFailedTerminal(t *testing.T) {
 		t.Errorf("stderr = %q; want the terminal's error", errOut.String())
 	}
 }
+
+func TestAgentLoginTakesItsFlagsBeforeOrAfterTheAgent(t *testing.T) {
+	unlinked(t)
+	for _, args := range [][]string{{"claude", "--as", "work"}, {"--as", "work", "claude"}, {"--attach", "lgn-test1", "claude"}} {
+		if err := agentLogin(args); !errors.Is(err, cli.ErrNotLinked) {
+			t.Errorf("agentLogin(%q) = %v; want it parsed and on its way to the server", args, err)
+		}
+	}
+	if err := agentLogin([]string{"--as", "work"}); err == nil || !strings.HasSuffix(err.Error(), "usage: cloudfield agent login <name> [--as <login> | --attach <login-id>]") {
+		t.Errorf("agentLogin without an agent = %v; want the usage", err)
+	}
+}
