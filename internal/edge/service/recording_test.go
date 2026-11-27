@@ -333,14 +333,12 @@ func TestRecordingStartsWhenServing(t *testing.T) {
 // goes on. A pending sign-in bound to no relay origin is dropped when a
 // start records origins.
 func TestDeviceAuthAcrossRestart(t *testing.T) {
-	for _, tt := range []struct {
-		relay   string
-		refused bool
-	}{
-		{"https://relay9.example.test", true},
-		{testRelay, false},
-		{testRelay + ":443", false},
-		{testRelay + ":0443", false},
+	for _, tt := range []struct{ relay, want string }{
+		{"https://relay9.example.test", "this sign-in was started for the relay origin " + testRelay + ", which " + testSignin +
+			" no longer signs devices in for; start it again with: cloudfield login --edge https://relay9.example.test"},
+		{testRelay, string(edgeproto.DevicePending)},
+		{testRelay + ":443", string(edgeproto.DevicePending)},
+		{testRelay + ":0443", string(edgeproto.DevicePending)},
 	} {
 		h := newRecordingHarness(t)
 		start := startDevice(t, h)
@@ -362,8 +360,9 @@ func TestDeviceAuthAcrossRestart(t *testing.T) {
 		req.Header.Set(edgeproto.HeaderVersion, fmt.Sprint(edgeproto.Version))
 		rec := httptest.NewRecorder()
 		svc.Handler().ServeHTTP(rec, req)
-		if refused := strings.Contains(rec.Body.String(), "this sign-in was started"); refused != tt.refused {
-			t.Errorf("poll after a restart with the relay origin %s: %d %s, want refused %v", tt.relay, rec.Code, rec.Body, tt.refused)
+		var e edgeproto.ErrorBody
+		if err = json.Unmarshal(rec.Body.Bytes(), &e); err != nil || rec.Code != http.StatusBadRequest || e.Error != tt.want {
+			t.Errorf("poll after a restart with the relay origin %s: %d %s, want 400 %q", tt.relay, rec.Code, rec.Body, tt.want)
 		}
 	}
 
