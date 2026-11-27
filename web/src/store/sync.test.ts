@@ -2407,6 +2407,52 @@ describe('connect', () => {
     stop()
   })
 
+  it('applies an event again after the snapshot that repairs its failed fetch, so it is not lost', async () => {
+    const listed = [run({ id: 'run_9', status: 'running' })]
+    const client = fakeApi({
+      runList: vi.fn().mockResolvedValueOnce([]).mockResolvedValue(listed),
+      runGet: vi.fn().mockRejectedValueOnce(new ApiError(500, 'run.get: store busy')),
+    })
+    const store = createRootStore()
+    const stop = connect(store, client)
+    try {
+      const socket = await subscribe()
+      await vi.waitFor(() => expect(store.getState().hydrated).toBe(true))
+      // A Lanes view holds this workspace's history; live events keep it current.
+      store.getState().holdLanes()
+      store.getState().setLaneHistory(workspace.id, { floor: -Infinity })
+
+      // A brand new run's first status: the fetch of the run fails once.
+      deliver(socket, statusEvent({ seq: 10, run_id: 'run_9', payload: { to: 'running' } }))
+      await vi.waitFor(() => expect(client.runList).toHaveBeenCalledTimes(2))
+      // The snapshot brought the run; the event itself must still be applied.
+      await vi.waitFor(() => expect(store.getState().lastSeq).toBe(10))
+      expect(store.getState().laneHistory[workspace.id].events.map((event) => event.seq)).toEqual([10])
+      expect(client.runGet).toHaveBeenCalledTimes(1)
+    } finally {
+      stop()
+    }
+  })
+
+  it('gives up on an event whose fetch fails again after the repairing snapshot, and applies what follows', async () => {
+    const client = fakeApi({
+      runList: vi.fn(async () => []),
+      runGet: vi.fn().mockRejectedValue(new ApiError(500, 'run.get: store busy')),
+    })
+    const store = createRootStore()
+    const stop = connect(store, client)
+    try {
+      const socket = await subscribe()
+      await vi.waitFor(() => expect(store.getState().hydrated).toBe(true))
+      deliver(socket, statusEvent({ seq: 10, run_id: 'run_9', payload: { to: 'running' } }))
+      deliver(socket, { ...statusEvent({ seq: 11 }), type: 'run.diff', payload: { files: [] } })
+      await vi.waitFor(() => expect(store.getState().lastSeq).toBe(11))
+      expect(client.runGet).toHaveBeenCalledTimes(2)
+    } finally {
+      stop()
+    }
+  })
+
   it('never advances the cursor past an event still waiting on a fetch', async () => {
     const pending: ((r: Run) => void)[] = []
     const client = fakeApi({

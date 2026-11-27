@@ -894,13 +894,27 @@ export function connect(store: RootStore, client: Api = api): () => void {
   const stopOutcomeSeen = watchOutcomeSeen(store, client)
   const stopPush = watchPush(store, client)
 
+  // The event whose apply failed and is waiting to be applied again.
+  let failed: Event | null = null
+
   // Listeners hear one change per drained burst rather than one per write.
   const drain = () => batchNotifications(store, async () => {
     while (!signal.aborted && !hydrating && queue.length > 0) {
-      const ev = queue.shift() as Event
-      if (await applyEvent(store, ev, client, signal)) continue
+      const ev = queue[0]
+      if (await applyEvent(store, ev, client, signal)) {
+        queue.shift()
+        continue
+      }
+      // A second failure, after the snapshot, has no further repair: the event is given up.
+      if (failed === ev) {
+        failed = null
+        queue.shift()
+        continue
+      }
       // The event named something we could not fetch. A fresh snapshot is the
-      // repair; the rest of the queue waits for it.
+      // repair; the event stays at the head, so it is applied after it with
+      // whatever else it carries, and the rest of the queue waits.
+      failed = ev
       void load()
       return
     }
