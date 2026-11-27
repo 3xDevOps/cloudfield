@@ -460,24 +460,21 @@ func (s *Scheduler) recordSaved(entry *supervised, saved, resident bool) error {
 	return nil
 }
 
-// resaveAsleep saves an open session's VM again after a failed wake
-// reattached part of it. A VM that cannot be saved stays up, for the next
-// wake to take up. Caller holds entry.lifecycleMu.
-func (s *Scheduler) resaveAsleep(ctx context.Context, entry *supervised, saver runtime.SaveRuntime) error {
+// parkAsleep pauses an open session's VM in memory after a failed wake
+// reattached part of it, as an idle sleep does: a wake is not held to the
+// disk reserve, so it must not end in a save. A VM that cannot be paused
+// stays up, for the next wake to take up. Caller holds entry.lifecycleMu.
+func (s *Scheduler) parkAsleep(ctx context.Context, entry *supervised, saver runtime.SaveRuntime) error {
 	s.mu.Lock()
 	cid := entry.containerID
 	entry.paused = true
 	s.mu.Unlock()
 	defer s.markSaving(entry)()
 	detachErr := s.detachForSave(ctx, entry)
-	err := errSaveDoesNotFit
-	if s.saveFits(memoryCandidate{e: entry, memory: s.vmMemoryUse(ctx)[cid]}, 0, true) {
-		err = saver.Save(ctx, cid)
+	if err := saver.Park(ctx, cid); err != nil {
+		return errors.Join(fmt.Errorf("pause the session again: %w", err), detachErr)
 	}
-	if err != nil {
-		return errors.Join(fmt.Errorf("save the session again: %w", err), detachErr)
-	}
-	return errors.Join(detachErr, s.recordSaved(entry, true, false))
+	return errors.Join(detachErr, s.recordSaved(entry, false, true))
 }
 
 // saveRecoveredAsleep finishes the save of the VM of a run recorded asleep

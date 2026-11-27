@@ -299,18 +299,20 @@ is still there. Waking a sleeping session, or starting a closed one's stopped
 container, creates no session disk, so it needs only 1 GiB free for itself
 and each start in flight, not the reserve. With less it is refused with the
 error above, naming a reserve of 0 bytes. Waking a saved VM deletes its saved
-memory, and the server does not write it back while the disk is short: a VM
-that goes idle again stays running until its memory fits
-([Sessions in VMs](#sessions-in-vms)). A start from a VM's disks can still
-write three things: a copy of a closed session VM's package cache, when you
-reopen it while the server still copies that cache for the member's next
-session; the helper disk, built once for each server binary; and the root
-disk of a VM whose setup script never finished. The 1 GiB is checked when the session wakes,
-not held afterwards: a woken session VM whose disks then grow is paused as
-described above, and a woken Docker session, like a running one, is not. The
-7-day idle close is the server's own, so below the reserve it leaves a
-sleeping session VM asleep and open until the next hourly check. To free
-space yourself:
+memory, and neither a failed wake nor the next idle sleep writes it back:
+both pause the VM in memory ([Sessions in VMs](#sessions-in-vms)). A start
+from a VM's disks, as after disk reclaim deleted its saved memory, still
+writes to the data filesystem with no free-space check: the disk of an agent
+program that changed in the member's home since its last disk was built,
+with a copy of the program while it builds (the program is at most 2 GiB);
+a copy of a closed session VM's package cache, when you reopen it while the
+server still copies that cache for the member's next session; the helper
+disk, built once for each server binary; the browser's disk, after a server
+update brought another browser image; and the root disk of a VM whose setup
+script never finished. The 1 GiB is checked when the session wakes, not
+held afterwards: a woken session VM whose disks then grow is paused as
+described above, and a woken Docker session, like a running one, is not. To
+free space yourself:
 
 1. Open **Insights → System** to see what uses the space.
 2. Delete sessions you no longer need with **Delete run** or `cloudfield delete
@@ -952,14 +954,9 @@ pressure](#recover-from-memory-pressure)): 1.6 to 2.3 seconds each in that
 test. So paused VMs hold only memory above that line, and a small host
 saves most of them soon after they pause. A session the server saved while
 it worked wakes on its own into the room paused VMs hold, when they hold
-enough for it: the server saves them first. A session VM's memory is written to disk only while the data filesystem has its
-reserve, 4 GiB and the VM's memory free, whatever asks for the save: the
-memory guard, a failed wake that puts the session back to sleep, or a
-server restart that finds a sleeping session's VM running. So an idle VM
-is paused only while it does: on a fuller disk it stays running, and the
-server looks again after the sleep delay. A VM already paused when the disk
-fills stays paused. Neither gives its memory back, so a launch
-that needs it is refused, and at the floor working sessions stay
+enough for it: the server saves them first. A paused VM is saved only while the data filesystem has its
+reserve, 4 GiB and the VM's memory free. On a fuller disk it stays paused,
+a launch that needs its memory is refused, and at the floor working sessions stay
 frozen: free disk space or close sessions
 ([Recover from disk pressure](#recover-from-disk-pressure)). A wake
 restores a saved VM where it was. A server restart or update leaves a
@@ -1067,7 +1064,7 @@ cannot reattach to the session says in its error that the session started
 from its disk without its processes, with that first line. A guest
 that keeps running but does not answer within 90 seconds holds the session
 from then on: its saved state is deleted, and the wake takes the guest up
-as it is, or saves it again when the agent cannot be reached. A wake also
+as it is, or pauses it in memory when the agent cannot be reached. A wake also
 ends as soon as the VM stops under it, with
 `the session's container exited with status <n> while the session woke`,
 rather than after its time runs out: 3 minutes, plus 1 second per 20 MiB

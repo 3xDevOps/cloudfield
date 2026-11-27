@@ -590,33 +590,30 @@ func TestAVMWhoseStateCannotBeRestoredStartsFromItsDisk(t *testing.T) {
 }
 
 // A wake that started a session from its disk and then could not reattach
-// to it saves it again with no processes: the timeline and the wake's error
+// to it pauses it with no processes: the timeline and the wake's error
 // still say what was lost.
 func TestAColdStartWhoseReattachFailsNotesTheLostProcesses(t *testing.T) {
 	t.Parallel()
-	// The save after the failed wake needs the VM's memory to fit on disk,
-	// so the runtime measures it.
-	e, mr := newMemoryEnv(t)
-	cid := e.launchVM(t, mr, "say pong", 1<<30)
-	run := e.runOf(t, cid)
-	e.pauseIdle(t, cid)
-	e.saveRun(t, run)
-	mr.saveMu.Lock()
-	mr.restoreErr = errors.New("restore: the saved state was written by another kernel\nconsole.log:\nKernel panic")
-	mr.saveMu.Unlock()
-	mr.mu.Lock()
-	mr.startErr = errors.New("the agent did not start")
-	mr.mu.Unlock()
+	e, rt, sr := newSaveEnv(t, true)
+	run := e.launchACP(t, "say pong")
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	e.saveRun(t, run.ID)
+	sr.saveMu.Lock()
+	sr.restoreErr = errors.New("restore: the saved state was written by another kernel\nconsole.log:\nKernel panic")
+	sr.saveMu.Unlock()
+	rt.mu.Lock()
+	rt.startErr = errors.New("the agent did not start")
+	rt.mu.Unlock()
 	sub := e.subscribe(t)
 
-	err := e.sched.WakeRun(t.Context(), run, e.member.ID)
+	err := e.sched.WakeRun(t.Context(), run.ID, e.member.ID)
 	if err == nil || !strings.Contains(err.Error(), "the agent did not start") || !strings.Contains(err.Error(), "without its processes, as its restore failed: restore: the saved state was written by another kernel") || strings.Contains(err.Error(), "Kernel panic") {
 		t.Fatalf("WakeRun = %v; want the reattach's error and the first line of the restore's", err)
 	}
-	if !mr.isSaved(cid) {
-		t.Fatal("the cold-started VM was not saved again")
+	if state := e.sched.Sleep(run.ID); !state.InMemory || sr.isSaved(e.cid(t, run.ID)) {
+		t.Fatalf("the cold-started VM sleeps as %+v, saved %v; want it paused in memory", state, sr.isSaved(e.cid(t, run.ID)))
 	}
-	note := waitTimelineEvent(t, sub, run, events.TimelineNote).Payload.(events.TimelinePayload).Message
+	note := waitTimelineEvent(t, sub, run.ID, events.TimelineNote).Payload.(events.TimelinePayload).Message
 	if !strings.Contains(note, "Processes and terminals that were running were stopped") || !strings.HasSuffix(note, "another kernel") {
 		t.Fatalf("the timeline says %q of a wake that lost the session's processes", note)
 	}

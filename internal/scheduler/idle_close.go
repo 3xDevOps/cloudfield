@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/3xDevOps/cloudfield/internal/disk"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
 )
@@ -53,15 +52,6 @@ func (s *Scheduler) closeIdleRuns(ctx context.Context, now time.Time) {
 			continue
 		}
 		if wake {
-			// Nobody waits on this wake, and the stop after its close copies
-			// the VM's cache, so unlike an owner's it keeps the disk reserve.
-			if s.cfg.MinFreeBytes >= 0 {
-				data, err := s.dataFilesystem()
-				if err != nil || data.FreeBytes < disk.Reserve(data.TotalBytes, s.cfg.MinFreeBytes) {
-					slog.Info("scheduler: the data filesystem is below its reserve, so a session idle for 7 days is not woken to close it; trying again at the next sweep", "run", e.runID, "free_bytes", data.FreeBytes, "error", err)
-					continue
-				}
-			}
 			err := s.WakeRun(ctx, e.runID, "")
 			if errors.Is(err, ErrMemoryPressure) || errors.Is(err, ErrDiskFull) || errors.Is(err, ErrCapacityUnknown) {
 				slog.Info("scheduler: admission refused to wake a session idle for 7 days to close it; trying again at the next sweep", "run", e.runID, "error", err)

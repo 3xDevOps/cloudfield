@@ -419,7 +419,7 @@ func (s *Scheduler) startAsleep(ctx context.Context, entry *supervised) (woke, e
 }
 
 // stopAsleep puts entry back to sleep after a failed wake: it stops the
-// container or a closed session's VM, or saves an open session's VM again.
+// container or a closed session's VM, or pauses an open session's VM.
 // A server shutting down leaves it as it is, recorded asleep, for the next
 // server's recovery to take up. Caller holds entry.lifecycleMu.
 func (s *Scheduler) stopAsleep(ctx context.Context, entry *supervised) error {
@@ -430,7 +430,7 @@ func (s *Scheduler) stopAsleep(ctx context.Context, entry *supervised) error {
 	cid, closed := entry.containerID, entry.retained
 	s.mu.Unlock()
 	if saver, ok := s.saver(cid); ok && !closed {
-		return s.resaveAsleep(ctx, entry, saver)
+		return s.parkAsleep(ctx, entry, saver)
 	}
 	_ = s.entryDriver(entry).Stop(ctx, entry.runID)
 	s.cfg.Git.StopDiffWatch(entry.runID)
@@ -725,10 +725,6 @@ func (s *Scheduler) goSleep(entry *supervised, sleep func(context.Context, *supe
 
 var errStayAwake = errors.New("scheduler: the session is no longer idle")
 
-// errSaveDoesNotFit refuses a save saveFits has no room for. The VM stays
-// running.
-var errSaveDoesNotFit = errors.New("scheduler: the session VM's memory does not fit on the data filesystem above its reserve")
-
 // sleepLive stops an idle open session's agent, terminals and container.
 // Once sleeping is set, every delivery, exec or attach that holds the run
 // awake waits for the sleep to finish and then wakes it.
@@ -771,17 +767,6 @@ func (s *Scheduler) sleepLive(ctx context.Context, entry *supervised) error {
 			slog.Warn("scheduler: keep a session awake whose work could not be read", "run", run, "error", err)
 		}
 		return errStayAwake
-	}
-	if saving {
-		// The guard could not take back the memory of a paused VM that does
-		// not fit on the data disk, so that one stays running until it does.
-		if memory := s.vmMemoryUse(ctx)[cid]; memory > 0 && !s.saveFits(memoryCandidate{e: entry, memory: memory}, 0, true) {
-			s.mu.Lock()
-			entry.saveFailedAt = time.Now().UTC()
-			s.mu.Unlock()
-			s.endSleep(entry, false)
-			return errStayAwake
-		}
 	}
 	if err := s.markAsleep(entry); err != nil {
 		s.endSleep(entry, false)
@@ -976,10 +961,10 @@ func (s *Scheduler) recoverAsleep(ctx context.Context, r *domain.Run, sc sidecar
 }
 
 // stopRecoveredAsleep stops the running container of a run recovery adopted
-// asleep, or saves an open session's VM whose memory fits on the data
-// filesystem, as it stands if a server left it frozen: the brake thaws a VM
-// whose lifecycle lock is held. A wake or Relaunch that won the lifecycle
-// lock first and started the container on purpose keeps it running.
+// asleep, or saves an open session's VM, as it stands if a server left it
+// frozen: the brake thaws a VM whose lifecycle lock is held. A wake or
+// Relaunch that won the lifecycle lock first and started the container on
+// purpose keeps it running.
 func (s *Scheduler) stopRecoveredAsleep(ctx context.Context, entry *supervised) {
 	s.mu.Lock()
 	cid := entry.containerID
@@ -993,17 +978,14 @@ func (s *Scheduler) stopRecoveredAsleep(ctx context.Context, entry *supervised) 
 	if !asleep {
 		return
 	}
-	if saver, ok := s.entrySaver(entry); ok && !closed {
-		var err error
-		switch {
-		case !s.saveFits(memoryCandidate{e: entry, memory: s.vmMemoryUse(ctx)[cid]}, 0, true):
-			err = errSaveDoesNotFit
-		case frozen:
-			err = s.saveAsleepRunning(ctx, entry)
-		default:
-			err = s.saveRecoveredAsleep(ctx, entry, saver)
+	if frozen && !closed {
+		if err := s.saveAsleepRunning(ctx, entry); err != nil {
+			slog.Warn("scheduler: save a sleeping session's VM", "run", entry.runID, "error", err)
 		}
-		if err != nil {
+		return
+	}
+	if saver, ok := s.entrySaver(entry); ok && !closed {
+		if err := s.saveRecoveredAsleep(ctx, entry, saver); err != nil {
 			slog.Warn("scheduler: save a sleeping session's VM", "run", entry.runID, "error", err)
 		}
 		return
