@@ -10,6 +10,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/cli"
 	edgeclient "github.com/3xDevOps/cloudfield/internal/edge/client"
 	"github.com/3xDevOps/cloudfield/internal/localops"
+	"github.com/3xDevOps/cloudfield/internal/shellquote"
 )
 
 const movingGuide = "https://github.com/3xDevOps/cloudfield/blob/main/docs/edge-retire.md#moving-a-device"
@@ -58,7 +59,7 @@ func retiringNotice(origin string, r edgeclient.Retiring, holdings cli.EdgeHoldi
 	case !read || !holdings.Known(old, r.Replacement):
 		lines = append(lines, "Confirm that address with whoever runs the edge before you sign in there.")
 	case !slices.Contains(holdings.SignedIn, r.Replacement):
-		lines = append(lines, "Sign in there with: cloudfield login --edge "+r.Replacement)
+		lines = append(lines, "Sign in there with: cloudfield login --edge "+shellquote.Quote(r.Replacement))
 	}
 	cfg := holdings.Config
 	if cfg.ServerID != "" && cli.SameEdge(cfg.EdgeURL, old) {

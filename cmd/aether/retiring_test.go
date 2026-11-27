@@ -78,6 +78,16 @@ func TestRetiringNotice(t *testing.T) {
 	}
 }
 
+// The sign-in command quotes an IPv6 replacement, which a shell would
+// glob, and keeps its spelling.
+func TestRetiringNoticeQuotesTheReplacement(t *testing.T) {
+	const v6 = "https://[2001:db8::1]:8443"
+	got := retiringNotice(oldEdge, edgeclient.Retiring{Replacement: v6}, cli.EdgeHoldings{Config: cli.Config{Links: []cli.NamedLink{{Name: "v6", EdgeURL: v6}}}}, "", true)
+	if want := "Sign in there with: cloudfield login --edge 'https://[2001:db8::1]:8443'\n"; !strings.Contains(got, want) {
+		t.Fatalf("notice:\n%s\nwant it to contain %q", got, want)
+	}
+}
+
 // The notice for a hosted address offers sign-in at the built-in edge.
 func TestRetiringNoticeFromAHostedAddress(t *testing.T) {
 	got := retiringNotice(edgeclient.FormerURL, edgeclient.Retiring{Replacement: edgeclient.DefaultURL}, cli.EdgeHoldings{SignedIn: []string{edgeclient.FormerURL}}, "", true)
