@@ -358,3 +358,43 @@ func TestKVMCacheStartsFromTheMembersLastSession(t *testing.T) {
 		t.Error("an Isolated session's cache was promoted")
 	}
 }
+
+// TestKVMCacheDiskTrimsItsGoBuildCache fills 20 GiB of a session's 32 GiB
+// cache disk, 19 of them Go build cache: at its next boot the VM deletes the
+// least recently used entry, which brings the disk back under half, and
+// keeps the entry used after it, the one used in the last 2 hours and
+// another tool's cache.
+func TestKVMCacheDiskTrimsItsGoBuildCache(t *testing.T) {
+	e := kvmEngine(t)
+	src := filepath.Join(e.root, "..", "src-cachetrim")
+	t.Cleanup(func() { _ = os.RemoveAll(src) })
+	pool := runtime.Mount{HostPath: filepath.Join(src, "pool"), ContainerPath: "/aether-cache", Kind: runtime.MountCache}
+	if err := os.MkdirAll(pool.HostPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(e.root, imagesDir, "caches", cachePool(pool))) })
+	const key = "run-vmcachetrim"
+	kvmUserSession(t, e, key, pool)
+	fill := `set -e; cd /aether-cache; mkdir -p go-build/ab npm
+fallocate -l 9G go-build/ab/oldest-d; touch -d '5 hours ago' go-build/ab/oldest-d
+fallocate -l 9G go-build/ab/older-a; touch -d '4 hours ago' go-build/ab/older-a
+fallocate -l 1G go-build/ab/in-use-d; touch -d '1 hour ago' go-build/ab/in-use-d
+fallocate -l 1G npm/package; touch -d '6 hours ago' npm/package
+sync; echo filled`
+	if out, code := vmRun(t, e, key, fill); code != 0 || !strings.Contains(out, "filled") {
+		t.Fatalf("fill the cache disk: %d %q", code, out)
+	}
+	if err := e.stop(t.Context(), key, 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.start(t.Context(), key); err != nil {
+		t.Fatal(err)
+	}
+	took := eventually(t, e, key, "cd /aether-cache && ls go-build/ab npm | tr '\\n' ' '", "in-use-d older-a  npm: package")
+	out, _ := vmRun(t, e, key, "df -B1 --output=used,size /aether-cache | tail -1")
+	var used, size uint64
+	if _, err := fmt.Sscan(out, &used, &size); err != nil || used > size/2 {
+		t.Fatalf("after the trim the cache disk holds %d of %d bytes (%q): %v", used, size, out, err)
+	}
+	t.Logf("the trim was done %s after the boot and left %d MiB on the cache disk", took, used>>20)
+}

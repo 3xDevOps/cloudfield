@@ -18,6 +18,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/3xDevOps/cloudfield/internal/disk"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/rootfs"
 )
@@ -320,70 +321,12 @@ func (m *Manager) RemoveCache(ctx context.Context, member domain.MemberID, pool 
 	return errors.Join(err, saveCacheMetadata(root, meta))
 }
 
-// TrimGoBuildCache removes the Go build cache entries of the member's pools
-// that were last used before cutoff, oldest first, until it has freed at least
-// excess bytes. It walks the same 256 shard directories as Go's own trim. The
-// caller keeps cutoff more than an hour before the start of the longest
-// running go command; see goBuildCacheInUseAge. A pool that cannot be read is
-// left alone and reported; the others are still trimmed.
+// TrimGoBuildCache trims the Go build caches of the member's pools as
+// disk.TrimGoBuildCache does. A pool that cannot be read is left alone and
+// reported; the others are still trimmed.
 func (m *Manager) TrimGoBuildCache(ctx context.Context, member domain.MemberID, pools []string, cutoff time.Time, excess uint64) error {
-	type entry struct {
-		cache *os.Root
-		name  string
-		size  uint64
-		used  time.Time
-	}
-	var entries []entry
+	var caches []*os.Root
 	var errs []error
-	collect := func(root *os.Root) error {
-		shards, err := cacheDirectoryEntries(root)
-		if err != nil {
-			return err
-		}
-		for _, shard := range shards {
-			if !shard.IsDir() || len(shard.Name()) != 2 {
-				continue
-			}
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			names, err := fs.ReadDir(root.FS(), shard.Name())
-			if err != nil {
-				return err
-			}
-			for _, dirEntry := range names {
-				name := shard.Name() + "/" + dirEntry.Name()
-				if !strings.HasSuffix(name, "-a") && !strings.HasSuffix(name, "-d") {
-					continue
-				}
-				info, err := root.Lstat(name)
-				if errors.Is(err, fs.ErrNotExist) {
-					continue
-				}
-				if err != nil {
-					return err
-				}
-				if !info.ModTime().Before(cutoff) {
-					continue
-				}
-				size := uint64(0)
-				if info.Mode().IsRegular() {
-					size = uint64(info.Size())
-				} else if info.IsDir() {
-					_ = fs.WalkDir(root.FS(), name, func(_ string, d fs.DirEntry, err error) error {
-						if err == nil && d.Type().IsRegular() {
-							if file, err := d.Info(); err == nil {
-								size += uint64(file.Size())
-							}
-						}
-						return nil
-					})
-				}
-				entries = append(entries, entry{root, name, size, info.ModTime()})
-			}
-		}
-		return nil
-	}
 	for _, pool := range pools {
 		root, err := m.openCachePool(member, pool, false)
 		if err == nil {
@@ -395,37 +338,14 @@ func (m *Manager) TrimGoBuildCache(ctx context.Context, member domain.MemberID, 
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		if err == nil {
-			defer func() { _ = root.Close() }()
-			err = collect(root)
-		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("memberhome: trim %s Go build cache: %w", pool, err))
-		}
-	}
-	slices.SortFunc(entries, func(a, b entry) int { return a.used.Compare(b.used) })
-	var freed uint64
-	for _, e := range entries {
-		if freed >= excess {
-			break
-		}
-		if err := ctx.Err(); err != nil {
-			return errors.Join(append(errs, err)...)
-		}
-		// A go command may have used the entry, refreshing it, since the walk.
-		info, err := e.cache.Lstat(e.name)
-		if errors.Is(err, fs.ErrNotExist) || err == nil && !info.ModTime().Before(cutoff) {
 			continue
 		}
-		if err == nil {
-			err = e.cache.RemoveAll(e.name)
-		}
-		if err != nil {
-			return errors.Join(append(errs, err)...)
-		}
-		freed += e.size
+		defer func() { _ = root.Close() }()
+		caches = append(caches, root)
 	}
-	return errors.Join(errs...)
+	return errors.Join(append(errs, disk.TrimGoBuildCache(ctx, caches, cutoff, excess))...)
 }
 
 func (m *Manager) updateCacheMetadata(member domain.MemberID, pool string, create bool, update func(*cacheMetadata) error) error {
