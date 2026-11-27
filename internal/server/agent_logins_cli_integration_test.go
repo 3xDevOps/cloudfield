@@ -22,7 +22,9 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/sys/unix"
 
+	"github.com/3xDevOps/cloudfield/internal/cli"
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/envname"
 	"github.com/3xDevOps/cloudfield/internal/quota"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
@@ -117,6 +119,27 @@ func (u *loginsUsage) ReadLogin(_ context.Context, account domain.Account, _ boo
 type cliUser struct {
 	*sshUser
 	aether string
+}
+
+// newCLIUser links the CLI to the server at addr from a home of its own.
+// Its environment is set whole: no CLOUDFIELD_ or AETHER_ variable of the
+// machine running the test reaches it, and both names of the config
+// directory variable point at the link written here.
+func newCLIUser(t *testing.T, aether, addr, keyPath string) *cliUser {
+	t.Helper()
+	home := t.TempDir()
+	configDir := filepath.Join(home, "config")
+	if err := os.MkdirAll(filepath.Join(configDir, "aether"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link, err := json.Marshal(cli.Config{Addr: addr, Key: keyPath, KnownHosts: filepath.Join(home, "known_hosts")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(configDir, "aether", "config.json"), string(link))
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "SSH_AUTH_SOCK=",
+		cli.ConfigDirEnv + "=" + configDir, envname.New(cli.ConfigDirEnv) + "=" + configDir}
+	return &cliUser{sshUser: &sshUser{t: t, aether: aether, env: env}, aether: aether}
 }
 
 func (u *cliUser) cli(args ...string) (stdout, stderr string, code int) {
@@ -253,7 +276,7 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 		}
 	}
 	aether := buildCLIBinary(t)
-	ada := &cliUser{sshUser: newSSHUser(t, aether, addr, keyPath), aether: aether}
+	ada := newCLIUser(t, aether, addr, keyPath)
 
 	rows := func() []domain.AgentLogin {
 		t.Helper()
@@ -459,7 +482,7 @@ func TestIntegrationSessionOnANamedLogin(t *testing.T) {
 	second := domain.LoginID("lgn-second0000")
 	addLogin(ctx, t, srv, e.dataDir, e.ada.id, second, "second")
 	aether := buildCLIBinary(t)
-	ada := &cliUser{sshUser: newSSHUser(t, aether, srv.addr, e.keyPath), aether: aether}
+	ada := newCLIUser(t, aether, srv.addr, e.keyPath)
 
 	_, stderr, code := ada.cli("session", "on no login", "--agent", "claude", "--mode", "background", "--login", "nope")
 	if code == 0 || !strings.Contains(stderr, `--login: you have no login named "nope"; cloudfield agent logins lists yours`) {
