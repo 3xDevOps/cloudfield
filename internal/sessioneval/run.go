@@ -179,7 +179,9 @@ func hostEnv() []string {
 	var out []string
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
-		if drop[name] || strings.HasPrefix(name, "CLAUDE") && !slices.Contains(claudeLoginEnv, name) {
+		// An inherited GIT_DIR would point the fixture's commits at the
+		// caller's repository.
+		if drop[name] || strings.HasPrefix(name, "GIT_") || strings.HasPrefix(name, "CLAUDE") && !slices.Contains(claudeLoginEnv, name) {
 			continue
 		}
 		out = append(out, kv)
@@ -360,7 +362,7 @@ func parseStream(out []byte) (reply Reply, resulted bool, err error) {
 		}
 		switch msg.Type {
 		case "user":
-			if bytes.Contains(msg.Message.Content, []byte(nudge)) {
+			if nudged(msg.Message.Content) {
 				reply.Nudges++
 			}
 		case "assistant":
@@ -460,4 +462,24 @@ func RunOnce(ctx context.Context, agent Agent, helper string, s Scenario, mode M
 		res.Pass = res.Pass && c.Pass
 	}
 	return res
+}
+
+// nudged reports whether a user message's content is Claude Code's nudge:
+// text of its own, not a tool result that quotes it.
+func nudged(content json.RawMessage) bool {
+	var text string
+	if json.Unmarshal(content, &text) == nil {
+		return strings.Contains(text, nudge)
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	_ = json.Unmarshal(content, &blocks)
+	for _, b := range blocks {
+		if b.Type == "text" && strings.Contains(b.Text, nudge) {
+			return true
+		}
+	}
+	return false
 }
