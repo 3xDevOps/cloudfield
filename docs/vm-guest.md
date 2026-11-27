@@ -476,6 +476,28 @@ Every process the helper starts begins in its leaf `/sys/fs/cgroup/session/procs
 and dockerd puts nested containers beside it, so they count too. The helper
 itself stays outside.
 
+At the session's memory limit the kernel kills the process with the highest
+OOM score in the session, which is the largest one unless scores are
+adjusted. An Enhanced Claude Code agent would often be that process, so its
+keeper, which runs as root, writes `-500` to its own `oom_score_adj` before
+it starts the agent, and to that of the exec that started it; the bridge the
+server attaches through does the same. The agent's adapter and CLI inherit
+the score. The keeper also sets `CLAUDE_CODE_SHELL_PREFIX` to
+`/run/aether-acp-command`, a three-line script it writes, through which
+Claude Code runs every Bash tool call, shell-form hook, status line command
+and stdio MCP server: the script writes `0` to its own `oom_score_adj` and
+runs the command with `bash -c`. So the kernel kills one of the agent's
+commands before the agent, unless the agent holds half the session's memory
+more than that command. It adds about 0.2 ms to a command. What Claude Code
+starts without its prefix, such as exec-form hooks, keeps the agent's score.
+A command can lower its own score back to `-500`, so this orders accidents,
+not a hostile command. The keeper leaves everything as it was when the
+session already sets `CLAUDE_CODE_SHELL_PREFIX`, when `bash` is not on the
+`PATH`, or when it may not lower its score, as in a Docker session. No other
+agent has a way to tell its commands apart, so no other agent's score
+changes: its commands would inherit the lower score with it. A Standard
+session has no keeper and is unchanged.
+
 `Stats` reports CPU time outside idle and I/O wait from `/proc/stat`, and
 from the session cgroup its OOM kills less the development browser's, its
 task count, its memory in use and its `memory.max`, the limit a process of

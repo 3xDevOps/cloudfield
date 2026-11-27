@@ -290,6 +290,27 @@ func TestEnhancedRunRunsItsKeeperAsRoot(t *testing.T) {
 	}
 }
 
+func TestEnhancedRunHasItsKeeperProtectOnlyAnAgentWithACommandPrefix(t *testing.T) {
+	t.Parallel()
+	e, rt := newACPEnv(t, withMockClaude)
+	const protect = acpkeeper.CommandPrefixEnv + "=CLAUDE_CODE_SHELL_PREFIX"
+	for i, agent := range []string{"claude", "fake"} {
+		run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "say pong", agent, domain.LaunchACP)
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+		rt.mu.Lock()
+		keeper, bridge := rt.specs[i], rt.bridges[i]
+		rt.mu.Unlock()
+		for _, spec := range []runtime.ExecSpec{keeper, bridge} {
+			if got := slices.Contains(spec.Env, protect); got != (agent == "claude") {
+				t.Errorf("%s: %v runs with %v, protection asked for: %t", agent, spec.Argv[:3], spec.Env, got)
+			}
+		}
+	}
+}
+
 func TestEnhancedRunRestartsItsAgentWhenItsKeeperIsTakenOver(t *testing.T) {
 	t.Parallel()
 	e, rt := newACPEnv(t)
@@ -378,7 +399,7 @@ func TestKeeperAttachFailsWhenItsGenerationIsNotRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 	gone := &supervised{runID: run.ID, agentKeeper: sc.AgentKeeper}
-	if _, _, err := e.sched.acp.attachKeeper(t.Context(), gone, rt, runtime.ID(sc.ContainerID)); !errors.Is(err, errUnsupervised) {
+	if _, _, err := e.sched.acp.attachKeeper(t.Context(), gone, rt, runtime.ID(sc.ContainerID), nil); !errors.Is(err, errUnsupervised) {
 		t.Fatalf("attach with an unrecorded generation: %v, want errUnsupervised", err)
 	}
 }
