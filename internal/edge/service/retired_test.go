@@ -572,6 +572,21 @@ func TestRetiredContradictsRecordedPair(t *testing.T) {
 	}
 }
 
+// TestRetiredRelaySpelledTwice retires a relay origin the edge recorded
+// under two spellings with two sign-in origins: naming either sign-in
+// origin passes.
+func TestRetiredRelaySpelledTwice(t *testing.T) {
+	for _, signin := range []string{testSignin2, "https://signin-old.example.test"} {
+		h := newRecordingHarness(t)
+		if err := h.svc.store.RecordPairs(context.Background(), map[string]string{testRelay2 + ":443": "https://signin-old.example.test"}, h.clock.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.restartRetiring(t, Retired{SigninOrigin: signin, RelayOrigin: testRelay2, Replacement: testRelay}); err != nil {
+			t.Errorf("retiring %s with %s: %v", testRelay2, signin, err)
+		}
+	}
+}
+
 // TestRetiredShortFormFits renders the answers of a retired pair whose
 // origins and replacement have the longest legal host names and ports:
 // the answer to a WebSocket upgrade fits the 1024 bytes a client reads of

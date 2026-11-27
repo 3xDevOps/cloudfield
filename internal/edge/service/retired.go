@@ -13,7 +13,6 @@ import (
 	"sync/atomic"
 
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
-	edgestore "github.com/3xDevOps/cloudfield/internal/edge/store"
 )
 
 // Retired is a pair taken out of the served pairs: every request to its
@@ -136,42 +135,50 @@ func (s *Service) retiredAnswers(origin string, repl *pair, signin bool) (*retir
 // device authorizations whose recorded sign-in origin has the host name of
 // a retired sign-in origin, or of any sign-in origin the edge recorded
 // beside a retired relay origin that no served pair uses, whatever its
-// port, and those with no recorded origin. It refuses a retired pair whose origins contradict the pairs the
-// edge recorded, and rows without an origin when the edge never recorded
-// origins, since every row would have none.
-func (s *Service) deleteRetiredSignIns(ctx context.Context, path string, retired []Retired) error {
-	rep, err := edgestore.ReadRetiring(ctx, path, s.now())
+// port, and those with no recorded origin. It refuses a retired pair whose
+// origins contradict the pairs the edge recorded, and rows without an
+// origin when the edge never recorded origins, since every row would have
+// none.
+func (s *Service) deleteRetiredSignIns(ctx context.Context, retired []Retired) error {
+	pairings, err := s.store.Pairings(ctx)
 	if err != nil {
 		return err
 	}
 	signinHosts := map[string]bool{}
 	for _, r := range retired {
-		signinHosts[originHost(r.SigninOrigin)] = true
-		for _, o := range rep.Origins {
-			relay, signin := originHost(o.RelayOrigin), originHost(o.SigninOrigin)
-			switch {
-			case relay == originHost(r.SigninOrigin) || signin == originHost(r.RelayOrigin):
+		signin, relay := originHost(r.SigninOrigin), originHost(r.RelayOrigin)
+		signinHosts[signin] = true
+		var known []string
+		named := false
+		for _, p := range pairings {
+			pRelay, pSignin := originHost(p.RelayOrigin), originHost(p.SigninOrigin)
+			if p.Current && (pRelay == signin || pSignin == relay) {
 				return fmt.Errorf("edge: --retired-pairs names %s as a sign-in origin and %s as a relay origin, but the edge served them the other way round, "+
-					"in the pair %s %s: write <sign-in origin> <relay origin> <replacement relay origin>", r.SigninOrigin, r.RelayOrigin, o.SigninOrigin, o.RelayOrigin)
-			case relay == originHost(r.RelayOrigin) && signin != originHost(r.SigninOrigin):
-				return fmt.Errorf("edge: --retired-pairs pairs %s with %s, but the edge served it with the sign-in origin %s: name that one",
-					r.RelayOrigin, r.SigninOrigin, o.SigninOrigin)
+					"in the pair %s %s: write <sign-in origin> <relay origin> <replacement relay origin>", r.SigninOrigin, r.RelayOrigin, p.SigninOrigin, p.RelayOrigin)
 			}
+			if pRelay == relay {
+				known = append(known, p.SigninOrigin)
+				named = named || pSignin == signin
+			}
+		}
+		if len(known) > 0 && !named {
+			return fmt.Errorf("edge: --retired-pairs pairs %s with %s, but the edge served it with the sign-in origin %s: name that one",
+				r.RelayOrigin, r.SigninOrigin, strings.Join(known, " or "))
 		}
 	}
 	without, err := s.store.SignInsWithoutOrigin(ctx)
 	if err != nil {
 		return err
 	}
-	if n := without.Devices + without.Sessions + without.Authorizations; n > 0 && rep.RecordingSince.IsZero() {
+	recorded, err := s.store.Recorded(ctx)
+	if err != nil {
+		return err
+	}
+	if n := without.Devices + without.Sessions + without.Authorizations; n > 0 && !recorded {
 		return fmt.Errorf("edge: --retired-pairs would delete, on every pair, the sign-ins with no recorded origin (device tokens %d, browser sessions %d, "+
 			"pending device sign-ins %d), since this edge has never recorded which pair issued them. Serve the pair again (in --origin-pairs, with --retired-pairs unset) and run it with --retiring-pairs naming the pair, for as long as you give "+
 			"people to move, such as 30 days: each token or session used in that time is recorded and kept. A shorter run lets this start pass "+
 			"but signs out everyone who did not use the edge during it", without.Devices, without.Sessions, without.Authorizations)
-	}
-	pairings, err := s.store.Pairings(ctx)
-	if err != nil {
-		return err
 	}
 	retiredRelays := map[string]bool{}
 	for _, r := range retired {
@@ -193,12 +200,12 @@ func (s *Service) deleteRetiredSignIns(ctx context.Context, path string, retired
 			signinHosts[host] = true
 		}
 	}
-	recorded, err := s.store.SignInOrigins(ctx)
+	issuedAt, err := s.store.SignInOrigins(ctx)
 	if err != nil {
 		return err
 	}
 	var origins []string
-	for _, o := range recorded {
+	for _, o := range issuedAt {
 		if signinHosts[originHost(o)] {
 			origins = append(origins, o)
 		}

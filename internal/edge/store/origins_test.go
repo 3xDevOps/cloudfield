@@ -763,9 +763,9 @@ func TestPairingsKeepEarlierSigninOrigins(t *testing.T) {
 	}
 	got, err := s.Pairings(ctx)
 	want := []Pairing{
-		{"https://edge.example.test", "https://auth-early.example.test"},
-		{"https://edge.example.test", "https://auth.example.test"},
-		{"https://edge2.example.test", "https://auth2.example.test"},
+		{"https://edge.example.test", "https://auth-early.example.test", false},
+		{"https://edge.example.test", "https://auth.example.test", true},
+		{"https://edge2.example.test", "https://auth2.example.test", true},
 	}
 	if err != nil || !slices.Equal(got, want) {
 		t.Errorf("Pairings = %v, %v; want %v", got, err, want)
@@ -792,9 +792,9 @@ func TestPairingHistoryAcrossUpgrade(t *testing.T) {
 	}
 	got, err := s.Pairings(context.Background())
 	want := []Pairing{
-		{"https://edge.example.test", "https://auth1.example.test"},
-		{"https://edge.example.test", "https://auth2.example.test"},
-		{"https://edge.example.test", "https://auth3.example.test"},
+		{"https://edge.example.test", "https://auth1.example.test", false},
+		{"https://edge.example.test", "https://auth2.example.test", false},
+		{"https://edge.example.test", "https://auth3.example.test", true},
 	}
 	if err != nil || !slices.Equal(got, want) {
 		t.Errorf("Pairings = %v, %v; want %v", got, err, want)

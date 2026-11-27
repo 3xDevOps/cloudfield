@@ -369,7 +369,7 @@ func New(cfg Config) (*Service, error) {
 		return nil, err
 	}
 	if len(retired) > 0 {
-		if err = s.deleteRetiredSignIns(context.Background(), filepath.Join(cfg.DataDir, "edge.db"), retired); err != nil {
+		if err = s.deleteRetiredSignIns(context.Background(), retired); err != nil {
 			s.store.Close() //nolint:errcheck // the delete error takes precedence
 			return nil, err
 		}

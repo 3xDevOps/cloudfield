@@ -149,17 +149,20 @@ func (s *Store) SignInOrigins(ctx context.Context) ([]string, error) {
 }
 
 // Pairing is a relay origin and a sign-in origin the edge recorded
-// serving together.
+// serving together. Current is set when it is the relay origin's latest.
 type Pairing struct {
 	RelayOrigin, SigninOrigin string
+	Current                   bool
 }
 
 // Pairings lists every pairing the edge recorded serving, current and
 // earlier. origin_pairs also holds a pairing written to a database
 // restored from before origin_pair_history existed.
 func (s *Store) Pairings(ctx context.Context) ([]Pairing, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT relay_origin, signin_origin FROM origin_pair_history
-		UNION SELECT relay_origin, signin_origin FROM origin_pairs ORDER BY 1, 2`)
+	rows, err := s.db.QueryContext(ctx, `SELECT h.relay_origin, h.signin_origin, EXISTS (SELECT 1 FROM origin_pairs o
+			WHERE o.relay_origin = h.relay_origin AND o.signin_origin = h.signin_origin)
+		FROM (SELECT relay_origin, signin_origin FROM origin_pair_history
+			UNION SELECT relay_origin, signin_origin FROM origin_pairs) h ORDER BY 1, 2`)
 	if err != nil {
 		return nil, fmt.Errorf("edgestore: list origin pairings: %w", err)
 	}
@@ -167,7 +170,7 @@ func (s *Store) Pairings(ctx context.Context) ([]Pairing, error) {
 	var out []Pairing
 	for rows.Next() {
 		var p Pairing
-		if err := rows.Scan(&p.RelayOrigin, &p.SigninOrigin); err != nil {
+		if err := rows.Scan(&p.RelayOrigin, &p.SigninOrigin, &p.Current); err != nil {
 			return nil, fmt.Errorf("edgestore: list origin pairings: %w", err)
 		}
 		out = append(out, p)
@@ -176,6 +179,15 @@ func (s *Store) Pairings(ctx context.Context) ([]Pairing, error) {
 		return nil, fmt.Errorf("edgestore: list origin pairings: %w", err)
 	}
 	return out, nil
+}
+
+// Recorded reports whether the edge ever began a recording period.
+func (s *Store) Recorded(ctx context.Context) (bool, error) {
+	var ok bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM origin_recording)`).Scan(&ok); err != nil {
+		return false, fmt.Errorf("edgestore: read the recording period: %w", err)
+	}
+	return ok, nil
 }
 
 // SignInsWithoutOrigin counts the device tokens, sessions and device
