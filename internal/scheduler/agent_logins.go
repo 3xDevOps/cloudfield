@@ -62,20 +62,34 @@ type loginSignIn struct {
 
 func loginSignInCreationKey(id domain.LoginID) string { return "login-signin-" + string(id) }
 
-// addedLoginProfile is agent's profile when it keeps added logins.
-func (s *Scheduler) addedLoginProfile(agent string) (harness.Profile, error) {
-	profile, ok := harness.Lookup(agent)
-	if s.cfg.Logins == nil || !ok || agent != "claude" || profile.AccountConfig == nil || profile.LoginCommand == "" {
+// addedLoginProfile is the profile member's sessions on account run agent
+// with, when it can carry an added login.
+func (s *Scheduler) addedLoginProfile(ctx context.Context, member, account domain.MemberID, agent string) (harness.Profile, error) {
+	if s.cfg.Logins == nil || agent != "claude" {
 		return harness.Profile{}, ErrNoAddedLogins
 	}
-	return profile, nil
+	profile, _, err := s.launchProfile(ctx, member, account, agent)
+	if err != nil {
+		return harness.Profile{}, err
+	}
+	return profile, carriesAddedLogin(profile)
+}
+
+// carriesAddedLogin refuses a profile with no place for an added login: an
+// agent definition that names its own executable has no account
+// configuration to copy and no sign-in command.
+func carriesAddedLogin(profile harness.Profile) error {
+	if profile.AccountConfig == nil || profile.LoginCommand == "" {
+		return fmt.Errorf("%w: this server runs %s from an agent definition that names its own executable, which has no place for an added login; use the default login", ErrNoAddedLogins, profile.Name)
+	}
+	return nil
 }
 
 // BeginLoginSignIn reserves a new login of agent named name for member and
 // returns its id; the terminal opened with that id runs the sign-in. A
 // member runs one sign-in at a time.
 func (s *Scheduler) BeginLoginSignIn(ctx context.Context, member domain.MemberID, agent, name string) (domain.LoginID, error) {
-	if _, err := s.addedLoginProfile(agent); err != nil {
+	if _, err := s.addedLoginProfile(ctx, member, member, agent); err != nil {
 		return "", err
 	}
 	if err := domain.ValidateLoginName(name); err != nil {
@@ -181,7 +195,7 @@ func (s *Scheduler) StartLoginSignIn(ctx context.Context, member domain.MemberID
 func (s *Scheduler) startSignInContainer(ctx context.Context, sign *loginSignIn, cols, rows uint) (runtime.Attachment, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), loginSignInProvision)
 	defer cancel()
-	profile, err := s.addedLoginProfile(sign.agent)
+	profile, err := s.addedLoginProfile(ctx, sign.member, sign.member, sign.agent)
 	if err != nil {
 		return nil, err
 	}

@@ -27,7 +27,10 @@ import (
 // sign-in's copy is scratch in the login's directory, and Claude Code's
 // backups of it stay there too, out of the member's home.
 func (s *Scheduler) addedLoginMounts(run *domain.Run, launcher domain.MemberID, profile harness.Profile, home string, env map[string]string, purpose EnvironmentPurpose, isolated bool) ([]runtime.Mount, error) {
-	if _, err := s.addedLoginProfile(profile.Name); err != nil {
+	if s.cfg.Logins == nil {
+		return nil, fmt.Errorf("scheduler: %w", ErrNoAddedLogins)
+	}
+	if err := carriesAddedLogin(profile); err != nil {
 		return nil, fmt.Errorf("scheduler: %w", err)
 	}
 	if s.sessionVMs() {
@@ -209,7 +212,7 @@ func (s *Scheduler) loginRefusal(ctx context.Context, member domain.MemberID, lo
 // exist, be member's own or on for shares and automatic, have mounts the
 // runtime can verify, and sign in.
 func (s *Scheduler) addedLoginRefusal(ctx context.Context, member domain.MemberID, account domain.Account, agent string) (string, error) {
-	if _, err := s.addedLoginProfile(agent); err != nil {
+	if _, err := s.addedLoginProfile(ctx, member, account.Member, agent); err != nil {
 		return err.Error(), nil
 	}
 	if s.sessionVMs() {
@@ -229,7 +232,7 @@ func (s *Scheduler) addedLoginRefusal(ctx context.Context, member domain.MemberI
 // checkAddedLogin refuses a launch in member's home on an added login that
 // member may not use or that cannot sign its agent in.
 func (s *Scheduler) checkAddedLogin(ctx context.Context, member domain.MemberID, account domain.Account, agent string) error {
-	if _, err := s.addedLoginProfile(agent); err != nil {
+	if _, err := s.addedLoginProfile(ctx, member, account.Member, agent); err != nil {
 		return fmt.Errorf("scheduler: %w", err)
 	}
 	if s.sessionVMs() {

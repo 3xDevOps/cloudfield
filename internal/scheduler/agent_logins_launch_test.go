@@ -406,3 +406,41 @@ func TestATeammateIsToldWhyNoSharedLoginServes(t *testing.T) {
 		t.Fatalf("Ada's start on Grace's signed-out logins: %v; want denied, naming work and why", err)
 	}
 }
+
+// A server that runs Claude Code from an agent definition naming its own
+// executable has no account configuration to copy, so an added login is
+// refused with that reason at sign-in, at launch and in the session's plan.
+func TestAnAgentDefinitionWithItsOwnExecutableCarriesNoAddedLogin(t *testing.T) {
+	e := newLoginShareEnv(t)
+	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	e.sched.harnesses["claude"] = HarnessSpec{Executable: "claude", TUIArgs: []string{"claude", "{task}"}, CredentialPaths: []string{".claude/.credentials.json"}}
+	const reason = "no place for an added login"
+	if _, err := e.sched.BeginLoginSignIn(t.Context(), e.member.ID, "claude", "spare"); err == nil || !strings.Contains(err.Error(), reason) {
+		t.Fatalf("a sign-in under the definition: %v; want refused", err)
+	}
+	if _, err := e.launchOn(t, work, ""); err == nil || !strings.Contains(err.Error(), reason) {
+		t.Fatalf("a launch on work under the definition: %v; want refused", err)
+	}
+	if err := e.db.SetAgentLoginAutomatic(t.Context(), e.member.ID, "claude", domain.DefaultLogin, false); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.sched.StartLogin(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI); !errors.Is(err, ErrNoStartLogin) || !strings.Contains(err.Error(), reason) {
+		t.Fatalf("Ada's start under the definition with her default automatic off = %q, %v; want refused, naming why work does not serve", got, err)
+	}
+	member, err := e.db.GetMember(t.Context(), e.member.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, err := e.db.GetWorkspace(t.Context(), e.ws.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, _, err := e.sched.launchProfile(t.Context(), member.ID, member.ID, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := &domain.Run{ID: "run-definition", MemberID: member.ID, AccountMemberID: member.ID, AccountLogin: work.Login, Harness: "claude"}
+	if _, err := e.sched.BuildEnvironmentPlan(t.Context(), run, ws, member, profile, EnvironmentPurposeRun); err == nil || !strings.Contains(err.Error(), reason) {
+		t.Fatalf("the plan of a session on work under the definition: %v; want refused", err)
+	}
+}
