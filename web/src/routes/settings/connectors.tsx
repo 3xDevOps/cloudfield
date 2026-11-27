@@ -151,6 +151,9 @@ const atUniversal = (info: ListInfo, url?: string | null) =>
 // page, the same sign-in, and a connector added at one counts at another.
 const sameURL = (info: ListInfo, a?: string, b?: string) => a === b || (atUniversal(info, a) && atUniversal(info, b))
 
+// sameClient reports whether c was added by the same app client as old.
+const sameClient = (old: Connector, c: Connector) => (old.client_id ? c.client_id === old.client_id : c.redirect_host === old.redirect_host)
+
 // noticeStop is why a move or reconnect of old stops once c, old itself or
 // its replacement, is at an address the edge marks retiring or retired.
 const noticeStop = (c: Connector, old: Connector) =>
@@ -321,8 +324,7 @@ function Connectors({ client }: { client: Api }) {
       }
       // A replacement that called Aether wins over one whose tokens may
       // never have arrived.
-      const candidates = next.filter((c) => !attempt.known.has(c.id) && sameURL(attempt.info, c.resource, attempt.into) &&
-        (old.client_id ? c.client_id === old.client_id : c.redirect_host === old.redirect_host))
+      const candidates = next.filter((c) => !attempt.known.has(c.id) && sameURL(attempt.info, c.resource, attempt.into) && sameClient(old, c))
       const noticed = [next.find((c) => c.id === old.id), ...candidates].find((c) => c?.notice)
       if (noticed) {
         finish()
@@ -408,22 +410,27 @@ function Connectors({ client }: { client: Api }) {
     setInfo(rest)
     setConnectors(fresh)
     setListError(null)
-    const now = next && fresh.find((c) => c.id === next.replaces.id)
-    if (now?.notice) {
-      setTarget(null)
-      throw new Error(noticeStop(now, now))
-    }
     // A move goes to the universal URL; a reconnect stays where its
     // connector was added. At the server's own URL the page asks for a
     // code even when the universal URL takes the sign-in.
     const into = next?.kind === 'move' ? rest.universal_url : next?.replaces.resource ?? rest.url
     const at = into && into !== rest.url ? into : undefined
     const signIn = signsInAt(rest, at)
-    const code = signIn ? null : await client.connectorCode()
-    if (run !== starts.current) return
     // Signing in needs nothing from here, so it may be done already: what
     // the page showed before is what counts as already there.
     const known = next?.known ?? new Set((signIn && shown ? shown : fresh).map((c) => c.id))
+    if (next) {
+      const old = next.replaces
+      const noticed = [fresh.find((c) => c.id === old.id), ...fresh.filter((c) => !known.has(c.id) && sameURL(rest, c.resource, into) && sameClient(old, c))]
+        .find((c) => c?.notice)
+      if (noticed) {
+        setAttempt(null)
+        setTarget(null)
+        throw new Error(noticeStop(noticed, old))
+      }
+    }
+    const code = signIn ? null : await client.connectorCode()
+    if (run !== starts.current) return
     const id = next?.id ?? randomID('connector-move')
     setApp(forApp)
     setTarget(next && { ...next, at, id, known })
