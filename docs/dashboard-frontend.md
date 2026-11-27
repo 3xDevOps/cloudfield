@@ -3036,7 +3036,9 @@ The picked login, id and name, is kept in the launch draft, so it survives
 collapsing the form and a reload. Each opening reads `agent.login.list`
 afresh, and the pick is sent only once that read holds it: while it is read
 the field says "<name>: reading your logins…", a failed read shows "Your
-logins could not be read." with the error verbatim and **Retry login read**,
+logins could not be read." with the error verbatim and **Retry login read**
+(only with a login picked or several logins in the last read, so a member
+who has added none sees nothing of it),
 and a login removed meanwhile reads "You have no login <name> any more. Pick
 another to launch."; **Launch** stays off in all three. With several
 logins, **Save as my default** still shows, since `no_fallback` also stops
@@ -3062,7 +3064,7 @@ session** and **Off for this session**, sent as `run.launch` `subsessions: "on"`
 `"off"`; the first sends nothing.
 
 The collapsed **Fallback** under the account list, whose caption reads
-"On", "On, ordered" or "Off", then "when <owner>'s usage runs out" with only
+"Automatic", "Ordered" or "Off", then "if <owner> runs out" with only
 the name truncated (on the caller's own account with several logins it is
 **Fallback accounts**, above), holds the [usage
 fallback](teams.md#usage-fallback) controls (`launch-options.tsx`): a
@@ -3385,11 +3387,14 @@ protected session. The row holds, from the left:
   part that does not fit drops whole, last first; the reason truncates
   last, and with under 96px left for it drops whole too, leaving the room
   to the parts after it.
-- The account line, at the same place for every login: "On `<name>`'s
-  account (fallback)" when the session carries
-  `requested_account_member_id` ([usage fallback](teams.md#usage-fallback);
-  a `run.account` event updates it live when the session moves), "On
-  `<name>`'s account, login `<login>`", or "On your account, …" to its
+- "On `<name>`'s account (fallback)" when the session carries
+  `requested_account_member_id` and no login to name ([usage
+  fallback](teams.md#usage-fallback); a `run.account` event updates it live
+  when the session moves), after the mode as one of the parts above, as it
+  was before logins.
+- The account line, at the same place for every login: "On
+  `<name>`'s account, login `<login>`" (with " (fallback)" after a usage
+  fallback), or "On your account, …" to its
   owner, when it is on an added login (`account_login_name`, or the
   `account_login` id once that login is removed, as the activity line
   names it), or "login default" when its default login is billed per use

@@ -9,7 +9,7 @@ import { AccountPicker, readiness, useAccountStatus } from '@/components/launch/
 import { agentLabel } from '@/components/launch/modes'
 import { loginAgent } from '@/components/agents/agent-logins'
 import { LoginPicker, MoveSwitch, useOwnLogins } from '@/components/launch/login-picker'
-import { automaticFallback, ChildRunsSwitch, type ChildRunsChoice, fallbackParams, FallbackOptions, RunLimitsOption, withMoves, WorkspaceLine } from '@/components/launch/launch-options'
+import { automaticFallback, ChildRunsSwitch, type ChildRunsChoice, fallbackParams, FallbackOptions, RunLimitsOption, WorkspaceLine } from '@/components/launch/launch-options'
 import { PermissionControl, permissionFeature } from '@/components/launch/permission-control'
 import { ExtraRepos } from '@/components/launch/extra-repos'
 import { PhoneLaunchSheet } from '@/components/launch/phone-launch'
@@ -144,6 +144,9 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const ownRead = useOwnLogins(api, loginsOffered, loginAttempt)
   const ownLogins = ownRead?.logins ?? null
   const severalLogins = !!ownLogins && ownLogins.length > 1
+  // A failed read matters only with a login picked or several known from the last read.
+  const [knewSeveral, setKnewSeveral] = useState(false)
+  if (ownLogins && knewSeveral !== severalLogins) setKnewSeveral(severalLogins)
   const [login, setLogin] = useState(restored?.login ?? null)
   const picked = login ? ownLogins?.find((item) => item.id === login.id) : undefined
   const pickedLogin = loginsOffered && picked ? picked.id : ''
@@ -351,7 +354,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
         </Callout>
       )}
       {agentError && <Callout tone="failed" role="alert">{agentError}</Callout>}
-      {loginsOffered && ownRead?.error && (
+      {loginsOffered && ownRead?.error && (login || knewSeveral) && (
         <Callout
           tone="failed"
           role="alert"
@@ -394,7 +397,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   // Only the default login's usage is read here, with the account's when there are several accounts.
   const loginUsage = { default: accountStatus[ownAccountID]?.usage?.find((provider) => provider.provider === loginAgent) }
   const moves = !fallbackParams(fallback, accounts, account, severalLogins).no_fallback
-  const setMoves = (on: boolean) => { fallbackPicked.current = true; setFallback(withMoves(fallback, on)) }
+  const setMoves = (on: boolean) => { fallbackPicked.current = true; setFallback({ ...fallback, off: !on }) }
   const moveSwitch = severalLogins && <MoveSwitch accounts={accounts.length > 1} moves={moves} onMoves={setMoves} disabled={launching} />
   const loginChoice = loginsOffered && (severalLogins || login) && (ownLogins
     ? (

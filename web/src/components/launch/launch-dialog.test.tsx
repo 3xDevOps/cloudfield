@@ -1049,7 +1049,7 @@ describe('new run', () => {
       await userEvent.click(screen.getByRole('button', { name: /^Fallback/ }))
       const fallbacks = screen.getByRole('list', { name: 'Fallback accounts' })
       await waitFor(() => expect(within(fallbacks).getAllByRole('checkbox').map((box) => box.closest('label')?.textContent)).toEqual(['BobSharedReady', 'VeraSharedReady', 'CarolSharedReady']))
-      expect(screen.getByRole('button', { name: /^Fallback/ }).textContent).toBe("Fallback· On · whenAlice's usage runs out")
+      expect(screen.getByRole('button', { name: /^Fallback/ }).textContent).toBe('Fallback· Automatic · ifAliceruns out')
       expect(screen.getByText("If Alice's usage is 95% or more at launch, or the vendor reports the limit mid-session, the session moves to the ticked account with the most usage left.")).toBeDefined()
 
       await userEvent.click(screen.getByRole('button', { name: 'Move Carol up' }))
@@ -1392,6 +1392,42 @@ describe('login', () => {
     fireEvent.click(launchButton())
     await waitFor(() => expect(api.runLaunch).toHaveBeenCalled())
     expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).not.toHaveProperty('login')
+  })
+
+  it('shows Fallback as before logins to a member with one login, on a server with them or without', async () => {
+    vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice, bob], shared_with: [] })
+    for (const features of [['logins'], []]) {
+      useStore.setState({ info: { ...serverInfo, features } })
+      const view = render(<LaunchDialog />)
+      await waitFor(() => expect(launchButton().disabled).toBe(false))
+      const fallback = screen.getByRole('button', { name: /^Fallback/ })
+      expect(fallback.textContent).toBe('Fallback· Automatic · ifAliceruns out')
+      fireEvent.click(fallback)
+      fireEvent.click(screen.getByRole('checkbox', { name: new RegExp(`^${bob.display_name}`) }))
+      expect(fallback.textContent).toBe('Fallback· Off · ifAliceruns out')
+      expect(screen.getByRole('checkbox', { name: 'Fall back to another account' }).getAttribute('aria-checked')).toBe('true')
+      view.unmount()
+      useStore.setState({ launchDraft: null })
+    }
+  })
+
+  it('says nothing of a failed login read to a member who has not added a login, and says it once several were read', async () => {
+    vi.mocked(api.agentLoginList).mockRejectedValue(new Error('agent.login.list: server unreachable: dial tcp: connection refused'))
+    await open()
+    await waitFor(() => expect(api.agentLoginList).toHaveBeenCalled())
+    await act(async () => {})
+    expect(screen.queryByText('Your logins could not be read.')).toBeNull()
+    cleanup()
+
+    vi.mocked(api.agentLoginList).mockResolvedValue(logins)
+    render(<PaletteDialogs />)
+    await screen.findByRole('combobox', { name: 'Login' })
+    setTask('several logins')
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByLabelText('Task')).toBeNull())
+    vi.mocked(api.agentLoginList).mockRejectedValue(new Error('agent.login.list: server unreachable: dial tcp: connection refused'))
+    act(() => useStore.getState().openPaletteDialog('launch'))
+    expect((await screen.findByText('Your logins could not be read.')).closest('[role="alert"]')!.textContent).toContain('agent.login.list: server unreachable: dial tcp: connection refused')
   })
 
   it('starts automatically, says in full which login billed per use it can reach, and sends a login only when one is picked', async () => {
