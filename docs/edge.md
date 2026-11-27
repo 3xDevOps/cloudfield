@@ -277,7 +277,8 @@ writes the pin without the state lock, so a pin it writes between that check
 and the write is outside this guarantee.
 
 With no key pinned, after a `410` without a signed `retired` notice, or when the
-old address does not answer (connection refused or no handshake within 10
+no connection to the old address could be made (an unknown host name, a host
+that cannot be reached, a refused connection, or no handshake within 10
 seconds), it changes nothing and its refusal ends with the manual steps: `If
 <old> no longer answers for this edge: confirm <new> and the edge key's
 fingerprint with whoever runs the edge, then run sudo cloudfield-server config
