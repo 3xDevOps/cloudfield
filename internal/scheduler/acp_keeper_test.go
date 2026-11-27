@@ -181,6 +181,43 @@ func TestEnhancedRunRestoresWhenItsKeeperIsGone(t *testing.T) {
 	}
 }
 
+func TestEnhancedRunRestartsAnAgentASignalKilled(t *testing.T) {
+	t.Parallel()
+	e, rt := newACPEnv(t)
+	run := e.launchACP(t, "say pong")
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	kill := func(exec *acpExec) {
+		t.Helper()
+		exec.exitCode.Store(137)
+		if _, err := exec.Stop(t.Context(), 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	kill(rt.all()[0])
+	waitFor(t, "the conversation restored in a new agent", func() bool {
+		return len(rt.all()) == 2 && e.sched.acp.session(run.ID) != nil && e.sched.IdleEnhanced(run.ID)
+	})
+	if !slices.Contains(rt.all()[1].agent.Methods(), acp.AgentMethodSessionResume) {
+		t.Fatal("the restart did not resume the conversation")
+	}
+	if _, err := e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "after the kill"}, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	items := waitItems(t, e.sched, run.ID, "a turn after the kill", turnEnded("end_turn", 2))
+	if !hasNotice("Agent restarted")(items) {
+		t.Fatalf("the restart left no notice: %+v", items)
+	}
+
+	kill(rt.all()[1])
+	waitFor(t, "the agent killed again left stopped", func() bool {
+		row, err := e.db.GetRun(t.Context(), run.ID)
+		return err == nil && strings.HasPrefix(row.Reason, acpEndedReason) && strings.Contains(row.Reason, "killed again within 5 minutes")
+	})
+	if n := len(rt.all()); n != 2 {
+		t.Fatalf("an agent killed again right after its restart was restarted: %d ACP servers", n)
+	}
+}
+
 func TestEnhancedRunWithoutAKeeperRunsItsAdapterDirectly(t *testing.T) {
 	t.Parallel()
 	e, rt := newACPEnv(t)
