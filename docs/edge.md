@@ -270,7 +270,8 @@ write of `edge-url`, needs that same pin file still in place, so a key pinned
 meanwhile refuses the move even when it is the same key again. The write also
 needs the config file to give the `edge-url` and `data-dir` the move ran with,
 so it refuses when `--edge-url` or `--data-dir` overrode the file or the file
-changed since. It compares and writes
+changed since; that check also runs before the first enrollment, so a refused
+move never touches the running server's connection. It compares and writes
 holding the config lock ([install.md](install.md#server-options)), which every
 command writing the config takes, and takes it before the edge state
 lock, so waiting for it never holds up the running server. It

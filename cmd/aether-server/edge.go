@@ -424,6 +424,13 @@ func edgeTrust(w io.Writer, in io.Reader, dataDir, edgeURL string) error {
 // edgeMove moves the server to target, another relay address of the edge
 // it is enrolled with, once edgeagent.Agent.Move found the move safe.
 func edgeMove(w io.Writer, dataDir, edgeURL string, policy edgeproto.AccessPolicy, target, configPath string) error {
+	values, err := serversetup.Load(configPath)
+	if err != nil {
+		return err
+	}
+	if err = configGives(configPath, values, edgeURL, dataDir); err != nil {
+		return err
+	}
 	hostKey, err := sshd.LoadOrCreateHostKey(server.HostKeyPath(dataDir))
 	if err != nil {
 		return err
@@ -453,6 +460,23 @@ func sameOrigin(a, b string) bool {
 	return aerr == nil && berr == nil && ca == cb || a == b
 }
 
+// configGives refuses unless values, read from configPath, give the
+// edge-url and data-dir edge move runs with: a flag that overrode them, or
+// a change to the file, would have the move write one edge-url while the
+// service reads another.
+func configGives(configPath string, values map[string]string, edgeURL, dataDir string) error {
+	fs := flag.NewFlagSet("config", flag.ContinueOnError)
+	o := serveFlags(fs)
+	if _, err := serversetup.Apply(fs, values); err != nil {
+		return err
+	}
+	if string(*o.edgeURL) != edgeURL || *o.dataDir != dataDir {
+		return fmt.Errorf("%s gives edge-url %q and data-dir %q, but edge move ran with %q and %q: the file changed since, or a flag overrode it; "+
+			"nothing changed, run it again without --edge-url or --data-dir", configPath, string(*o.edgeURL), *o.dataDir, edgeURL, dataDir)
+	}
+	return nil
+}
+
 // serverCommands spell cloudfield-server and the restart as an admin
 // types them on this host, with the config file in use.
 func serverCommands(configPath string) edgeagent.Commands {
@@ -470,14 +494,8 @@ func serverCommands(configPath string) edgeagent.Commands {
 func applyMove(w io.Writer, dataDir, edgeURL, configPath string, held *edgeagent.HeldPin, m edgeagent.Moved) error {
 	var written bytes.Buffer
 	err := configSetIf(&written, configPath, "edge-url", m.To, func(values map[string]string, set func() error) error {
-		fs := flag.NewFlagSet("config", flag.ContinueOnError)
-		o := serveFlags(fs)
-		if _, err := serversetup.Apply(fs, values); err != nil {
+		if err := configGives(configPath, values, edgeURL, dataDir); err != nil {
 			return err
-		}
-		if string(*o.edgeURL) != edgeURL || *o.dataDir != dataDir {
-			return fmt.Errorf("%s gives edge-url %q and data-dir %q, but edge move ran with %q and %q: the file changed since, or a flag overrode it; "+
-				"nothing changed, run it again without --edge-url or --data-dir", configPath, string(*o.edgeURL), *o.dataDir, edgeURL, dataDir)
 		}
 		return edgeagent.OpenState(dataDir).WhilePinned(held, set)
 	})

@@ -22,6 +22,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	edgeagent "github.com/3xDevOps/cloudfield/internal/edge/agent"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	"github.com/3xDevOps/cloudfield/internal/server"
 	"github.com/3xDevOps/cloudfield/internal/serversetup"
 	"github.com/3xDevOps/cloudfield/internal/store"
 	"github.com/3xDevOps/cloudfield/internal/store/storetest"
@@ -252,6 +253,25 @@ func TestEdgeMoveNeedsAPinnedKey(t *testing.T) {
 	}
 	if got, err := serversetup.Load(path); err != nil || got["edge-url"] != "https://edge.onaether.dev" {
 		t.Errorf("config after a refused move: %v, %v", got, err)
+	}
+}
+
+// A flag that overrides the config's edge-url refuses edge move before it
+// dials anything, since the move would write the file the flag overrides.
+func TestEdgeMoveRefusesAFlagOverrideFirst(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "server.conf")
+	const file, flagged = "https://edge-old.example.test", "https://edge-flag.example.test"
+	if err := serversetup.WriteConfig(path, map[string]string{"data-dir": dir, "edge-url": file}); err != nil {
+		t.Fatal(err)
+	}
+	err := edgeCmd([]string{"move", "https://edge-new.example.test", "--config", path, "--edge-url", flagged})
+	if want := path + ` gives edge-url "` + file + `" and data-dir "` + dir + `", but edge move ran with "` + flagged + `" and "` + dir +
+		`": the file changed since, or a flag overrode it; nothing changed, run it again without --edge-url or --data-dir`; fmt.Sprint(err) != want {
+		t.Errorf("move: %v\nwant: %s", err, want)
+	}
+	if _, err = os.Stat(server.HostKeyPath(dir)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the refused move made a host key: %v", err)
 	}
 }
 
