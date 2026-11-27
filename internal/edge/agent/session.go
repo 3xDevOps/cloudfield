@@ -53,6 +53,8 @@ type session struct {
 	// origins are the relay origins requests relayed on the session may
 	// come in on: the one the server dialed, then those Ready announced.
 	origins []string
+	// announced are the relay origins Ready listed, as it listed them.
+	announced []string
 	// since is when the session enrolled.
 	since time.Time
 	// beats holds the latest answered ping recordBeats has not written.
@@ -337,7 +339,7 @@ func (a *Agent) session(ctx context.Context) (time.Duration, error) {
 			origins = append(origins, o)
 		}
 	}
-	s := &session{c: c, edgeKey: ready.EdgeKey, protocol: protocol, origins: origins, since: start, beats: make(chan time.Time, 1),
+	s := &session{c: c, edgeKey: ready.EdgeKey, protocol: protocol, origins: origins, announced: ready.RelayOrigins, since: start, beats: make(chan time.Time, 1),
 		transfers: map[string]chan edgeproto.OwnerTransferResult{}}
 	if err = a.setEdgeState(ready.State); err != nil {
 		return time.Since(start), err
@@ -502,17 +504,21 @@ func (a *Agent) RelayOrigins() []string {
 }
 
 // ConnectorOrigins are the relay origins the edge announced on the live
-// control connection, read with its version and the edge's state in one
-// snapshot: none unless the connection is up at
-// edgeproto.VersionRelayOrigin or later and the edge reports the server
-// claimed, since the relay refuses every other connection to it.
+// control connection, or the one the server dialed when it listed none,
+// read with its version and the edge's state in one snapshot: none
+// unless the connection is up at edgeproto.VersionRelayOrigin or later
+// and the edge reports the server claimed, since the relay refuses every
+// other connection to it.
 func (a *Agent) ConnectorOrigins() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.live == nil || a.live.protocol < edgeproto.VersionRelayOrigin || a.edgeState != edgeproto.StateClaimed {
+	switch {
+	case a.live == nil || a.live.protocol < edgeproto.VersionRelayOrigin || a.edgeState != edgeproto.StateClaimed:
 		return nil
+	case len(a.live.announced) > 0:
+		return slices.Clone(a.live.announced)
 	}
-	return slices.Clone(a.live.origins)
+	return []string{a.origin}
 }
 
 // Notices are the verified notices of the server's latest enrollment at

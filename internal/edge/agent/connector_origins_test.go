@@ -15,7 +15,9 @@ func TestConnectorOrigins(t *testing.T) {
 		state string
 		want  []string
 	}{
-		{"claimed at relay-origin protocol", &session{protocol: edgeproto.VersionRelayOrigin, origins: origins}, edgeproto.StateClaimed, origins},
+		{"claimed at relay-origin protocol", &session{protocol: edgeproto.VersionRelayOrigin, origins: origins, announced: origins}, edgeproto.StateClaimed, origins},
+		{"announced without the dialed origin", &session{protocol: edgeproto.VersionRelayOrigin, origins: origins, announced: origins[1:]}, edgeproto.StateClaimed, origins[1:]},
+		{"none announced", &session{protocol: edgeproto.VersionRelayOrigin, origins: origins[:1]}, edgeproto.StateClaimed, origins[:1]},
 		{"no control connection", nil, edgeproto.StateClaimed, nil},
 		{"before relay origins", &session{protocol: edgeproto.VersionRelayOrigin - 1, origins: origins}, edgeproto.StateClaimed, nil},
 		{"unclaimed", &session{protocol: edgeproto.VersionRelayOrigin, origins: origins}, edgeproto.StateUnclaimed, nil},
