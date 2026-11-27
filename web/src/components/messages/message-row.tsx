@@ -125,7 +125,7 @@ export const MessageRow = memo(function MessageRow({
         </dl>
       )}
       {(long || bodyBytes > 0 || (thread && onThread)) && (
-        <div className="col-start-2 flex flex-wrap items-center gap-x-3">
+        <div className="col-start-2 flex min-h-6 flex-wrap items-center gap-x-3">
           {long && <Button variant="link" size="sm" onClick={() => setExpanded((open) => !open)}>{expanded ? 'Show less' : 'Show more'}</Button>}
           {bodyBytes > 0 && (
             <Button variant="link" size="sm" aria-expanded={full.open} aria-controls={`${message.id}-full-report`} onClick={toggleFull}>
@@ -146,7 +146,7 @@ export const MessageRow = memo(function MessageRow({
             </p>
           )}
           {full.body !== undefined && (
-            <pre ref={fullRef} aria-label="Full report" className="max-h-96 min-w-0 overflow-auto overscroll-contain rounded-control border border-seam bg-chrome p-3 font-code text-ui break-words whitespace-pre-wrap text-text">
+            <pre ref={fullRef} tabIndex={0} aria-label="Full report" className="max-h-96 min-w-0 overflow-auto overscroll-contain max-sm:max-h-none rounded-control border border-seam bg-chrome p-3 font-code text-ui break-words whitespace-pre-wrap text-text">
               {full.body}
             </pre>
           )}
