@@ -468,7 +468,7 @@ func TestHandoffTransientEvidenceRetriesAndPublishesOneRoomRecord(t *testing.T) 
 // The member who asked for a held mail wake reads the refusal on its card.
 func TestAMailWakeRefusedOverADraftTellsTheMemberWhatToDo(t *testing.T) {
 	refused := fmt.Errorf("%w: scheduler: %w", collab.ErrWakeNotTyped, domain.ErrWakeDraft)
-	want := "The terminal may have text you have not sent. Press Enter there, then try again."
+	want := "collab: the line was not typed and stays queued: scheduler: typed wake held: the terminal may have text that was not sent; send it with Enter and the line is typed after that"
 	if got := collaborationRPCError(refused); got.Code != protocol.CodeUnavailable || got.Message != want {
 		t.Fatalf("refusal = %+v, want %q", got, want)
 	}

@@ -630,20 +630,23 @@ describe('run details', () => {
   it('lets the member in control type a held mail wake now or dismiss it, and keeps a refused one with its reason', async () => {
     const wake = roomMessage({
       id: 'wake_1', kind: 'steer_request', state: 'queued', via: 'agent mail', deliver_after: '2099-01-01T00:00:00Z',
-      body: '2 unread messages from other agents. Cloudfield will type a line telling the agent to read its inbox. It waits while you are typing in the terminal.',
+      body: '2 unread messages from other agents. Cloudfield will type a line telling the agent to read its inbox. It waits while someone is typing in the terminal.',
     })
     vi.mocked(api.runRoomList).mockResolvedValue({ messages: [wake] })
     open({ controller_member_id: alice.id, harness: 'gemini' })
-    attached(true)
     fireEvent.click(await within(screen.getByRole('toolbar', { name: 'Session actions' })).findByRole('button', { name: 'Agent mail' }))
     const panel = within(await screen.findByRole('dialog', { name: 'Session details' }))
     const card = within(panel.getByText('Unread agent mail').closest('[data-slot=request-card]') as HTMLElement)
+    const dismissal = 'Dismiss types nothing. The agent still finds this mail the next time it reads its inbox.'
+    expect(card.getByRole('button', { name: 'Take control to decide' })).toBeDefined()
+    expect(card.queryByText(dismissal)).toBeNull()
+    attached(true)
     expect(card.getByText(wake.body)).toBeDefined()
     expect(card.getByText(/^Types in \d+s$/)).toBeDefined()
-    expect(card.getByText('The agent still finds this mail the next time it reads its inbox.')).toBeDefined()
+    expect(card.getByText(dismissal)).toBeDefined()
 
-    const refusal = 'The terminal may have text you have not sent. Press Enter there, then try again.'
-    vi.mocked(api.runRoomDecide).mockRejectedValueOnce(new Error(`run.room.decide: ${refusal}`))
+    const refusal = 'the line was not typed and stays queued: scheduler: typed wake held: the terminal may have text that was not sent; send it with Enter and the line is typed after that'
+    vi.mocked(api.runRoomDecide).mockRejectedValueOnce(new Error(`run.room.decide: collab: ${refusal}`))
     fireEvent.click(card.getByRole('button', { name: 'Type it now' }))
     expect((await card.findByRole('alert')).textContent).toBe(refusal)
     expect(panel.getAllByRole('alert')).toHaveLength(1)
@@ -686,6 +689,14 @@ describe('run details', () => {
     fireEvent.click(question.getByRole('button', { name: 'Reply' }))
     expect(question.getByRole('button', { name: 'Replying…' })).toHaveProperty('disabled', true)
     expect(steer.getByRole('button', { name: 'Approve' })).toHaveProperty('disabled', false)
+  })
+
+  it('shows why a teammate message was not approved on its card, not above Details', async () => {
+    const { panel, steer } = await waitingCards()
+    vi.mocked(api.runRoomDecide).mockRejectedValueOnce(new Error('run.room.decide: room message already resolved with a different outcome'))
+    fireEvent.click(steer.getByRole('button', { name: 'Approve' }))
+    expect((await steer.findByRole('alert')).textContent).toBe('room message already resolved with a different outcome')
+    expect(panel.getAllByRole('alert')).toHaveLength(1)
   })
 
   it('shows Denying… on the pressed decision, then still waiting past the deadline with no Cancel', async () => {

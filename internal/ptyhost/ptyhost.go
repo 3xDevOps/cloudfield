@@ -1209,8 +1209,9 @@ func (h *Host) Attach(ctx context.Context, key SessionKey, a AttachClient, conn 
 				return
 			}
 			if n > 0 && s.clientWritable(c) {
+				keys := scan.typed(buf[:n])
 				accept := func() error {
-					return s.writeClientStdinContext(ctx, c, buf[:n])
+					return s.writeClientStdinContext(ctx, c, buf[:n], keys)
 				}
 				if a.InputAdmission != nil {
 					if admissionErr := a.InputAdmission(accept); admissionErr != nil {
@@ -1221,12 +1222,9 @@ func (h *Host) Attach(ctx context.Context, key SessionKey, a AttachClient, conn 
 					report(writeErr)
 					return
 				}
-				if scan.typed(buf[:n]) {
-					s.noteTyped(buf[:n])
-					if !typed {
-						typed = true
-						h.reportInput(key, a.Member)
-					}
+				if keys && !typed {
+					typed = true
+					h.reportInput(key, a.Member)
 				}
 			}
 			if err != nil {

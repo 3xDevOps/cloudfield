@@ -35,7 +35,7 @@ const emptyMessages: RoomMessage[] = []
 const emptyRequests: SessionRequest[] = []
 
 const deliveryText = (remaining: number, mail: boolean) => mail
-  ? (remaining ? `Types in ${remaining}s` : 'Waiting for a pause')
+  ? (remaining ? `Types in ${remaining}s` : 'Waiting')
   : (remaining ? `Delivers in ${remaining}s` : 'Ready to deliver')
 
 export function DeliveryCountdown({ deliverAfter, mail = false }: { deliverAfter?: string; mail?: boolean }) {
@@ -118,7 +118,7 @@ function SteerCard({ steer, name, harness, agent, room, openTerminal }: {
       timeBar={remaining > 0 && total > 0 && <RequestTimeBar left={remaining * 1000} total={total} />}
       footer={(agent.localControl || (agent.steerable && agent.hasAgentTerminal)) && (
         <RequestFooter>
-          {mail && <p className="text-ui-sm text-muted">The agent still finds this mail the next time it reads its inbox.</p>}
+          {mail && agent.localControl && <p className="text-ui-sm text-muted">Dismiss types nothing. The agent still finds this mail the next time it reads its inbox.</p>}
           <RequestActions>
             {agent.localControl
               ? <DecisionButtons decide={(approve) => room.decide(steer.id, approve ? 'approve' : 'deny')} answers={mail ? mailWakeAnswers : undefined} />

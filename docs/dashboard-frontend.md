@@ -5580,10 +5580,11 @@ and applies again once there is room. Sections (`details.tsx`):
   questions with a reply field. A held [typed wake](harnesses.md#typed-wake)
   is such a message with `via` `agent mail`: its card is titled **Unread
   agent mail** behind the agent's glyph, counts down as **Types in Ns**
-  and then reads **Waiting for a pause**,
+  and then reads **Waiting**,
   and answers `run.room.decide` with **Type it now** (`approve`) and a
-  `secondary` **Dismiss** (`deny`), under the line "The agent still finds
-  this mail the next time it reads its inbox." It is shown to the controller
+  `secondary` **Dismiss** (`deny`), under the line "Dismiss types nothing.
+  The agent still finds this mail the next time it reads its inbox." It is
+  shown to the controller
   although the server writes it as the session's owner, it stays out of the
   composer's history, and Chat draws it as an event row, not a message
   bubble, with its body only while it waits. Message bodies clamp to six lines with

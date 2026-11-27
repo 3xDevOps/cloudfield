@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { TimelineRow, type RowContext } from '@/routes/run/session-rows'
 import { useStore } from '@/store'
 import type { SessionRow } from '@/store/session-rows'
-import { alice, serverInfo } from '@/test/fixtures'
+import { alice, bob, serverInfo } from '@/test/fixtures'
 
 it('shows a held mail wake as an event that the member in control types now or dismisses', () => {
   useStore.setState({ info: serverInfo, members: { [alice.id]: alice }, roomActionError: {} })
@@ -20,12 +20,13 @@ it('shows a held mail wake as an event that the member in control types now or d
   fireEvent.click(screen.getByRole('button', { name: 'Type it now' }))
   expect(decide).toHaveBeenCalledWith('wake_1', true)
 
-  act(() => useStore.getState().setRoomActionError(wake.id, 'The terminal may have text you have not sent.'))
-  expect(screen.getByRole('alert').textContent).toBe('The terminal may have text you have not sent.')
+  const refusal = 'the line was not typed and stays queued: scheduler: typed wake held: the terminal may have text that was not sent; send it with Enter and the line is typed after that'
+  act(() => useStore.getState().setRoomActionError(wake.id, refusal))
+  expect(screen.getByRole('alert').textContent).toBe(refusal)
 
   const takeControl = vi.fn()
   rerender(<TimelineRow item={{ kind: 'row', key: wake.id, row: { ...wake, deliverAfter: '2026-08-14T10:00:45Z' }, open: false }} ctx={{ ...ctx, steer: { takeControl } }} />)
-  expect(screen.getByText('Agent mail · Waiting for a pause')).toBeDefined()
+  expect(screen.getByText('Agent mail · Waiting')).toBeDefined()
   fireEvent.click(screen.getByRole('button', { name: 'Take control to decide' }))
   expect(takeControl).toHaveBeenCalled()
 
@@ -42,4 +43,15 @@ it('shows your own queued message without a decision', () => {
   render(<TimelineRow item={{ kind: 'row', key: own.id, row: own, open: false }} ctx={ctx} />)
   expect(screen.getByText(/^Delivers in \d+s$/)).toBeDefined()
   expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull()
+})
+
+it('shows why a teammate message was not approved or denied on its row', () => {
+  useStore.setState({ info: serverInfo, members: { [alice.id]: alice, [bob.id]: bob }, roomActionError: {} })
+  const ctx: RowContext = { runID: 'run_1', task: 'task', ownerID: alice.id, hasAgentTerminal: true, openTerminal: () => {}, reveal: () => {}, steer: { decide: vi.fn(async () => {}) } }
+  const held: SessionRow = { kind: 'user', id: 'steer_1', at: '2026-08-14T10:00:00Z', body: 'add a test', authorID: bob.id, delivery: 'Queued', deliverAfter: '2099-01-01T00:00:00Z' }
+  render(<TimelineRow item={{ kind: 'row', key: held.id, row: held, open: false }} ctx={ctx} />)
+  expect(screen.getByRole('button', { name: 'Approve' })).toBeDefined()
+  expect(screen.queryByRole('alert')).toBeNull()
+  act(() => useStore.getState().setRoomActionError(held.id, 'room message already resolved with a different outcome'))
+  expect(screen.getByRole('alert').textContent).toBe('room message already resolved with a different outcome')
 })

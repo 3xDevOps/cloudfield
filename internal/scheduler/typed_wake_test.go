@@ -63,7 +63,7 @@ func TestMailTypesOneLineIntoAnIdleTerminal(t *testing.T) {
 // Clicking a dashboard button takes focus from the terminal, which every
 // agent CLI asks to be told and redraws for, so the terminal has just had
 // input and printed when the member in control asks for a held wake.
-func TestTheMemberInControlTypesAHeldWakeOverTheirOwnInput(t *testing.T) {
+func TestTypeItNowIsNotBlockedByTheFocusChangeRedraw(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t, withServerBinary(fakeServerBinary(t, "typed wake cli")))
 	withCoordination(t, e)

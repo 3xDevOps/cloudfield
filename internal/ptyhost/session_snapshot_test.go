@@ -394,13 +394,13 @@ func TestClientControlToggleFencesInputAndReconcilesGeometry(t *testing.T) {
 	if !c.readOnly || s.imposesNow(c) {
 		t.Fatalf("control revoke left writable geometry state: readOnly=%v imposes=%v", c.readOnly, s.imposesNow(c))
 	}
-	if err := s.writeClientStdinContext(context.Background(), c, []byte("blocked")); err != ErrWriteDenied {
+	if err := s.writeClientStdinContext(context.Background(), c, []byte("blocked"), false); err != ErrWriteDenied {
 		t.Fatalf("revoked input = %v, want ErrWriteDenied", err)
 	}
 	if err := s.setClientReadOnly(c, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.writeClientStdinContext(context.Background(), c, []byte("allowed")); err != nil {
+	if err := s.writeClientStdinContext(context.Background(), c, []byte("allowed"), false); err != nil {
 		t.Fatalf("granted input = %v", err)
 	}
 }

@@ -1058,10 +1058,11 @@ mail** in the header:
   agent that keeps printing, as a working one does, holds the line. It is
   refused while the member has typed in the terminal and not pressed Enter
   since, so a prompt they are still writing is not sent with the line:
-  `The terminal may have text you have not sent. Press Enter there, then
-  try again.` The other conditions above still apply. Whenever the terminal
-  cannot take the line, the card and the Chat row show why and the notice
-  stays.
+  `the line was not typed and stays queued: scheduler: typed wake held: the
+  terminal may have text that was not sent; send it with Enter and the line
+  is typed after that`. The other conditions above still apply. Whenever
+  the terminal cannot take the line, the card and the Chat row show the
+  server's error and the notice stays.
 - **Dismiss** ends the notice. The mail it was shown for is not typed for
   again, and a server restart does not forget that. The agent still finds
   it the next time it reads its inbox. Mail that arrived after the notice
@@ -1071,7 +1072,7 @@ mail** in the header:
   control, anything they typed in the terminal and did not press Enter
   after, before the notice appeared or since, also holds the line, so a
   prompt they are still writing is not sent half finished. The notice reads
-  **Waiting for a pause** meanwhile. A dropped connection keeps control, and
+  **Waiting** meanwhile. A dropped connection keeps control, and
   that hold, for 15 seconds. Once they release control or it lapses, 10
   seconds without input are enough. A wake that fails for any other reason
   is logged as `collab: overdue delivery failed` with the cause and tried
@@ -1096,6 +1097,11 @@ What the server cannot see:
   that picks a completion, such as an `@` file or a `/` command, counts as
   sending: the text it leaves in the box is submitted joined to the line
   unless they type again. So is text left by a member who no longer holds
+  control.
+- Text typed before a server restart. The record of unsent text is in the
+  server's memory, so after a restart that text is not known and can be
+  submitted joined to the line. The record is per terminal, not per member:
+  text one member left unsent holds the line for the next member who takes
   control.
 - A dialog the agent shows on its own, such as a sign-in prompt or a
   permission question, takes the line. The Enter confirms the dialog's

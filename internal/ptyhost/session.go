@@ -630,7 +630,7 @@ func (s *session) clientAttached(c *client) bool {
 	_, ok := s.clients[c]
 	return ok
 }
-func (s *session) writeClientStdinContext(ctx context.Context, c *client, p []byte) error {
+func (s *session) writeClientStdinContext(ctx context.Context, c *client, p []byte, typed bool) error {
 	s.stdinMu.Lock()
 	defer s.stdinMu.Unlock()
 	s.mu.Lock()
@@ -648,7 +648,12 @@ func (s *session) writeClientStdinContext(ctx context.Context, c *client, p []by
 	}
 	s.lastIn = time.Now()
 	s.mu.Unlock()
-	return s.writeStdinContextLocked(ctx, p)
+	if err := s.writeStdinContextLocked(ctx, p); err != nil || !typed {
+		return err
+	}
+	// Still under stdinMu: inject must not land between keys and their record.
+	s.noteTyped(p)
+	return nil
 }
 
 // noteTyped records what a person typed on an attach: p ending in Enter
