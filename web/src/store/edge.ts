@@ -27,30 +27,33 @@ export const createEdgeSlice: SliceCreator<EdgeSlice> = (set) => ({
 
 const reads = new WeakMap<RootStore, number>()
 const landed = new WeakMap<RootStore, number>()
+const generations = new WeakMap<RootStore, number>()
+
+const servesEdge = (state: ReturnType<RootStore['getState']>) => capability(state.capabilities).hasMethod('server.edge')
+
+/** A change of viewer, or of whether the server serves server.edge, clears
+ * the slice and keeps every read started before it from landing. */
+export function watchEdge(store: RootStore) {
+  store.subscribe((state, previous) => {
+    if (state.identityKey === previous.identityKey &&
+      (state.capabilities === previous.capabilities || servesEdge(state) === servesEdge(previous))) return
+    generations.set(store, (generations.get(store) ?? 0) + 1)
+    if (state.edge !== null || state.edgeError !== null || state.edgeFor !== state.identityKey) state.setEdge(null, state.identityKey)
+  })
+}
 
 /** A read's answer lands unless a newer read's answer already did, so a
  * read that fails after an older one succeeded keeps that answer. A
- * failure records the error, keeping the last good answer for the same
- * viewer. A read for a viewer, or with the method, no longer current
- * lands nothing; it only clears what it would have left showing. */
+ * failure records the error, keeping the last good answer. A read started
+ * before a change watchEdge sees lands nothing. */
 export async function loadEdge(store: RootStore, client: Api): Promise<void> {
   const read = (reads.get(store) ?? 0) + 1
   reads.set(store, read)
   const s = store.getState()
-  const viewer = s.identityKey
-  const serves = (state: typeof s) => capability(state.capabilities).hasMethod('server.edge')
-  if (!serves(s) || s.edgeFor !== viewer) {
-    // No read started before this one may land.
-    landed.set(store, read - 1)
-    s.setEdge(null, viewer)
-  }
-  if (!serves(s)) return
-  const current = () => {
-    const now = store.getState()
-    if (now.identityKey === viewer && serves(now)) return read > (landed.get(store) ?? 0)
-    if (now.edgeFor === viewer || !serves(now)) now.setEdge(null, now.identityKey)
-    return false
-  }
+  if (!servesEdge(s)) return
+  if (s.edgeFor !== s.identityKey) s.setEdge(null, s.identityKey)
+  const generation = generations.get(store) ?? 0
+  const current = () => generations.get(store) === generation && read > (landed.get(store) ?? 0)
   let edge: ServerEdge
   try {
     edge = await client.serverEdge()
@@ -60,6 +63,6 @@ export async function loadEdge(store: RootStore, client: Api): Promise<void> {
   }
   if (current()) {
     landed.set(store, read)
-    store.getState().setEdge(edge, viewer)
+    store.getState().setEdge(edge, s.identityKey)
   }
 }

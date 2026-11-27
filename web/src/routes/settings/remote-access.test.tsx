@@ -24,8 +24,9 @@ function seed(role: 'super_admin' | 'collaborator', edge: ServerEdge, local: str
   useStore.setState({
     info: { ...serverInfo, member: { ...serverInfo.member, role } },
     capabilities: { gateway: 'local', methods: ['*'], ws: ['events'], local },
-    edge,
   })
+  // After the capabilities: a change of what the server serves clears the edge.
+  useStore.setState({ edge })
 }
 
 function api(over: Partial<Api> = {}): Api {

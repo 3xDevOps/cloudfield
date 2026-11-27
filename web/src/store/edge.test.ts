@@ -106,3 +106,31 @@ it.each(['before', 'after'] as const)('lands no older answer once the method is 
   }
   expect(store.getState().edge).toBeNull()
 })
+
+it('lands no read for a viewer who left and came back since it started', async () => {
+  const store = seeded()
+  const older = deferred<ServerEdge>()
+  const client = fakeApi({ serverEdge: vi.fn<() => Promise<ServerEdge>>().mockReturnValueOnce(older.promise) })
+  const first = loadEdge(store, client)
+  store.setState({ identityKey: 'bob@server' })
+  store.setState({ identityKey: 'alice@server' })
+  older.resolve(edge)
+  await first
+  expect(store.getState()).toMatchObject({ edge: null, edgeError: null })
+})
+
+it('clears the answer and the error when the method goes away, and lands no read from before', async () => {
+  const store = seeded()
+  const older = deferred<ServerEdge>()
+  const serverEdge = vi.fn<() => Promise<ServerEdge>>().mockResolvedValueOnce(edge).mockRejectedValueOnce(new Error('server.edge: connection reset')).mockReturnValueOnce(older.promise)
+  const client = fakeApi({ serverEdge })
+  await loadEdge(store, client)
+  await loadEdge(store, client).catch(() => undefined)
+  const third = loadEdge(store, client)
+  store.setState({ capabilities: { gateway: 'local', methods: ['server.info'], ws: ['events'], local: [] } })
+  expect(store.getState()).toMatchObject({ edge: null, edgeError: null })
+  store.setState({ capabilities: { gateway: 'local', methods: ['*'], ws: ['events'], local: [] } })
+  older.resolve(edge)
+  await third
+  expect(store.getState().edge).toBeNull()
+})
