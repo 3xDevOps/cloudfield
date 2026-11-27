@@ -177,7 +177,7 @@ func (s *Service) reportState(ctx context.Context, run domain.RunID, p protocol.
 		// takes nothing back; nor does a retry of a report that took effect,
 		// which may arrive in a later turn.
 		final := receipt.Applied
-		if !final {
+		if !final && self.Mode.Interactive() {
 			final, err = s.reportedFinal(ctx, run, receipt.CreatedAt)
 		}
 		if err == nil && !final {
@@ -243,7 +243,8 @@ func (s *Service) reportState(ctx context.Context, run domain.RunID, p protocol.
 var repeatWindow = 2 * time.Minute
 
 // reportedFinal reports whether run's current turn reported, less than
-// repeatWindow before at, a success or failure that still stands.
+// repeatWindow before at, a success or failure that still stands, and no
+// needs-input, waiting or answered report since.
 func (s *Service) reportedFinal(ctx context.Context, run domain.RunID, at time.Time) (bool, error) {
 	since := s.cfg.Outcomes.TurnStartedAt(run)
 	if since.IsZero() {
@@ -254,7 +255,12 @@ func (s *Service) reportedFinal(ctx context.Context, run domain.RunID, at time.T
 		return false, err
 	}
 	last := turn[len(turn)-1]
-	return last.SupersededAt == nil && last.Outcome != store.CoordOutcomeBlocked && at.Sub(last.CreatedAt) < repeatWindow, nil
+	if last.SupersededAt != nil || last.Outcome == store.CoordOutcomeBlocked || at.Sub(last.CreatedAt) >= repeatWindow {
+		return false, nil
+	}
+	// A needs-input or waiting report since then is the session's state.
+	state, err := s.cfg.Mail.CoordStateReportedSince(ctx, run, last.CreatedAt)
+	return state == "", err
 }
 
 // reusedKey refuses a report whose key another report of the run used.

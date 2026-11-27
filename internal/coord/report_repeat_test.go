@@ -108,9 +108,13 @@ func TestAnsweredAfterSuccess(t *testing.T) {
 		first  string
 		window time.Duration
 		// turn is when the turn started, relative to the first report.
-		turn    func(firstAt time.Time) time.Time
+		turn func(firstAt time.Time) time.Time
+		// waits reports waiting between the two.
+		waits   bool
 		ignored bool
 	}{
+		{name: "after a waiting report in between it applies", first: protocol.CoordOutcomeSuccess, waits: true,
+			turn: func(at time.Time) time.Time { return at.Add(-time.Minute) }},
 		{name: "in the same turn it is ignored", first: protocol.CoordOutcomeSuccess, ignored: true,
 			turn: func(at time.Time) time.Time { return at.Add(-time.Minute) }},
 		{name: "after a failure in the same turn it is ignored", first: protocol.CoordOutcomeFailure, ignored: true,
@@ -140,9 +144,14 @@ func TestAnsweredAfterSuccess(t *testing.T) {
 			outcomes.mu.Lock()
 			outcomes.since = tc.turn(time.Now().UTC())
 			outcomes.mu.Unlock()
+			want := 1
+			if tc.waits {
+				report(t, h, run, protocol.CoordOutcomeWaiting, "on CI", "waiting")
+				want = 2
+			}
 			report(t, h, run, protocol.CoordOutcomeAnswered, "said so", "replied")
 			calls := outcomes.recorded()
-			if got := len(calls) == 1; got != tc.ignored {
+			if got := len(calls) == want; got != tc.ignored {
 				t.Fatalf("scheduler got %+v; answered ignored = %v, want %v", calls, got, tc.ignored)
 			}
 		})
