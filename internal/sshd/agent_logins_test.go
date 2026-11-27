@@ -285,3 +285,41 @@ func TestRemovingALoginInUseNamesTheOwnersSessionsAndCountsTheRest(t *testing.T)
 		t.Fatalf("removal of a login in use: %v; want %q and the revoke command", perr, want)
 	}
 }
+
+// Reopening a teammate's session on an added login is refused by the
+// relaunch itself, in provisioning's words, once its owner turned the
+// login's automatic use off: the session would mount it without its owner
+// naming it.
+func TestRelaunchOnALoginTurnedAutomaticOffIsRefusedUpFront(t *testing.T) {
+	e := newLoginEnv(t)
+	ctx := context.Background()
+	_, grace := addMember(t, e.testEnv, "Grace", domain.RoleCollaborator, false)
+	e.seed(t, grace.ID, "lgn-work000000", "work", "grace@work.example.test")
+	if _, err := e.db.ShareAccount(ctx, grace.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	run := &domain.Run{WorkspaceID: e.ws.ID, MemberID: e.member.ID, AccountMemberID: grace.ID, AccountLogin: "lgn-work000000",
+		Task: "t", Harness: "claude", Mode: domain.LaunchTUI, Status: domain.RunRunning, Branch: "aether/run-login"}
+	if err := e.db.CreateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.UpdateRunStatus(ctx, run.ID, domain.RunMerged, "closed; retained container", "", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.db.SetAgentLoginAutomatic(ctx, grace.ID, "claude", "lgn-work000000", false); err != nil {
+		t.Fatal(err)
+	}
+	_, perr := e.call(t, e.member.ID, protocol.MethodRunRelaunch, protocol.RunIDParams{RunID: string(run.ID)})
+	if perr == nil || perr.Code != protocol.CodeDenied || !strings.Contains(perr.Message, "login lgn-work000000 of this account is not available to you") {
+		t.Fatalf("relaunch on a login turned automatic off: %v; want refused as provisioning refuses it", perr)
+	}
+	if calls := e.runs.Calls(); len(calls) != 0 {
+		t.Fatalf("scheduler calls after the refused relaunch = %v; want none", calls)
+	}
+	if err := e.db.SetAgentLoginAutomatic(ctx, grace.ID, "claude", "lgn-work000000", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, perr := e.call(t, e.member.ID, protocol.MethodRunRelaunch, protocol.RunIDParams{RunID: string(run.ID)}); perr != nil {
+		t.Fatalf("relaunch once the login is automatic again: %v", perr)
+	}
+}

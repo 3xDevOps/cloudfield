@@ -726,7 +726,7 @@ func (s *Server) runRelaunch(ctx context.Context, member domain.MemberID, params
 		reach = slices.Compact([]domain.MemberID{member, run.MemberID, run.HomeMember()})
 	}
 	for _, who := range reach {
-		if err = fallback.ResolveRunLogin(ctx, s.cfg.Store, who, run, workspaces); err != nil {
+		if err = fallback.ResolveRunRelaunch(ctx, s.cfg.Store, who, run, workspaces); err != nil {
 			return nil, rpcError(err)
 		}
 	}
