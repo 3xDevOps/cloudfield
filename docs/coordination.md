@@ -1414,7 +1414,8 @@ codes, is refused. So is a report whose summary and body would print as more
 than 16 KiB in the parent's inbox read, where quotes, backslashes and line
 breaks print as two bytes each and `<`, `>` and `&` as six: the parent's harness must be able to show the
 report whole before the next read acknowledges it. A longer body is
-refused with `body is <n> bytes and exceeds 12288`, and a body on another
+refused, by the command with `body exceeds 12288 bytes` and by the server
+with `body is <n> bytes and exceeds 12288`, and a body on another
 outcome with `body is only valid with the "success", "failure" or "blocked"
 outcome`. The body is stored with the report and read through the parent's inbox; the
 dashboard does not show it yet. Nothing is redacted from a summary or a body:
