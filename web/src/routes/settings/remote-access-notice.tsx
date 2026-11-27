@@ -31,6 +31,7 @@ export function EdgeMoveSteps({ need }: { need: EdgeNeed }) {
   if (pending) {
     return (
       <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">
+        {need.noticeReason && <p className="break-words">{need.noticeReason}; the server still runs there.</p>}
         {need.moveOn ? (
           <>
             {pending.first_use && <FirstUse />}

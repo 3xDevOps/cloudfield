@@ -50,6 +50,8 @@ type fakeEdge struct {
 	// refuseBadSignatures closes a connection whose enrollment signature
 	// does not verify, as a relay does, instead of failing the test.
 	refuseBadSignatures bool
+	// readyKey, when set, is the edge key the ready names instead of pub.
+	readyKey ed25519.PublicKey
 
 	mu      sync.Mutex
 	tickets map[string]string
@@ -144,6 +146,9 @@ func (e *fakeEdge) control(w http.ResponseWriter, r *http.Request) {
 	notices := e.notices
 	e.mu.Unlock()
 	ready := edgeproto.Ready{ServerID: id, State: e.state, EdgeKey: e.pub, RelayOrigins: e.relayOrigins}
+	if e.readyKey != nil {
+		ready.EdgeKey = e.readyKey
+	}
 	if notices != nil {
 		ready.Notices, ready.NoticesSignature = notices(id, hello.NoticeNonce)
 	}

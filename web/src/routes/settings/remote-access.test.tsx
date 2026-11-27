@@ -227,6 +227,7 @@ describe('a retiring or retired edge address', () => {
     expect(callout.getByText(`The server's options file names ${replacement}, which is itself retired, so a restart would move the server to a leaving address. Move it to ${third} first. Run on the server's host, adding the service's --config <file> if it has one.`)).toBeTruthy()
     expect(callout.getByText(`sudo cloudfield-server edge move ${third}`)).toBeTruthy()
     expect(callout.getByText('sudo systemctl restart aether-server')).toBeTruthy()
+    expect(callout.queryByText(`${edgeURL} is retiring; the server still runs there.`) !== null).toBe(notice !== undefined)
   })
 
   it('shows the move on even when the running address names an unusable replacement', () => {

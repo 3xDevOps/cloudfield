@@ -276,6 +276,24 @@ func TestMoveTriesBothSpellingsOf443(t *testing.T) {
 	}
 }
 
+// After a 410, a target that answers its enrollment with another key is
+// refused at once: only an enrollment ended without a ready is retried in
+// the other spelling.
+func TestMoveDoesNotRetryAnAnswer(t *testing.T) {
+	const bare = "https://target.example.test"
+	from := retiredHost(t, "retired")
+	to := newFakeEdge(t)
+	servedAs(t, to, bare)
+	to.readyKey, _, _ = ed25519.GenerateKey(rand.Reader)
+	got, err := moveHeld(t, moveAgentAt(t, from, to.pub), bare)
+	if err == nil || strings.Contains(err.Error(), "; tried") {
+		t.Fatalf("move: %+v, %v; want a refusal without a retry", got, err)
+	}
+	if hellos := len(to.hellos); hellos != 1 {
+		t.Errorf("%d enrollments at the target, want 1", hellos)
+	}
+}
+
 // With the old address answering, the spelling it announces is the only
 // one tried: a target that verifies only the other spelling refuses.
 func TestMoveTriesOnlyTheAnnouncedSpelling(t *testing.T) {
