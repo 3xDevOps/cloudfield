@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -181,7 +182,7 @@ func (s *Scheduler) environmentSignsIn(ctx context.Context, workspace domain.Wor
 func signInKeys(agent string, mode domain.LaunchMode) []string {
 	switch {
 	case agent == "claude":
-		return []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"}
+		return []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"}
 	case agent == "codex" && mode == domain.LaunchHeadless:
 		return []string{"CODEX_API_KEY"}
 	}
@@ -189,8 +190,15 @@ func signInKeys(agent string, mode domain.LaunchMode) []string {
 }
 
 // signsIn reports whether env signs agent in, in mode, whatever its login.
+// Claude Code reads a CLAUDE_CODE_USE_ switch as on only when it is 1, true,
+// yes or on, in any case.
 func signsIn(env map[string]string, agent string, mode domain.LaunchMode) bool {
-	return slices.ContainsFunc(signInKeys(agent, mode), func(key string) bool { return env[key] != "" })
+	return slices.ContainsFunc(signInKeys(agent, mode), func(key string) bool {
+		if strings.HasPrefix(key, "CLAUDE_CODE_USE_") {
+			return slices.Contains([]string{"1", "true", "yes", "on"}, strings.ToLower(strings.TrimSpace(env[key])))
+		}
+		return env[key] != ""
+	})
 }
 
 // ErrEnvironmentPays refuses an added login where a variable signs the agent

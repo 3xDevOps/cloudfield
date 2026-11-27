@@ -146,14 +146,15 @@ func TestLaunchOnAnAddedLoginRefusals(t *testing.T) {
 		own        bool
 		unshared   bool
 		permission domain.Permission
-		variable   bool
+		variables  map[string]string
 		want       error
 		wantText   string
 	}{
 		{name: "off for shares", file: workLogin, unshared: true, want: permissions.ErrDenied},
 		{name: "signed out", file: `{"claudeAiOauth":{"accessToken":"test-access-old","expiresAt":1}}`, want: ErrSignedOut},
 		{name: "isolated Console", own: true, permission: domain.PermissionIsolated, wantText: "Isolated session cannot use a Console login"},
-		{name: "a workspace key pays", own: true, file: workLogin, variable: true, wantText: "would not pay"},
+		{name: "a workspace key pays", own: true, file: workLogin, variables: map[string]string{"ANTHROPIC_API_KEY": "test-not-a-key"}, wantText: "would not pay"},
+		{name: "Microsoft Foundry pays", own: true, file: workLogin, variables: map[string]string{"CLAUDE_CODE_USE_FOUNDRY": "True"}, wantText: "would not pay"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newLoginShareEnv(t)
@@ -170,8 +171,8 @@ func TestLaunchOnAnAddedLoginRefusals(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if tc.variable {
-				if err := e.db.SetWorkspaceEnvironment(t.Context(), e.ws.ID, domain.WorkspaceEnvironment{Variables: map[string]string{"ANTHROPIC_API_KEY": "test-not-a-key"}}); err != nil {
+			if tc.variables != nil {
+				if err := e.db.SetWorkspaceEnvironment(t.Context(), e.ws.ID, domain.WorkspaceEnvironment{Variables: tc.variables}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -516,6 +517,26 @@ func TestAnAddedLoginSessionLeavesNoVariableToPay(t *testing.T) {
 	})
 	if !errors.Is(err, ErrEnvironmentPays) && (err == nil || !strings.Contains(err.Error(), "would not pay")) {
 		t.Fatalf("a launch on work once a workspace key was added: %v; want refused", err)
+	}
+}
+
+// A workspace switch Claude Code reads as off pays nothing, so it leaves a
+// launch on an added login alone.
+func TestAWorkspaceSwitchSetOffLeavesAnAddedLoginToPay(t *testing.T) {
+	e := newLoginShareEnv(t)
+	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	if err := e.db.SetWorkspaceEnvironment(t.Context(), e.ws.ID, domain.WorkspaceEnvironment{Variables: map[string]string{
+		"CLAUDE_CODE_USE_BEDROCK": "0", "CLAUDE_CODE_USE_VERTEX": "false", "CLAUDE_CODE_USE_FOUNDRY": "off",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	run, err := e.launchOn(t, work, "")
+	if err != nil {
+		t.Fatalf("a launch on work with every provider switch off: %v", err)
+	}
+	waitFor(t, "the session's container", func() bool { return e.rt.byName(string(run.ID)) != nil })
+	if v := e.rt.byName(string(run.ID)).spec.Env["CLAUDE_CODE_USE_BEDROCK"]; v != "0" {
+		t.Fatalf("CLAUDE_CODE_USE_BEDROCK = %q; want the workspace's 0", v)
 	}
 }
 

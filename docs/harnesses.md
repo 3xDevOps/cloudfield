@@ -261,8 +261,9 @@ Ada's Claude Code login is signed out: ~/.claude/.credentials.json: Claude OAuth
 A refusal only warns: the refusing agent can hold a stale copy of a sound
 login, which a restart or a new session cures. Relaunching or resuming an
 existing session is not checked. A workspace variable that signs the agent in
-(`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`,
-`CLAUDE_CODE_USE_BEDROCK` or `CLAUDE_CODE_USE_VERTEX` for Claude Code;
+(`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, or
+`CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` or
+`CLAUDE_CODE_USE_FOUNDRY` set to `1`, `true`, `yes` or `on`, for Claude Code;
 `CODEX_API_KEY` for a Background Codex session) lets the launch through. A
 usage fallback skips an account whose login file is signed out. A sign-in
 the server cannot see, such as an `apiKeyHelper` or `env` in
