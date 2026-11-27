@@ -76,7 +76,7 @@ function AgentMessages({ run, inset }: { run: RunRecord; inset: boolean }) {
   const [loading, setLoading] = useState(false)
   const hidden = useStore((s) => s.hiddenAgentMessages[run.id] === true)
   useMessageList(useStore, api, scope)
-  if (messages.length === 0) return null
+  if (messages.length === 0 && !error) return null
   const label = (id: string) => (id === run.id ? 'This session' : undefined)
   const shown = all ? messages : messages.slice(-recentMessages)
   const older = async () => {
@@ -86,8 +86,12 @@ function AgentMessages({ run, inset }: { run: RunRecord; inset: boolean }) {
   }
   return (
     <Section title="Agent messages" count={messages.length} inset={inset}>
-      {messages.length === 0 && <p className="text-ui-sm text-muted">No messages between agents yet.</p>}
-      {error && <p role="alert" className="text-ui-sm text-state-failed">{error}</p>}
+      {error && (
+        <div role="alert" className="flex items-center gap-2 text-ui-sm text-state-failed">
+          <span className="min-w-0 flex-1 break-words">{error}</span>
+          <Button variant="quiet" onClick={() => void loadMessagePage(useStore, api, scope)}>Retry</Button>
+        </div>
+      )}
       {all && olderCursor && (
         <Button size="sm" variant="ghost" disabled={loading} onClick={() => void older()}>{loading ? 'Loading…' : 'Show older'}</Button>
       )}

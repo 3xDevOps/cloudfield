@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { RunCommandConfirmation } from '@/components/run-command-confirmation'
 import type { Child, Run } from '@/lib/types'
 import { ChildRuns, costText } from '@/routes/run/child-runs'
@@ -61,6 +61,25 @@ describe('child run usage', () => {
     expect(screen.getByText(/At least \$1\.42/)).toBeDefined()
     expect(screen.getByText('Alice $1.00, Bob $0.42')).toBeDefined()
     expect(screen.getByText('1 of 8 busy, 1 queued, 2 started')).toBeDefined()
+  })
+
+  it('shows a failed read with the server message and reads again on Retry', async () => {
+    const parent = run()
+    setUp([parent, run({ id: 'run_c1', parent_run_id: 'run_1' })])
+    const runChildren = vi.fn()
+      .mockRejectedValueOnce(new Error('server did not answer run.children within 1m0s'))
+      .mockResolvedValue({
+        root_run_id: 'run_1',
+        children: [child({})],
+        limits: { max_live: 8 },
+        usage: { runs: 2, metered_runs: 0, unmetered_runs: 2, input_tokens: 0, output_tokens: 0, cost_usd: 0, by_account: [] },
+      })
+    render(<ChildRuns run={toRecord(parent)} inset={false} client={fakeApi({ runChildren })} />)
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('server did not answer run.children within 1m0s')
+    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByRole('list', { name: /Subsessions of/ })).toBeDefined()
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('shows a disconnected subsession with why it stopped', async () => {

@@ -48,12 +48,13 @@ function tokensText(usage: Pick<ChildUsage, 'input_tokens' | 'output_tokens'>): 
   return `${tokens.format(usage.input_tokens)} input, ${tokens.format(usage.output_tokens)} output tokens`
 }
 
-function useChildren(run: RunRecord, client: Api): { result: RunChildrenResult | null; error: string | null } {
+function useChildren(run: RunRecord, client: Api): { result: RunChildrenResult | null; error: string | null; retry: () => void } {
   const readable = useCapability().hasMethod('run.children')
   // Any change to a descendant the store holds rereads the list, which also holds reservations the store never sees.
   const changed = useStore((s) => JSON.stringify([s.runs[run.id]?.last_commit, descendantRuns(s.runs, [run.id]).map((child) => [child.id, child.status_seq, child.detached])]))
   const touched = useChildTouches((s) => s.touched[run.id] ?? 0)
   const [state, setState] = useState<{ runID: string; result: RunChildrenResult | null; error: string | null }>({ runID: run.id, result: null, error: null })
+  const [retries, setRetries] = useState(0)
   useEffect(() => {
     if (!readable) return
     let live = true
@@ -64,9 +65,9 @@ function useChildren(run: RunRecord, client: Api): { result: RunChildrenResult |
     return () => {
       live = false
     }
-  }, [client, readable, run.id, changed, touched])
+  }, [client, readable, run.id, changed, touched, retries])
   const shown = state.runID === run.id ? state : { result: null, error: null }
-  return shown
+  return { ...shown, retry: () => setRetries((n) => n + 1) }
 }
 
 function Account({ child }: { child: Child }) {
@@ -187,7 +188,7 @@ export function useChildRunsItems(run: RunRecord, client: Api = api): ExtraItem[
 }
 
 export function ChildRuns({ run, inset, client = api }: { run: RunRecord; inset: boolean; client?: Api }) {
-  const { result, error } = useChildren(run, client)
+  const { result, error, retry } = useChildren(run, client)
   if (!result?.children.length && !error) return null
   return (
     <section aria-label="Subsessions" className={cn('flex flex-col gap-2 border-b border-seam py-3 last:border-b-0', inset && 'px-4')}>
@@ -195,7 +196,12 @@ export function ChildRuns({ run, inset, client = api }: { run: RunRecord; inset:
         Subsessions
         {result && <span className="text-text tabular-nums">{result.children.length}</span>}
       </SectionLabel>
-      {error && <p role="alert" className="text-ui-sm text-state-failed">{error}</p>}
+      {error && (
+        <div role="alert" className="flex items-center gap-2 text-ui-sm text-state-failed">
+          <span className="min-w-0 flex-1 break-words">{error}</span>
+          <Button variant="quiet" onClick={retry}>Retry</Button>
+        </div>
+      )}
       {result && (
         <>
           <ul aria-label={`Subsessions of ${runLabel(run)}`} className="flex flex-col divide-y divide-seam">

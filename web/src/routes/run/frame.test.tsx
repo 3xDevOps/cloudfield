@@ -517,6 +517,19 @@ describe('run details', () => {
     expect(JSON.parse(localStorage.getItem('aether.ui')!).state.runDetailsWidth).toBe(560)
   })
 
+  it('shows a failed first read of agent messages with the server message and reads again on Retry', async () => {
+    vi.mocked(api.coordMessagesList)
+      .mockRejectedValueOnce(new Error('server did not answer coord.messages.list within 1m0s'))
+      .mockResolvedValue({ messages: [] })
+    open()
+    const panel = await details()
+    const section = await panel.findByRole('region', { name: 'Agent messages' })
+    const alert = within(section).getByRole('alert')
+    expect(alert.textContent).toContain('server did not answer coord.messages.list within 1m0s')
+    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(panel.queryByRole('region', { name: 'Agent messages' })).toBeNull())
+  })
+
   it('lists what waits on the viewer, the notes and the run record', async () => {
     open({ pending_inputs: [{ id: 'in_1', session_id: 's', kind: 'question' }] })
     const panel = await details()
