@@ -141,7 +141,7 @@ func (s *Service) usedPercent(ctx context.Context, owner, account domain.MemberI
 	if err != nil {
 		return 0, false
 	}
-	used, ok := measured[account]
+	used, ok := measured[domain.AccountOf(account)]
 	return used, ok
 }
 

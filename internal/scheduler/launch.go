@@ -266,6 +266,7 @@ func (s *Scheduler) Launch(ctx context.Context, workspace domain.WorkspaceID, me
 // LaunchWithOptions captures the base before the run row is created, so a
 // failed capture leaves no durable or in-memory run state.
 func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode, opts domain.LaunchOptions) (*domain.Run, error) {
+	ctx = runtime.WithSteps(ctx)
 	for _, id := range append([]domain.WorkspaceID{workspace}, opts.ExtraWorkspaces...) {
 		lock := s.workspaceLock(id)
 		lock.RLock()
@@ -321,6 +322,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 		return nil, err
 	}
 	defer release()
+	runtime.Step(ctx, "admission")
 	s.mu.Lock()
 	bases := s.cfg.Bases
 	s.mu.Unlock()
@@ -345,6 +347,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	if extrasCh != nil {
 		extras = <-extrasCh
 	}
+	runtime.Step(ctx, "base")
 	if err != nil {
 		return nil, &BaseCaptureError{Capture: base, Err: err}
 	}
@@ -419,6 +422,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	if err := s.provision(ctx, run, ws, actor, argv, profile); err != nil {
 		return nil, err
 	}
+	runtime.LogSteps(ctx, "scheduler: launch steps", "run", run.ID)
 	return s.freshen(ctx, run), nil
 }
 
@@ -478,6 +482,7 @@ func (s *Scheduler) provisionSteps(ctx context.Context, entry *supervised, run *
 	if err != nil {
 		return fmt.Errorf("create checkout: %w", err)
 	}
+	runtime.Step(ctx, "checkout")
 	run.Worktree, run.Branch = checkout, branch
 	if updateErr := s.cfg.Store.SetRunCheckout(ctx, run.ID, checkout, branch); updateErr != nil {
 		return fmt.Errorf("record checkout: %w", updateErr)
@@ -492,6 +497,7 @@ func (s *Scheduler) provisionSteps(ctx context.Context, entry *supervised, run *
 	}
 	unlockCaches := sync.OnceFunc(s.lockRunCaches(run.HomeMember(), run.AccountMember()))
 	defer unlockCaches()
+	runtime.Step(ctx, "cache_lock")
 	plan, err := s.runPlan(ctx, entry, run, ws, actor, profile)
 	if err != nil {
 		return err
@@ -682,6 +688,7 @@ func (s *Scheduler) startRunContainer(ctx context.Context, entry *supervised, ru
 	if err != nil {
 		return nil, err
 	}
+	runtime.Step(ctx, "plan")
 	cid, err := s.createContainer(ctx, s.containerSpec(run, actor, argv, plan, limits))
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
@@ -700,8 +707,8 @@ func (s *Scheduler) startRunContainer(ctx context.Context, entry *supervised, ru
 		return nil, s.failContainer(ctx, entry, cid, "start container", serr)
 	}
 	s.mu.Lock()
-	if entry.loginMember != "" && !slices.Contains(entry.verifiedLogins, entry.loginMember) {
-		entry.verifiedLogins = append(entry.verifiedLogins, entry.loginMember)
+	if login := domain.AccountOf(entry.loginMember); entry.loginMember != "" && !slices.Contains(entry.verifiedLogins, login) {
+		entry.verifiedLogins = append(entry.verifiedLogins, login)
 	}
 	sc := entry.sidecar()
 	s.mu.Unlock()
@@ -718,6 +725,7 @@ func (s *Scheduler) startRunContainer(ctx context.Context, entry *supervised, ru
 		_ = att.Close()
 		return nil, s.failContainer(ctx, entry, cid, "start terminal", perr)
 	}
+	runtime.Step(ctx, "agent")
 	return driver, nil
 }
 

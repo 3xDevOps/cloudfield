@@ -439,7 +439,7 @@ type sidecar struct {
 	LoginMember string `json:"login_member,omitempty"`
 	// VerifiedLogins are the account owners whose own login the runtime
 	// confirmed in a container of this run.
-	VerifiedLogins      []domain.MemberID        `json:"verified_logins,omitempty"`
+	VerifiedLogins      []domain.Account         `json:"verified_logins,omitempty"`
 	Reporter            harness.Reporter         `json:"reporter,omitempty"`
 	Egress              bool                     `json:"egress,omitempty"`
 	AgentState          agentstatus.State        `json:"agent_state,omitempty"`
@@ -481,9 +481,10 @@ type sidecar struct {
 	UsageLimit  string        `json:"usage_limit,omitempty"`
 	// AsleepSince is when idleness stopped the container; WakeError is the
 	// last wake's failure.
-	AsleepSince *time.Time `json:"asleep_since,omitempty"`
-	AsleepSaved bool       `json:"asleep_saved,omitempty"`
-	WakeError   string     `json:"wake_error,omitempty"`
+	AsleepSince    *time.Time `json:"asleep_since,omitempty"`
+	AsleepSaved    bool       `json:"asleep_saved,omitempty"`
+	AsleepResident bool       `json:"asleep_resident,omitempty"`
+	WakeError      string     `json:"wake_error,omitempty"`
 }
 
 // sidecar snapshots the entry's durable state. Caller must hold s.mu.
@@ -574,6 +575,7 @@ func (e *supervised) sidecar() sidecar {
 		UsageLimit:          e.usageLimit,
 		AsleepSince:         asleepSince,
 		AsleepSaved:         e.asleepSaved,
+		AsleepResident:      e.asleepResident,
 		WakeError:           wakeError,
 	}
 }

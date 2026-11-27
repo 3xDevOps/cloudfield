@@ -72,7 +72,8 @@ type Window struct {
 // Service reads quota for member homes. Credential bytes are never retained in
 // this object; only a digest identifies the credential used for a cache entry.
 type Service struct {
-	homes *memberhome.Manager
+	homes  *memberhome.Manager
+	logins *memberhome.Logins
 
 	mu     sync.Mutex
 	cache  map[cacheKey]cacheState
@@ -102,10 +103,12 @@ type readFlight struct {
 	err       error
 }
 
-// New returns a quota service using homes for read-only credential access.
-func New(homes *memberhome.Manager) *Service {
+// New returns a quota service using homes and logins for read-only
+// credential access.
+func New(homes *memberhome.Manager, logins *memberhome.Logins) *Service {
 	return &Service{
 		homes:  homes,
+		logins: logins,
 		cache:  make(map[cacheKey]cacheState),
 		flight: make(map[string]*readFlight),
 		now:    time.Now,
@@ -136,20 +139,33 @@ type credentials struct {
 // account are coalesced, and every caller, the first included, returns when
 // its ctx is done without cancelling the shared read.
 func (s *Service) Read(ctx context.Context, account domain.MemberID, refresh bool) ([]Provider, error) {
+	return s.read(ctx, domain.AccountOf(account), refresh)
+}
+
+// ReadLogin is Read for any of a member's logins of Claude Code. An added
+// login has no Codex row of its own.
+func (s *Service) ReadLogin(ctx context.Context, account domain.Account, refresh bool) ([]Provider, error) {
+	if account.Login.Added() && (s == nil || s.logins == nil) {
+		return nil, errors.New("quota: added logins are not configured")
+	}
+	return s.read(ctx, account, refresh)
+}
+
+func (s *Service) read(ctx context.Context, account domain.Account, refresh bool) ([]Provider, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if s == nil || s.homes == nil {
 		return nil, errors.New("quota: member homes are not configured")
 	}
-	if account == "" {
+	if account.Member == "" {
 		return nil, errors.New("quota: account is required")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	key := string(account)
+	key := account.String()
 
 	s.mu.Lock()
 	flight := s.flight[key]
@@ -175,7 +191,7 @@ func (s *Service) Read(ctx context.Context, account domain.MemberID, refresh boo
 
 // lead performs one coalesced read on its own deadline, so a caller that
 // stops waiting never cancels it and its result still fills the cache.
-func (s *Service) lead(key string, account domain.MemberID, refresh bool, flight *readFlight) {
+func (s *Service) lead(key string, account domain.Account, refresh bool, flight *readFlight) {
 	requestCtx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
 	creds, readErr := s.readCredentials(requestCtx, account)
@@ -199,7 +215,7 @@ func (s *Service) lead(key string, account domain.MemberID, refresh bool, flight
 	close(flight.done)
 }
 
-func (s *Service) readLeader(ctx context.Context, account domain.MemberID, creds credentials, refresh bool) ([]Provider, error) {
+func (s *Service) readLeader(ctx context.Context, account domain.Account, creds credentials, refresh bool) ([]Provider, error) {
 	claude, err := s.readProvider(ctx, account, creds.claude, "claude", refresh)
 	if err != nil {
 		return nil, err
@@ -211,22 +227,41 @@ func (s *Service) readLeader(ctx context.Context, account domain.MemberID, creds
 	return []Provider{claude, codex}, nil
 }
 
-func (s *Service) readCredentials(ctx context.Context, account domain.MemberID) (credentials, error) {
+func (s *Service) readCredentials(ctx context.Context, account domain.Account) (credentials, error) {
 	if err := ctx.Err(); err != nil {
 		return credentials{}, err
 	}
-	claudeBytes, claudeErr := s.homes.ReadCredential(account, claudeCredentialFile, maxCredentialBytes)
+	if account.Login.Added() {
+		return s.loginCredentials(account), nil
+	}
+	claudeBytes, claudeErr := s.homes.ReadCredential(account.Member, claudeCredentialFile, maxCredentialBytes)
 	if err := ctx.Err(); err != nil {
 		return credentials{}, err
 	}
-	codexBytes, codexErr := s.homes.ReadCredential(account, codexCredentialFile, maxCredentialBytes)
+	codexBytes, codexErr := s.homes.ReadCredential(account.Member, codexCredentialFile, maxCredentialBytes)
 	if err := ctx.Err(); err != nil {
 		return credentials{}, err
 	}
 	return credentials{
-		claude: s.consoleCredential(account, parseClaudeCredential(claudeBytes, claudeErr, s.now())),
+		claude: s.consoleCredential(account.Member, parseClaudeCredential(claudeBytes, claudeErr, s.now())),
 		codex:  parseCodexCredential(codexBytes, codexErr, s.now()),
 	}, nil
+}
+
+// loginCredentials reads an added login of Claude Code from its own
+// directory. A keyless Console login is billed by the API and has no usage
+// windows.
+func (s *Service) loginCredentials(account domain.Account) credentials {
+	codex := credential{status: "unsupported", err: "added logins are Claude Code's only", fingerprint: fingerprint("codex-added-login")}
+	identity, err := s.logins.Identity(account.Member, "claude", account.Login)
+	if err != nil {
+		return credentials{claude: credential{status: "unavailable", err: "credential file unavailable", fingerprint: fingerprint("claude-read-error")}, codex: codex}
+	}
+	if identity.Kind == memberhome.LoginConsole {
+		return credentials{claude: credential{status: "unsupported", err: "an Anthropic Console sign-in is billed by the API and has no usage windows", fingerprint: fingerprint("claude-console-login")}, codex: codex}
+	}
+	data, readErr := s.logins.ReadCredential(account.Member, "claude", account.Login, maxCredentialBytes)
+	return credentials{claude: parseClaudeCredential(data, readErr, s.now()), codex: codex}
 }
 
 // consoleCredential replaces a missing or signed-out subscription login
@@ -257,9 +292,9 @@ func (c credentials) fingerprints() [2]string {
 	return [2]string{c.claude.fingerprint, c.codex.fingerprint}
 }
 
-func (s *Service) readProvider(ctx context.Context, account domain.MemberID, cred credential, provider string, refresh bool) (Provider, error) {
+func (s *Service) readProvider(ctx context.Context, account domain.Account, cred credential, provider string, refresh bool) (Provider, error) {
 	now := s.now().UTC()
-	key := cacheKey{account: string(account), provider: provider}
+	key := cacheKey{account: account.String(), provider: provider}
 	state := s.prepareState(key, cred.fingerprint)
 	if cred.status != "ok" {
 		s.clearState(key, cred.fingerprint)

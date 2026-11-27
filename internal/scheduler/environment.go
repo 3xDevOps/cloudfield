@@ -35,6 +35,10 @@ type EnvironmentPurpose string
 const (
 	EnvironmentPurposeRun      EnvironmentPurpose = "run"
 	EnvironmentPurposeTerminal EnvironmentPurpose = "terminal"
+	// EnvironmentPurposeLogin is the container a new login signs in in: the
+	// member's home with the login mounted over the default one, and no
+	// workspace, sudo, signing agent or key from the environment.
+	EnvironmentPurposeLogin EnvironmentPurpose = "login"
 )
 
 // EnvironmentPlan is the complete, server-assembled container environment.
@@ -91,7 +95,7 @@ func sessionUser(user string) string {
 // publication; planning creates/touches cache metadata, not just an inert spec.
 func (s *Scheduler) BuildEnvironmentPlan(ctx context.Context, run *domain.Run, ws *domain.Workspace, member *domain.Member, profile harness.Profile, purpose EnvironmentPurpose) (*EnvironmentPlan, error) {
 	switch purpose {
-	case EnvironmentPurposeRun, EnvironmentPurposeTerminal:
+	case EnvironmentPurposeRun, EnvironmentPurposeTerminal, EnvironmentPurposeLogin:
 	default:
 		return nil, fmt.Errorf("scheduler: invalid environment purpose %q", purpose)
 	}
@@ -146,6 +150,12 @@ func (s *Scheduler) BuildEnvironmentPlan(ctx context.Context, run *domain.Run, w
 	env, err := explicitEnvironment(profile, ws, secrets)
 	if err != nil {
 		return nil, err
+	}
+	if purpose == EnvironmentPurposeLogin {
+		// Empty, not absent: an image's own ENV would fill an absent one.
+		for _, key := range profile.EnvPassthrough {
+			env[key] = ""
+		}
 	}
 	if run != nil {
 		if err := harness.MergeEnv(env, profile.ModelLaunchEnv(run.Model)); err != nil {
@@ -212,7 +222,7 @@ func (s *Scheduler) BuildEnvironmentPlan(ctx context.Context, run *domain.Run, w
 				plan.Mounts = append(plan.Mounts, logins...)
 				plan.LoginMember = run.AccountMemberID
 				if ac := profile.AccountConfig; ac != nil {
-					config, configErr := s.accountConfigMounts(run, member.ID, profile, home)
+					config, configErr := s.accountConfigMounts(filepath.Join(s.accountConfigRoot(), string(run.ID)), member.ID, profile, home)
 					if configErr != nil {
 						return nil, configErr
 					}
@@ -231,6 +241,16 @@ func (s *Scheduler) BuildEnvironmentPlan(ctx context.Context, run *domain.Run, w
 				env["PATH"] += ":" + path.Join(home, accountBin)
 			}
 		}
+		if run != nil && run.AccountLogin.Added() {
+			if run.AccountMemberID != member.ID {
+				return nil, errors.New("scheduler: an added login is used only in its owner's own home")
+			}
+			logins, loginErr := s.addedLoginMounts(run, profile, home, env, purpose)
+			if loginErr != nil {
+				return nil, loginErr
+			}
+			plan.Mounts = append(plan.Mounts, logins...)
+		}
 		pins, err := s.pinnedLogins(ctx, member.ID, homePath, home, plan.Mounts, isolated)
 		if err != nil {
 			return nil, err
@@ -244,7 +264,7 @@ func (s *Scheduler) BuildEnvironmentPlan(ctx context.Context, run *domain.Run, w
 			plan.Mounts = append(plan.Mounts, state...)
 			plan.Programs = vmPrograms(homePath, home, profile, run.ACP)
 		}
-		if s.ompFront != nil {
+		if s.ompFront != nil && purpose != EnvironmentPurposeLogin {
 			broker, brokerErr := s.ompBrokerMount(member.ID, run, profile, home, env)
 			if brokerErr != nil {
 				return nil, brokerErr
@@ -265,26 +285,31 @@ func (s *Scheduler) BuildEnvironmentPlan(ctx context.Context, run *domain.Run, w
 			nestings[m.ContainerPath] = home
 		}
 		pool := "runs"
-		if purpose == EnvironmentPurposeTerminal {
+		if purpose != EnvironmentPurposeRun {
 			pool = "terminal"
 		}
-		cachePath, cacheErr := s.cfg.Homes.CachePath(member.ID, pool)
-		if cacheErr != nil {
-			return nil, fmt.Errorf("scheduler: resolve member cache: %w", cacheErr)
-		}
-		cacheMount := runtime.Mount{HostPath: cachePath, ContainerPath: "/aether-cache"}
-		if purpose == EnvironmentPurposeRun {
-			cacheMount.Kind = runtime.MountCache
-		}
-		if isolated {
-			var overlayErr error
-			if cacheMount.Overlay, overlayErr = s.ensureOverlay(run.ID, "cache"); overlayErr != nil {
-				return nil, overlayErr
+		// A sign-in gets no cache: its container is no cache pool's owner, so
+		// collection could remove a pool it mounted.
+		if purpose != EnvironmentPurposeLogin {
+			cachePath, cacheErr := s.cfg.Homes.CachePath(member.ID, pool)
+			if cacheErr != nil {
+				return nil, fmt.Errorf("scheduler: resolve member cache: %w", cacheErr)
 			}
+			cacheMount := runtime.Mount{HostPath: cachePath, ContainerPath: "/aether-cache"}
+			if purpose == EnvironmentPurposeRun {
+				cacheMount.Kind = runtime.MountCache
+			}
+			if isolated {
+				var overlayErr error
+				if cacheMount.Overlay, overlayErr = s.ensureOverlay(run.ID, "cache"); overlayErr != nil {
+					return nil, overlayErr
+				}
+			}
+			plan.Mounts = append(plan.Mounts, cacheMount)
 		}
-		plan.Mounts = append(plan.Mounts, cacheMount)
 		scratch := ""
 		switch {
+		case purpose == EnvironmentPurposeLogin:
 		case purpose == EnvironmentPurposeTerminal:
 			scratch = terminalScratchName(member.ID)
 		case isolated:
@@ -310,8 +335,10 @@ func (s *Scheduler) BuildEnvironmentPlan(ctx context.Context, run *domain.Run, w
 			}
 			inheritCacheEnvironment(env, inherited)
 		}
-		if err := s.cfg.Homes.ProtectLegacyCaches(member.ID, explicitHomeCachePaths(env, home)); err != nil {
-			return nil, fmt.Errorf("scheduler: protect explicit home caches: %w", err)
+		if purpose != EnvironmentPurposeLogin {
+			if err := s.cfg.Homes.ProtectLegacyCaches(member.ID, explicitHomeCachePaths(env, home)); err != nil {
+				return nil, fmt.Errorf("scheduler: protect explicit home caches: %w", err)
+			}
 		}
 		applyCacheEnvironment(env)
 		applyInstallEnvironment(env, home)
@@ -320,10 +347,13 @@ func (s *Scheduler) BuildEnvironmentPlan(ctx context.Context, run *domain.Run, w
 	if s.cfg.Homes != nil {
 		roots = []string{s.cfg.Homes.Root(), s.cfg.Homes.CacheRoot(), s.scratchRoot(), s.accountConfigRoot(), s.vmDatabasesRoot()}
 	}
+	if s.cfg.Logins != nil {
+		roots = append(roots, s.cfg.Logins.Root())
+	}
 	if s.ompFront != nil {
 		roots = append(roots, s.ompBrokerRoot())
 	}
-	if s.cfg.Signing != nil {
+	if s.cfg.Signing != nil && purpose != EnvironmentPurposeLogin {
 		agentDir, err := s.cfg.Signing.Serve(member.ID)
 		if err != nil {
 			return nil, fmt.Errorf("scheduler: serve the commit signing agent: %w", err)
@@ -603,17 +633,18 @@ func (s *Scheduler) loginMounts(ctx context.Context, launcher, account domain.Me
 	return mounts, nil
 }
 
-// accountConfigMounts writes run's own copy of the launcher's account
-// config, without the account the launcher is signed in to and with the
-// profile's BorrowedState, under the server's state directory, which no
-// container mounts. The copy is made from the Legacy file when the launcher
+// accountConfigMounts writes a copy of the launcher's account config,
+// without the account the launcher is signed in to and with the profile's
+// BorrowedState, in dir: a run's own directory under the server's state
+// directory, which no container mounts, or a new login's directory, whose
+// sign-in fills the copy. The copy is made from the Legacy file when the launcher
 // has one, as their own CLI reads that, and an empty read-only file masks
 // the Legacy file so the CLI reads the copy. The copy is mounted where the
 // profile's Env points the CLI: mounted over the launcher's file instead, it
 // would be detached by the launcher's other containers replacing that file
 // by rename. Each plan writes the copy afresh, so a run moved to another
 // account starts with none of the previous account cached.
-func (s *Scheduler) accountConfigMounts(run *domain.Run, launcher domain.MemberID, profile harness.Profile, home string) ([]runtime.Mount, error) {
+func (s *Scheduler) accountConfigMounts(dir string, launcher domain.MemberID, profile harness.Profile, home string) ([]runtime.Mount, error) {
 	ac := profile.AccountConfig
 	set := profile.BorrowedState[ac.File]
 	data, legacy, err := s.cfg.Homes.StateWithout(launcher, ac.Legacy, ac.Keys, set)
@@ -625,7 +656,6 @@ func (s *Scheduler) accountConfigMounts(run *domain.Run, launcher domain.MemberI
 			return nil, fmt.Errorf("scheduler: %w", err)
 		}
 	}
-	dir := filepath.Join(s.accountConfigRoot(), string(run.ID))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("scheduler: create the session's account config directory: %w", err)
 	}

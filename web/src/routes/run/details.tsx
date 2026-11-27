@@ -165,6 +165,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 function container(run: RunRecord): string {
   if (run.status === 'queued' || run.status === 'provisioning') return 'Starting'
   if (run.asleep_since && !isTerminal(run.status)) {
+    if (run.asleep_in_memory) return run.waking ? 'Resuming (waking)' : 'Paused in memory while asleep'
     if (run.asleep_saved) return run.waking ? 'Restoring (waking)' : 'Saved to disk while asleep'
     return run.waking ? 'Starting (waking)' : 'Stopped while asleep'
   }

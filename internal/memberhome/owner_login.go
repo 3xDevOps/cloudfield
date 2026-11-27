@@ -59,7 +59,7 @@ func (m *Manager) OwnerLogin(member domain.MemberID, agent string) (*OwnerLogin,
 	login, err := m.claudeAPIKeyLogin(member, home)
 	if login == nil {
 		var profileErr error
-		login, profileErr = anthropicProfileLogin(home, time.Now())
+		login, profileErr = anthropicProfileLogin(home, anthropicProfileDir, time.Now())
 		err = cmp.Or(err, profileErr)
 	}
 	if login == nil && err != nil {
@@ -131,14 +131,14 @@ func (m *Manager) claudeAPIKeyLogin(member domain.MemberID, home *os.Root) (*Own
 // interactive sign-in wrote is a login here; a federation profile holds no
 // credential of its own, and an expired token without a refresh token signs
 // nothing in.
-func anthropicProfileLogin(home *os.Root, now time.Time) (*OwnerLogin, error) {
+func anthropicProfileLogin(home *os.Root, dir string, now time.Time) (*OwnerLogin, error) {
 	// A profile directory the server will not read through, such as a
 	// symlinked ~/.config, is none it can vouch for, and no error either:
 	// most such homes hold no profile at all.
-	if dir, err := lstatLogin(home, anthropicProfileDir); err != nil || !dir.IsDir() {
+	if info, err := lstatLogin(home, dir); err != nil || !info.IsDir() {
 		return nil, nil
 	}
-	active, err := readProfileFile(home, "active_config", maxProfileName+2)
+	active, err := readProfileFile(home, dir, "active_config", maxProfileName+2)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +149,7 @@ func anthropicProfileLogin(home *os.Root, now time.Time) (*OwnerLogin, error) {
 	if name != path.Base(name) || name == "." || name == ".." || len(name) > maxProfileName {
 		return nil, nil
 	}
-	config, err := readProfileFile(home, "configs/"+name+".json", maxProfileBytes)
+	config, err := readProfileFile(home, dir, "configs/"+name+".json", maxProfileBytes)
 	if err != nil || len(config) == 0 {
 		return nil, err
 	}
@@ -158,14 +158,14 @@ func anthropicProfileLogin(home *os.Root, now time.Time) (*OwnerLogin, error) {
 			Type string `json:"type"`
 		} `json:"authentication"`
 	}
-	if err = json.Unmarshal(config, &profile); err != nil {
-		return nil, fmt.Errorf("%s/configs/%s.json: %w", anthropicProfileDir, name, err)
+	if json.Unmarshal(config, &profile) != nil {
+		return nil, notJSON(dir + "/configs/<active profile>.json")
 	}
 	if profile.Authentication.Type != "user_oauth" {
 		return nil, nil
 	}
 	rel := "credentials/" + name + ".json"
-	credentials, err := readProfileFile(home, rel, maxProfileBytes)
+	credentials, err := readProfileFile(home, dir, rel, maxProfileBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -179,8 +179,8 @@ func anthropicProfileLogin(home *os.Root, now time.Time) (*OwnerLogin, error) {
 	if len(credentials) == 0 {
 		return nil, nil
 	}
-	if err = json.Unmarshal(credentials, &tokens); err != nil {
-		return nil, fmt.Errorf("%s/%s: %w", anthropicProfileDir, rel, err)
+	if json.Unmarshal(credentials, &tokens) != nil {
+		return nil, notJSON(dir + "/credentials/<active profile>.json")
 	}
 	renews := strings.TrimSpace(tokens.RefreshToken) != ""
 	expiresAt, _ := tokens.ExpiresAt.(float64)
@@ -188,7 +188,7 @@ func anthropicProfileLogin(home *os.Root, now time.Time) (*OwnerLogin, error) {
 	if !renews && (strings.TrimSpace(tokens.AccessToken) == "" || expired) {
 		return nil, nil
 	}
-	return &OwnerLogin{File: anthropicProfileDir, Stamp: loginDigest(rel, string(credentials))}, nil
+	return &OwnerLogin{File: dir, Stamp: loginDigest(rel, string(credentials))}, nil
 }
 
 // lstatLogin stats rel without following a symlink at any component.
@@ -201,21 +201,32 @@ func lstatLogin(home *os.Root, rel string) (fs.FileInfo, error) {
 	return parent.Lstat(leaf)
 }
 
-func readProfileFile(home *os.Root, rel string, limit int64) ([]byte, error) {
-	rel = anthropicProfileDir + "/" + rel
-	parent, leaf, err := openLoginParent(home, rel)
+// readProfileFile reads rel in the profile directory dir. Its errors name
+// the file only by its place, since a profile's name comes from a file.
+func readProfileFile(home *os.Root, dir, rel string, limit int64) ([]byte, error) {
+	where := dir + "/" + strings.SplitN(rel, "/", 2)[0]
+	parent, leaf, err := openLoginParent(home, dir+"/"+rel)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", rel, err)
+		return nil, fmt.Errorf("%s: %w", where, withoutPath(err))
 	}
 	defer func() { _ = parent.Close() }()
 	data, err := readRegularFile(parent, leaf, limit)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", rel, err)
+		return nil, fmt.Errorf("%s: %w", where, withoutPath(err))
 	}
 	return data, nil
+}
+
+// withoutPath is err without the file name it carries, which can hold a
+// profile name read from a file.
+func withoutPath(err error) error {
+	if pathErr := (*fs.PathError)(nil); errors.As(err, &pathErr) {
+		return fmt.Errorf("%s: %w", pathErr.Op, pathErr.Err)
+	}
+	return errors.New("it is not a single regular file within the size limit")
 }
 
 func loginDigest(parts ...string) string {

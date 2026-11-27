@@ -216,6 +216,7 @@ type MessageStore interface {
 	// RetireRunMessages retires a released run's unread inbound mail.
 	RetireRunMessages(ctx context.Context, to domain.RunID) error
 	CoordReportedSince(ctx context.Context, run domain.RunID, since time.Time) (bool, error)
+	CoordStateReportedSince(ctx context.Context, run domain.RunID, since time.Time) (string, error)
 	RetireProvisionalReports(ctx context.Context, from, to domain.RunID, cutoff time.Time) error
 	ReserveCoordReport(ctx context.Context, report *CoordReport) (bool, error)
 	FinalizeCoordReport(ctx context.Context, report *CoordReport) (bool, error)

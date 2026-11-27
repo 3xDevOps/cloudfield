@@ -992,6 +992,7 @@ and names the problem, such as `no GitHub OAuth app is configured; set
 | `--dev-listen` | `AETHER_EDGE_DEV_LISTEN` | None. Plain HTTP on a loopback address for local testing |
 | none | `AETHER_EDGE_GITHUB_CLIENT_SECRET` | None. The secret itself, instead of a file; setting both is refused |
 | `--origin-pairs` | `AETHER_EDGE_ORIGIN_PAIRS` | None. More origin pairs, each with its own GitHub OAuth app ([More than one address pair](#more-than-one-address-pair)) |
+| `--retiring-pairs` | `AETHER_EDGE_RETIRING_PAIRS` | None. Pairs that are retiring, each with its replacement and an optional date ([Retiring an address pair](#retiring-an-address-pair)) |
 
 ### More than one address pair
 
@@ -1073,6 +1074,106 @@ holding a control channel by the relay origin they enrolled at),
 and `aether_edge_connector_requests_total{origin,protocol}` (connector requests
 by the relay origin they came in on and the protocol version of the server they
 were for, `0` when it was not connected).
+
+### Retiring an address pair
+
+Before an edge stops serving one of its pairs, mark the pair retiring so that
+whoever still uses it is told where to go. `--retiring-pairs`
+(`AETHER_EDGE_RETIRING_PAIRS`) lists the retiring pairs, comma-separated, each
+as its relay origin, the relay origin of the pair that replaces it, and an
+optional date:
+
+```sh
+AETHER_EDGE_RETIRING_PAIRS=https://<relay-host-1> https://<relay-host-2> 2027-03-01
+```
+
+Set it in the environment file, not as a flag: an older edge image ignores an
+unknown variable and refuses an unknown flag. A retiring pair keeps working in
+full. The date is text for people; the edge never acts on it. At start the edge
+logs `aether-edge: retiring relay=<relay origin> replacement=<relay origin>
+date=<date>` for each entry, and it refuses to start, naming the entry and the
+fix, when:
+
+- it serves one pair only;
+- an entry does not have two or three fields, or an origin does not parse;
+- an origin is not a relay origin of a served pair; a sign-in origin is refused
+  with the relay origin of its pair;
+- the replacement is the entry's own pair, or is itself retiring;
+- a host name is named in two entries, whatever its port, or with another
+  port than the served origin's; a replacement may repeat;
+- the date is not a real date written `YYYY-MM-DD`;
+- an origin of an entry is longer than 267 bytes or spells its port with a
+  leading zero, such as `:0443`.
+
+Origins are compared in canonical form: case and a default `:443` do not
+matter. Remove the entry and restart the edge to undo it. An older edge image
+ignores the option and loses only the notices below.
+
+Notices reach servers whether or not a pair is retiring, and this is the one
+addition to the wire with the option unset. A server's `hello` carries
+`notice_nonce`, 32 random bytes it draws for each enrollment. To a server that
+sent one, every `ready`, at any pair, carries a notice for each retiring relay
+origin, none when nothing is retiring, and one signature over the whole list,
+an empty list included, so that a missing or unsigned list can never stand for
+"no notices":
+
+```json
+"notices": [{"state": "retiring", "origin": "https://<relay-host-1>", "replacement": "https://<relay-host-2>", "date": "2027-03-01"}],
+"notices_signature": "<base64>"
+```
+
+The edge key signs `aether-edge-notices-v1`, the server id, the relay origin the
+server dialed, its nonce and every entry's state, origins and date, so the list
+is good for one server and one connection and never verifies as a grant or a
+connector assertion. The server keeps the list only when the signature verifies
+against the edge key it pinned, and otherwise keeps none; neither refuses the
+`ready`. It stores the list with the time it came beside the owner, in
+`<data dir>/edge/keys/sha256-<fingerprint>/notices.json`, and each `ready`
+replaces it, so a notice the edge stops sending is gone at the next connection.
+A missing or bad signature and a signed empty list both clear the stored
+notices: whoever answers for a relay host can suppress a warning until the next
+real connection, but cannot add a notice or change a replacement.
+Pinning a key, by the first connection or `edge trust`, deletes the
+`notices.json` of the key it replaces and of the key it pins, and the first
+connection pins only where no pin file is. Stored notices are bound to the pin
+file: every pin, by this build or an older one, puts a new `edge_key.json` in
+place. Beside `notices.json` the server keeps `notices.pin`, a hard link to the
+pin file the notices were verified under, made last and only while that file is
+still `edge_key.json`, and reads the notices only while the link is the current
+`edge_key.json`. A pin by an older binary therefore shows no notices until the
+next connection, and nothing in this build rewrites the pin file except a pin.
+The first connection puts its pin in place by a rename that replaces nothing,
+or else a hard link. Where the file system offers neither, as on vfat or many
+FUSE file systems, it pins by a plain rename, as builds before notices did,
+which can replace a pin another process wrote in the same instant: pin with
+`sudo cloudfield-server edge trust` before the first start there. Without hard
+links the server stores no notices, and a symbolic link at `edge_key.json`
+stores none either. To restore the data directory, stop the server, restore it
+into a new, empty directory and swap that in: copying a backup over an existing
+tree can keep that tree's `notices.pin` and so bring back its notices, or its
+pin. A restore that does not keep hard links drops the stored notices until the
+next connection. Stored notices also name the server id that verified them and count
+for no other. A list that arrived with the `ready` that pinned the key is
+trusted as that pin is, and only shown. An edge or a server that does not know
+the fields ignores them, and a server that sends no nonce gets the `ready` it
+got before.
+
+While a pair is retiring:
+
+- Every answer on both host names of the pair, API answers and WebSocket
+  handshakes included, carries `Aether-Edge-Retiring: https://<relay-host-2>;
+  date=2027-03-01`, without the `; date=` part when no date is set, and `GET
+  /v1/edge` carries `"retiring": "https://<relay-host-2>"` and
+  `"retiring_date": "2027-03-01"`. `/healthz` carries no header. A client
+  uses the value only when it is a canonical origin and a real date, and only
+  shows it. A connector answer the relay passes on from a server carries the
+  edge's value, never the server's.
+- Every edge page of the pair shows `This address of the edge is retiring on
+  2027-03-01. Its new address is https://<signin-host-2>: sign in there.` on the
+  sign-in host, the device pages included, and the replacement's relay origin
+  on the join page. The address is text, not a link, and no request is
+  redirected: sign-in, token and join paths carry codes and tokens that must
+  not reach another origin.
 
 ### Firewall
 

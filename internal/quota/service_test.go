@@ -86,7 +86,7 @@ func TestReadReportsAConsoleSignInAsAPIBilling(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			providers, err := New(homes).Read(context.Background(), member, false)
+			providers, err := New(homes, nil).Read(context.Background(), member, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -126,7 +126,7 @@ func TestReadCollectsClaudeAndCodexWithoutLeakingCredentialBodies(t *testing.T) 
 	})
 	t.Cleanup(func() { usageHTTPClient.Transport = oldTransport })
 
-	service := New(homes)
+	service := New(homes, nil)
 	providers, err := service.Read(context.Background(), member, false)
 	if err != nil {
 		t.Fatal(err)
@@ -175,7 +175,7 @@ func TestReadHonorsIdentityChangeAndDoesNotServeOldCache(t *testing.T) {
 	})
 	t.Cleanup(func() { usageHTTPClient.Transport = oldTransport })
 
-	service := New(homes)
+	service := New(homes, nil)
 	if _, err := service.Read(context.Background(), member, false); err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func TestReadStaleDropsWindowsAfterResetAndHonorsRetryAfter(t *testing.T) {
 	t.Cleanup(func() { usageHTTPClient.Transport = oldTransport })
 
 	current := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
-	service := New(homes)
+	service := New(homes, nil)
 	service.now = func() time.Time { return current }
 	if got, err := service.Read(context.Background(), member, false); err != nil || got[0].Status != "ok" {
 		t.Fatalf("initial read = %#v, %v", got, err)
@@ -264,7 +264,7 @@ func TestReadPreservesInitialFailureDuringRetryCooldown(t *testing.T) {
 	})
 	t.Cleanup(func() { usageHTTPClient.Transport = oldTransport })
 	current := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
-	service := New(homes)
+	service := New(homes, nil)
 	service.now = func() time.Time { return current }
 	first, err := service.Read(context.Background(), member, true)
 	if err != nil {
@@ -295,7 +295,7 @@ func TestReadRejectsQuotaWithNoValidWindows(t *testing.T) {
 		return fixtureResponse(`{"five_hour":{"utilization":null,"resets_at":null},"seven_day":{"utilization":101,"resets_at":"2100-01-01T00:00:00Z"}}`), nil
 	})
 	t.Cleanup(func() { usageHTTPClient.Transport = oldTransport })
-	got, err := New(homes).Read(context.Background(), member, true)
+	got, err := New(homes, nil).Read(context.Background(), member, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +354,7 @@ func TestReadCoalescesRequestsAndCanceledLeaderDoesNotCancelFlight(t *testing.T)
 	})
 	t.Cleanup(func() { usageHTTPClient.Transport = oldTransport })
 
-	service := New(homes)
+	service := New(homes, nil)
 	leaderCtx, cancel := context.WithCancel(context.Background())
 	leaderDone := make(chan error, 1)
 	go func() {

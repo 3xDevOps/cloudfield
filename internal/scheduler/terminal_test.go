@@ -685,11 +685,13 @@ func (r heldSupervisorRuntime) Wait(ctx context.Context, id runtime.ID) (runtime
 	return runtime.ExitStatus{}, ctx.Err()
 }
 
+func holdTerminalSupervisor(cfg *Config) {
+	cfg.Runtime = heldSupervisorRuntime{cfg.Runtime.(*fakeRuntime)}
+}
+
 func TestDestroyStoppedTerminalSkipsRunningTerminal(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t, func(cfg *Config) {
-		cfg.Runtime = heldSupervisorRuntime{cfg.Runtime.(*fakeRuntime)}
-	})
+	e := newTestEnv(t, holdTerminalSupervisor)
 	terminal, err := e.sched.EnsureTerminal(t.Context(), e.member.ID)
 	if err != nil {
 		t.Fatalf("EnsureTerminal: %v", err)

@@ -1438,7 +1438,7 @@ func (s *Scheduler) recoverSupervised(ctx context.Context, r *domain.Run) {
 			if swap.Continuation == "" {
 				s.dropAccountSwap(r.ID, &sc)
 			}
-		case r.AccountMember() == swap.To:
+		case r.Account() == swap.to():
 			s.didNotSurvive(ctx, r, runtime.ID(sc.ContainerID))
 			return
 		default:
@@ -2020,6 +2020,7 @@ func (s *Scheduler) entryFromSidecar(r *domain.Run, sc sidecar) *supervised {
 		usageLimit:          sc.UsageLimit,
 		asleepSince:         asleepSince,
 		asleepSaved:         sc.AsleepSaved,
+		asleepResident:      sc.AsleepResident,
 		wakeErr:             wakeErr,
 		done:                make(chan struct{}),
 	}

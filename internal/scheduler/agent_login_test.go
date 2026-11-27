@@ -469,7 +469,7 @@ func TestBackgroundRefusedOpenKeepsTheSignInText(t *testing.T) {
 func TestClearingARefusalLeavesALaterOne(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t, nil)
-	key := loginKey{e.member.ID, "claude"}
+	key := loginKey{domain.AccountOf(e.member.ID), "claude"}
 	e.sched.loginRefused(e.member.ID, "claude", "", acp.NewAuthRequired(nil))
 	e.sched.mu.Lock()
 	seen := e.sched.loginRefusals[key]

@@ -46,6 +46,7 @@ func (s *Server) workspaceTimeline(ctx context.Context, member domain.MemberID, 
 		Member:    domain.MemberID(p.MemberID),
 		Reader:    member,
 		Types:     types,
+		NoRereads: p.NoRereads,
 		Scope:     s.eventScope(ctx, actor),
 	}
 	var page timeline.Page
@@ -62,6 +63,9 @@ func (s *Server) workspaceTimeline(ctx context.Context, member domain.MemberID, 
 		NextSeq:  page.NextSeq,
 		More:     page.More,
 		OlderSeq: page.OlderSeq,
+	}
+	if !page.OlderTime.IsZero() {
+		out.OlderTime = page.OlderTime.UTC().Format(time.RFC3339Nano)
 	}
 	for _, ev := range page.Events {
 		payload, merr := json.Marshal(ev.Payload)
