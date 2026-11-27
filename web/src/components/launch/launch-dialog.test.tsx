@@ -1397,11 +1397,22 @@ describe('login', () => {
     vi.mocked(api.agentLoginList).mockResolvedValue(logins)
     await open()
     const picker = await screen.findByRole('combobox', { name: 'Login' })
-    expect(picker.textContent).toBe('Automatic: starts on work')
+    expect(picker.textContent).toBe('Automatic: starts on work, can move to console, billed per use')
+    expect(screen.getByText(/^Starts on the first login/).textContent).toBe('Starts on the first login in your order with usage left. When that one runs out, the session moves down your order and can reach console, billed per use.')
     await pickOption(picker, 'console · billed per use')
     setTask('on console')
     fireEvent.click(launchButton())
     await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ login: 'lgn-console0001' })))
+  })
+
+  it('keeps a picked login in sight on a phone with More options shut', async () => {
+    atViewport(390, { pointer: 'coarse' })
+    vi.mocked(api.agentLoginList).mockResolvedValue(logins)
+    await open()
+    const more = () => screen.getByRole('button', { name: /^More options/ })
+    fireEvent.click(more())
+    await pickOption(await screen.findByRole('combobox', { name: 'Login' }), 'console · billed per use')
+    expect(more().textContent).toContain('· console, billed per use')
   })
 
   it('offers no login on a teammate account', async () => {

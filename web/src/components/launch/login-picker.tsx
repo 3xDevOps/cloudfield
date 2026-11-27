@@ -19,9 +19,18 @@ export function useOwnLogins(client: Pick<Api, 'agentLoginList'>, enabled: boole
   return enabled ? logins : null
 }
 
+function orList(names: string[]): string {
+  return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}`
+}
+
 /** Which of the member's own logins a launch starts on; '' lets the server choose. Shown only with more than one login. */
 export function LoginPicker({ logins, value, onChange, disabled }: { logins: AgentLogin[]; value: string; onChange: (login: string) => void; disabled?: boolean }) {
   const first = logins.find((login) => login.automatic)
+  // Automatic moves a session down the order, onto a login billed per use too.
+  const perUse = orList(logins.filter((login) => login.automatic && login.per_use && login !== first).map((login) => login.name))
+  const automaticWords = first
+    ? `Automatic: starts on ${first.name}${first.per_use ? ', billed per use' : ''}${perUse ? `, can move to ${perUse}, billed per use` : ''}`
+    : 'Automatic'
   return (
     <div className="flex flex-col gap-1">
       <Label htmlFor="launch-login">Login</Label>
@@ -30,16 +39,21 @@ export function LoginPicker({ logins, value, onChange, disabled }: { logins: Age
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={automatic}>{first ? `Automatic: starts on ${first.name}` : 'Automatic'}</SelectItem>
-          {logins.map((login) => (
-            <SelectItem key={login.id} value={login.id}>
-              {login.name}{login.per_use ? ' · billed per use' : ''}{login.automatic ? '' : ' · Automatic off'}
-            </SelectItem>
-          ))}
+          <SelectItem value={automatic}>{automaticWords}</SelectItem>
+          {logins.map((login) => {
+            const detail = [login.per_use && 'billed per use', !login.automatic && 'Automatic off'].filter(Boolean).join(' · ')
+            return (
+              <SelectItem key={login.id} value={login.id}>
+                {login.name}{detail && <> <span className="text-muted">· {detail}</span></>}
+              </SelectItem>
+            )
+          })}
         </SelectContent>
       </Select>
       <p className="text-ui-sm text-muted">
-        {value ? 'The session starts on this login; it may still move to another when this one runs out.' : 'Starts on the first login in your order with usage left.'}
+        {value
+          ? 'The session starts on this login; it may still move to another when this one runs out.'
+          : `Starts on the first login in your order with usage left.${perUse ? ` When that one runs out, the session moves down your order and can reach ${perUse}, billed per use.` : ''}`}
       </p>
     </div>
   )

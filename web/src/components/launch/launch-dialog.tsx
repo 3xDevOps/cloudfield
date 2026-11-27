@@ -141,7 +141,8 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const loginsServer = useLoginsServer()
   const ownLogins = useOwnLogins(api, open && !sharedAccount && harness === loginAgent && loginsServer)
   const [login, setLogin] = useState('')
-  const pickedLogin = ownLogins && ownLogins.length > 1 && ownLogins.some((item) => item.id === login) ? login : ''
+  const picked = ownLogins && ownLogins.length > 1 ? ownLogins.find((item) => item.id === login) : undefined
+  const pickedLogin = picked?.id ?? ''
   const accountName = accounts.find((member) => member.id === account)?.display_name ?? account
   const taskMissing = needsTask(mode, task)
   const dictating = useDictating()
@@ -429,6 +430,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
         workspace={workspace}
         onWorkspace={(id) => { setError(null); setPickedWorkspace(id) }}
         accountName={sharedAccount ? accountName : undefined}
+        loginWords={picked && `${picked.name}${picked.per_use ? ', billed per use' : ''}`}
         lastSession={!last || pickedWorkspace !== null || workspaceID !== last.workspace_id ? 'none' : harness === last.harness ? 'repository and agent' : 'repository'}
         onAddWorkspace={() => { close(); navigate('workspaces') }}
         options={

@@ -29,6 +29,7 @@ export function PhoneLaunchSheet({
   onWorkspace,
   lastSession,
   accountName,
+  loginWords,
   onAddWorkspace,
   options,
   notes,
@@ -53,6 +54,8 @@ export function PhoneLaunchSheet({
   /** What still matches your newest session, which the sheet starts from. */
   lastSession: 'repository and agent' | 'repository' | 'none'
   accountName?: string
+  /** The login picked at launch, kept in sight with More options shut. */
+  loginWords?: string
   onAddWorkspace: () => void
   /** Permission, mode, model, limits and the rest of the desktop form. */
   options: ReactNode
@@ -124,6 +127,7 @@ export function PhoneLaunchSheet({
                   <span className="-ml-1 shrink-0 text-muted">&apos;s account</span>
                 </>
               )}
+              {loginWords && <span className="min-w-0 truncate text-muted">· {loginWords}</span>}
             </CollapsibleTrigger>
             <CollapsibleContent className="flex flex-col gap-4 pt-2">
               {!choice.noAgents && <Button type="button" variant="link" size="sm" className="self-start" disabled={disabled} onClick={onSetUp}>Install more agents...</Button>}
