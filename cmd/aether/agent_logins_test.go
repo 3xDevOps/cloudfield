@@ -28,6 +28,7 @@ func TestPrintLoginsInPriorityOrder(t *testing.T) {
 		{
 			AgentLogin: protocol.AgentLogin{ID: "default", Name: "default", Kind: "subscription", Plan: "pro", Email: "ada@home.example.test", Automatic: true, Shared: false, Position: 0},
 			UsageError: "rpc error -32010: account.usage: usage service not configured",
+			Sessions:   []string{},
 		},
 		{
 			AgentLogin: protocol.AgentLogin{ID: "lgn-test2", Name: "console", Kind: "console", Email: "ada@org.example.test", OrganizationID: "org-test2", PerUse: true, Automatic: false, Shared: true, Position: 5},
@@ -37,10 +38,10 @@ func TestPrintLoginsInPriorityOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `#  LOGIN    KIND          PLAN  EMAIL                  ORGANISATION  USAGE           AUTOMATIC  SHARES  BILLED   SESSIONS
+	want := `#  LOGIN    KIND          PLAN  EMAIL                  ORGANISATION  USAGE           AUTOMATIC  SHARES  BILLED   YOUR SESSIONS
 1  work     subscription  max   ada@work.example.test  Test Team     5h 12%, 7d 40%  on         on      -        2
 2  default  subscription  pro   ada@home.example.test  -             not read        on         off     -        0
-3  console  console       -     ada@org.example.test   org-test2     unavailable     off        on      per use  0
+3  console  console       -     ada@org.example.test   org-test2     unavailable     off        on      per use  -
 usage of login work: usage endpoint answered 429; showing the last read
 usage of login default: rpc error -32010: account.usage: usage service not configured
 usage of login console: no usage for a Console login
@@ -454,9 +455,10 @@ func TestReadLoginsListsYourSessionsOnEachLogin(t *testing.T) {
 		protocol.MethodRunList:      runs,
 		protocol.MethodAccountUsage: {result: protocol.AccountUsageResult{}},
 	})
-	logins, err := readLogins(c, "claude")
-	if err != nil {
-		t.Fatal(err)
+	var errOut bytes.Buffer
+	logins, err := readLogins(c, "claude", &errOut)
+	if err != nil || errOut.Len() != 0 {
+		t.Fatalf("readLogins = %v, stderr %q", err, errOut.String())
 	}
 	got := map[string][]string{}
 	for _, l := range logins {
@@ -468,6 +470,37 @@ func TestReadLoginsListsYourSessionsOnEachLogin(t *testing.T) {
 	}
 	if got, want := string(runs.params()), `{"member_id":"m-ada","active_only":true}`; got != want {
 		t.Errorf("run.list params = %s, want %s: your sessions that have not ended", got, want)
+	}
+}
+
+func TestReadLoginsListsLoginsWhoseSessionsCouldNotBeRead(t *testing.T) {
+	usage := &fakeReply{result: protocol.AccountUsageResult{Providers: []protocol.UsageProvider{{Provider: "claude", Status: "ok", Windows: []protocol.UsageWindow{{Label: "5h", UsedPercent: 12}}}}}}
+	c := fakeControlMethods(t, map[string]*fakeReply{
+		protocol.MethodAgentLoginList: {result: protocol.AgentLoginListResult{Agent: "claude", Logins: []protocol.AgentLogin{
+			{ID: "default", Name: "default"}, {ID: "lgn-test1", Name: "work"},
+		}}},
+		protocol.MethodServerInfo:   {result: protocol.ServerInfoResult{Member: protocol.Member{ID: "m-ada"}}},
+		protocol.MethodRunList:      {err: &protocol.Error{Code: protocol.CodeInternal, Message: "run.list: database is locked"}},
+		protocol.MethodAccountUsage: usage,
+	})
+	var errOut bytes.Buffer
+	logins, err := readLogins(c, "claude", &errOut)
+	if err != nil {
+		t.Fatalf("readLogins = %v; want the logins without their sessions", err)
+	}
+	if got, want := errOut.String(), "your sessions on each login could not be read: rpc error -32603: run.list: database is locked\n"; got != want {
+		t.Errorf("stderr = %q, want %q", got, want)
+	}
+	var out bytes.Buffer
+	if err := printLogins(&out, logins); err != nil {
+		t.Fatal(err)
+	}
+	want := `#  LOGIN    KIND  PLAN  EMAIL  ORGANISATION  USAGE   AUTOMATIC  SHARES  BILLED  YOUR SESSIONS
+1  default  -     -     -      -             5h 12%  off        off     -       -
+2  work     -     -     -      -             5h 12%  off        off     -       -
+`
+	if out.String() != want {
+		t.Errorf("printLogins =\n%s\nwant\n%s", out.String(), want)
 	}
 }
 

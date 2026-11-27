@@ -287,7 +287,7 @@ func agentLogins(args []string) error {
 		return errors.New(usage)
 	}
 	return withControl(func(c *protocol.Client) error {
-		logins, err := readLogins(c, agent)
+		logins, err := readLogins(c, agent, os.Stderr)
 		if err != nil {
 			return err
 		}
@@ -299,7 +299,8 @@ func agentLogins(args []string) error {
 }
 
 // loginUsage is a login, its usage as account.usage read it or the error it
-// returned, and the caller's sessions on it that have not ended.
+// returned, and the caller's sessions on it that have not ended, nil when
+// they could not be read.
 type loginUsage struct {
 	protocol.AgentLogin
 	Usage      *protocol.UsageProvider `json:"usage,omitempty"`
@@ -307,23 +308,28 @@ type loginUsage struct {
 	Sessions   []string                `json:"sessions"`
 }
 
-func readLogins(c *protocol.Client, agent string) ([]loginUsage, error) {
+// readLogins writes to errOut why the caller's sessions could not be read,
+// and lists the logins without them.
+func readLogins(c *protocol.Client, agent string, errOut io.Writer) ([]loginUsage, error) {
 	logins, err := listLogins(c, agent)
 	if err != nil {
 		return nil, err
 	}
 	var info protocol.ServerInfoResult
-	if err := c.Call(protocol.MethodServerInfo, struct{}{}, &info); err != nil {
-		return nil, err
-	}
 	var runs protocol.RunListResult
-	if err := c.Call(protocol.MethodRunList, protocol.RunListParams{MemberID: info.Member.ID, ActiveOnly: true}, &runs); err != nil {
-		return nil, err
+	sessionsErr := c.Call(protocol.MethodServerInfo, struct{}{}, &info)
+	if sessionsErr == nil {
+		sessionsErr = c.Call(protocol.MethodRunList, protocol.RunListParams{MemberID: info.Member.ID, ActiveOnly: true}, &runs)
+	}
+	if sessionsErr != nil {
+		_, _ = fmt.Fprintf(errOut, "your sessions on each login could not be read: %v\n", sessionsErr)
 	}
 	usage := make([]loginUsage, len(logins))
 	for i, l := range logins {
 		usage[i].AgentLogin = l
-		usage[i].Sessions = []string{}
+		if sessionsErr == nil {
+			usage[i].Sessions = []string{}
+		}
 		for _, r := range runs.Runs {
 			// A run on the default login records no login.
 			if r.AccountMemberID == info.Member.ID && r.Harness == agent && cmp.Or(r.AccountLogin, string(domain.DefaultLogin)) == l.ID {
@@ -346,7 +352,7 @@ func readLogins(c *protocol.Client, agent string) ([]loginUsage, error) {
 
 func printLogins(w io.Writer, logins []loginUsage) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "#\tLOGIN\tKIND\tPLAN\tEMAIL\tORGANISATION\tUSAGE\tAUTOMATIC\tSHARES\tBILLED\tSESSIONS")
+	_, _ = fmt.Fprintln(tw, "#\tLOGIN\tKIND\tPLAN\tEMAIL\tORGANISATION\tUSAGE\tAUTOMATIC\tSHARES\tBILLED\tYOUR SESSIONS")
 	var problems []string
 	for i, l := range logins {
 		usage := "-"
@@ -370,8 +376,12 @@ func printLogins(w io.Writer, logins []loginUsage) error {
 		if l.PerUse {
 			billed = "per use"
 		}
-		_, _ = fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\n", i+1, l.Name, cmp.Or(l.Kind, "-"), cmp.Or(l.Plan, "-"), cmp.Or(l.Email, "-"),
-			cmp.Or(l.OrganizationName, l.OrganizationID, "-"), usage, onOff(l.Automatic), onOff(l.Shared), billed, len(l.Sessions))
+		sessions := "-"
+		if l.Sessions != nil {
+			sessions = strconv.Itoa(len(l.Sessions))
+		}
+		_, _ = fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", i+1, l.Name, cmp.Or(l.Kind, "-"), cmp.Or(l.Plan, "-"), cmp.Or(l.Email, "-"),
+			cmp.Or(l.OrganizationName, l.OrganizationID, "-"), usage, onOff(l.Automatic), onOff(l.Shared), billed, sessions)
 	}
 	if err := tw.Flush(); err != nil {
 		return err
