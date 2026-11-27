@@ -60,3 +60,49 @@ it('drops an older answer once a newer one landed', async () => {
   await first
   expect(store.getState().edge?.notice).toBeUndefined()
 })
+
+it.each(['answers', 'fails'] as const)('drops a read for another viewer that %s late, keeping that viewer\'s answer', async (outcome) => {
+  const store = seeded()
+  const older = deferred<ServerEdge>()
+  const bobs = { ...edge, notice: undefined }
+  const serverEdge = vi.fn<() => Promise<ServerEdge>>().mockReturnValueOnce(older.promise).mockResolvedValueOnce(bobs)
+  const client = fakeApi({ serverEdge })
+  const first = loadEdge(store, client).catch(() => undefined)
+  store.setState({ identityKey: 'bob@server' })
+  await loadEdge(store, client)
+  if (outcome === 'answers') older.resolve(edge)
+  else older.reject(new Error('server.edge: connection reset'))
+  await first
+  expect(store.getState()).toMatchObject({ edge: bobs, edgeFor: 'bob@server', edgeError: null })
+})
+
+it('clears what a viewer change left showing when the read for the old viewer returns', async () => {
+  const store = seeded()
+  const older = deferred<ServerEdge>()
+  const client = fakeApi({ serverEdge: vi.fn<() => Promise<ServerEdge>>().mockResolvedValueOnce(edge).mockReturnValueOnce(older.promise) })
+  await loadEdge(store, client)
+  const second = loadEdge(store, client)
+  store.setState({ identityKey: 'bob@server' })
+  older.resolve(edge)
+  await second
+  expect(store.getState()).toMatchObject({ edge: null, edgeFor: 'bob@server' })
+})
+
+it.each(['before', 'after'] as const)('lands no older answer once the method is gone, whether it returns %s the read that sees that', async (order) => {
+  const store = seeded()
+  const older = deferred<ServerEdge>()
+  const client = fakeApi({ serverEdge: vi.fn<() => Promise<ServerEdge>>().mockReturnValueOnce(older.promise) })
+  const first = loadEdge(store, client)
+  store.setState({ capabilities: { gateway: 'local', methods: ['server.info'], ws: ['events'], local: [] } })
+  if (order === 'before') {
+    older.resolve(edge)
+    await first
+  }
+  await loadEdge(store, client)
+  store.setState({ capabilities: { gateway: 'local', methods: ['*'], ws: ['events'], local: [] } })
+  if (order === 'after') {
+    older.resolve(edge)
+    await first
+  }
+  expect(store.getState().edge).toBeNull()
+})

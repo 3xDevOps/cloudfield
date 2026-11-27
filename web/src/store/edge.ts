@@ -31,28 +31,35 @@ const landed = new WeakMap<RootStore, number>()
 /** A read's answer lands unless a newer read's answer already did, so a
  * read that fails after an older one succeeded keeps that answer. A
  * failure records the error, keeping the last good answer for the same
- * viewer; a viewer change while a read waits clears the slice. */
+ * viewer. A read for a viewer, or with the method, no longer current
+ * lands nothing; it only clears what it would have left showing. */
 export async function loadEdge(store: RootStore, client: Api): Promise<void> {
   const read = (reads.get(store) ?? 0) + 1
   reads.set(store, read)
   const s = store.getState()
-  const servesEdge = capability(s.capabilities).hasMethod('server.edge')
-  if (!servesEdge || s.edgeFor !== s.identityKey) s.setEdge(null, s.identityKey)
-  if (!servesEdge) return
-  const newest = () => read > (landed.get(store) ?? 0)
+  const viewer = s.identityKey
+  const serves = (state: typeof s) => capability(state.capabilities).hasMethod('server.edge')
+  if (!serves(s) || s.edgeFor !== viewer) {
+    // No read started before this one may land.
+    landed.set(store, read - 1)
+    s.setEdge(null, viewer)
+  }
+  if (!serves(s)) return
+  const current = () => {
+    const now = store.getState()
+    if (now.identityKey === viewer && serves(now)) return read > (landed.get(store) ?? 0)
+    if (now.edgeFor === viewer || !serves(now)) now.setEdge(null, now.identityKey)
+    return false
+  }
   let edge: ServerEdge
   try {
     edge = await client.serverEdge()
   } catch (err) {
-    const now = store.getState()
-    if (now.identityKey !== s.identityKey) now.setEdge(null, now.identityKey)
-    else if (newest() && reads.get(store) === read) now.setEdgeError(message(err))
+    if (current() && reads.get(store) === read) store.getState().setEdgeError(message(err))
     throw err
   }
-  const now = store.getState()
-  if (now.identityKey !== s.identityKey) now.setEdge(null, now.identityKey)
-  else if (newest()) {
+  if (current()) {
     landed.set(store, read)
-    now.setEdge(edge, now.identityKey)
+    store.getState().setEdge(edge, viewer)
   }
 }
