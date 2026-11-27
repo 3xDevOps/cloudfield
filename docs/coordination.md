@@ -1647,9 +1647,11 @@ held, nor is a `!command` or `/compact`, which the app-server lists as a
 server restart is not asked again after it. If the read fails, the turn is
 not held and the server logs the error. If admission refuses the reminder,
 the turn ends as it would have. The server sends the reminder only while the
-app-server lists no turn in progress, so the reminder joins no other turn: if
-one has started by then, such as a follow-up queued in the terminal, the
-first turn ends as it would have and the new one owes its own report.
+app-server lists no turn in progress: if one has started by then, such as a
+follow-up queued in the terminal, the first turn ends as it would have and
+the new one owes its own report. Codex 0.167.2 takes a `turn/start` during a
+turn as input to that turn, so a turn that starts between that check and the
+reminder's `turn/start` takes the reminder and ends as the reminder's turn.
 Background sessions, and Standard sessions of other agents, are not held.
 
 `run.report` carries the agent's last message in one case: the turn end of a

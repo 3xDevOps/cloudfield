@@ -387,7 +387,8 @@ func (d *appServerDriver) status(entry *supervised, r *appServerRun, thread stri
 				d.s.mu.Lock()
 				working := entry.agentReport.State == agentstatus.Working
 				d.s.mu.Unlock()
-				// The idle thread a connection finds ends no turn.
+				// A connection also reports the idle thread it finds, which
+				// ends a turn only for a session recorded as working.
 				if c := d.s.coordinationSeam(); working && c != nil && c.enabled {
 					ctx, cancel := context.WithTimeout(r.ctx, acpSteerTimeout)
 					message, interrupted, err := client.LastMessage(ctx, thread)
