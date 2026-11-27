@@ -336,7 +336,7 @@ func TestAnUnreadableConsoleSignInLeavesTheLoginFileInCharge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loginStamp beside an unreadable configuration file = %v", err)
 	}
-	e.sched.loginRefused(e.member.ID, "claude", stamp, acp.NewAuthRequired(nil))
+	e.sched.loginRefused(domain.AccountOf(e.member.ID), "claude", stamp, acp.NewAuthRequired(nil))
 	if problem, blocks := loginProblem(t, e); problem != refusedProblem || blocks {
 		t.Fatalf("after the refusal = %q, %v, want %q", problem, blocks, refusedProblem)
 	}
@@ -379,7 +379,7 @@ func TestRememberedRefusalKeepsOnlyTheAgentsMessage(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t, nil)
 	cause := fmt.Errorf("open the agent conversation: %w; stderr: fixture stderr tail", acp.NewAuthRequired(map[string]string{"detail": "fixture data"}))
-	e.sched.loginRefused(e.member.ID, "claude", "", cause)
+	e.sched.loginRefused(domain.AccountOf(e.member.ID), "claude", "", cause)
 	if problem, blocks := loginProblem(t, e); problem != refusedProblem || blocks {
 		t.Fatalf("LoginProblem = %q, %v, want %q", problem, blocks, refusedProblem)
 	}
@@ -470,12 +470,12 @@ func TestClearingARefusalLeavesALaterOne(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t, nil)
 	key := loginKey{domain.AccountOf(e.member.ID), "claude"}
-	e.sched.loginRefused(e.member.ID, "claude", "", acp.NewAuthRequired(nil))
+	e.sched.loginRefused(domain.AccountOf(e.member.ID), "claude", "", acp.NewAuthRequired(nil))
 	e.sched.mu.Lock()
 	seen := e.sched.loginRefusals[key]
 	e.sched.mu.Unlock()
 	time.Sleep(time.Millisecond)
-	e.sched.loginRefused(e.member.ID, "claude", "", acp.NewAuthRequired(nil))
+	e.sched.loginRefused(domain.AccountOf(e.member.ID), "claude", "", acp.NewAuthRequired(nil))
 	e.sched.mu.Lock()
 	later := e.sched.loginRefusals[key]
 	e.sched.mu.Unlock()

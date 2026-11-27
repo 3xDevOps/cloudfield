@@ -128,7 +128,7 @@ func (s *Scheduler) loginStamp(account domain.MemberID, agent string, profile ha
 // while the account's login files read stamp. Only the agent's own message
 // is kept, and bounded: the error around it can carry the agent's stderr,
 // and everyone the account is shared with reads this.
-func (s *Scheduler) loginRefused(account domain.MemberID, agent, stamp string, cause error) {
+func (s *Scheduler) loginRefused(account domain.Account, agent, stamp string, cause error) {
 	message := "Authentication required"
 	if refused := (*acp.RequestError)(nil); errors.As(cause, &refused) && refused.Message != "" {
 		message = refused.Message
@@ -142,7 +142,7 @@ func (s *Scheduler) loginRefused(account domain.MemberID, agent, stamp string, c
 	if s.loginRefusals == nil {
 		s.loginRefusals = make(map[loginKey]loginRefusal)
 	}
-	s.loginRefusals[loginKey{domain.AccountOf(account), agent}] = loginRefusal{problem: problem, stamp: stamp, at: time.Now()}
+	s.loginRefusals[loginKey{account, agent}] = loginRefusal{problem: problem, stamp: stamp, at: time.Now()}
 }
 
 // signInSteps is where the owner of an account signs agent in again. Only a
@@ -221,7 +221,7 @@ func (s *Scheduler) checkLogin(ctx context.Context, workspace domain.WorkspaceID
 // cannot be resolved or a workspace variable signs the agent in instead.
 type runLogin struct {
 	known   bool
-	account domain.MemberID
+	account domain.Account
 	owner   string
 	// agent is the name the run launched and label what to call it; a
 	// definition without an executable resolves to a profile that has
@@ -239,20 +239,29 @@ func (s *Scheduler) runLogin(ctx context.Context, runID domain.RunID) runLogin {
 	if err != nil {
 		return runLogin{}
 	}
-	login := runLogin{account: run.AccountMember(), agent: run.Harness}
-	if login.profile, _, err = s.launchProfile(ctx, run.MemberID, login.account, run.Harness); err != nil {
+	login := runLogin{account: run.Account(), agent: run.Harness}
+	if login.profile, _, err = s.launchProfile(ctx, run.MemberID, login.account.Member, run.Harness); err != nil {
 		return runLogin{}
 	}
 	if byEnv, envErr := s.environmentSignsIn(ctx, run.WorkspaceID, login.agent, login.profile, run.Mode); envErr != nil || byEnv {
 		return runLogin{}
 	}
-	if login.fileProblem, err = s.loginFileProblem(run.HomeMember(), login.account, login.agent, login.profile); err != nil {
-		return runLogin{}
+	if login.account.Login.Added() {
+		if login.fileProblem, err = s.addedLoginProblem(login.account, login.agent); err != nil {
+			return runLogin{}
+		}
+		if login.stamp, err = s.cfg.Logins.Stamp(login.account.Member, login.agent, login.account.Login); err != nil {
+			return runLogin{}
+		}
+	} else {
+		if login.fileProblem, err = s.loginFileProblem(run.HomeMember(), login.account.Member, login.agent, login.profile); err != nil {
+			return runLogin{}
+		}
+		if login.stamp, err = s.loginStamp(login.account.Member, login.agent, login.profile); err != nil {
+			return runLogin{}
+		}
 	}
-	if login.stamp, err = s.loginStamp(login.account, login.agent, login.profile); err != nil {
-		return runLogin{}
-	}
-	login.known, login.owner, login.label = true, s.memberName(ctx, login.account), cmp.Or(login.profile.Label(), run.Harness)
+	login.known, login.owner, login.label = true, s.memberName(ctx, login.account.Member), cmp.Or(login.profile.Label(), run.Harness)
 	return login
 }
 

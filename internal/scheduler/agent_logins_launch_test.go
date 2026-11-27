@@ -16,6 +16,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/permissions"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
 	"github.com/3xDevOps/cloudfield/internal/secretstore"
+	acp "github.com/coder/acp-go-sdk"
 )
 
 type loginShareEnv struct {
@@ -632,5 +633,40 @@ func TestLoginInUseFailsClosedOnAnUnreadSession(t *testing.T) {
 	})
 	if inUse, err := e.sched.LoginInUse(ctx, work); err == nil || !strings.Contains(err.Error(), "could not be read") {
 		t.Fatalf("LoginInUse with a kept container whose session cannot be read = %v, %v; want refused", inUse, err)
+	}
+}
+
+// An agent's refusal for want of a sign-in in a session on an added login
+// is remembered for that login, not the default one, and a turn that works
+// there forgets it.
+func TestARefusalOnAnAddedLoginIsKeyedByThatLogin(t *testing.T) {
+	e := newLoginShareEnv(t)
+	ctx := t.Context()
+	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	run := &domain.Run{WorkspaceID: e.ws.ID, MemberID: e.member.ID, AccountMemberID: e.member.ID, AccountLogin: work.Login, Task: "t", Harness: "claude", Mode: domain.LaunchACP, Status: domain.RunRunning}
+	if err := e.db.CreateRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	login := e.sched.runLogin(ctx, run.ID)
+	if !login.known {
+		t.Fatal("the session's login is unknown")
+	}
+	e.sched.loginRefusedAdvice(login, acp.NewAuthRequired(nil), refusedUnrestarted)
+	profile, _ := harness.Lookup("claude")
+	if problem, _, err := e.sched.LoginProblem(e.member.ID, e.member.ID, "claude", profile); err != nil || problem != "" {
+		t.Fatalf("Ada's default login after a refusal on work = %q, %v; want no problem", problem, err)
+	}
+	refusedOn := func() bool {
+		e.sched.mu.Lock()
+		defer e.sched.mu.Unlock()
+		_, ok := e.sched.loginRefusals[loginKey{work, "claude"}]
+		return ok
+	}
+	if !refusedOn() {
+		t.Fatalf("refusals = %v; want one on work", e.sched.loginRefusals)
+	}
+	e.sched.turnWorked(ctx, run.ID)
+	if refusedOn() {
+		t.Fatal("a turn that worked on work left its refusal")
 	}
 }

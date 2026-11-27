@@ -187,6 +187,21 @@ func (l *Logins) openLogin(member domain.MemberID, agent string, id domain.Login
 	return dir, nil
 }
 
+// Stamp changes when an added login's sign-in files do, as LoginStamp's
+// does for a home's.
+func (l *Logins) Stamp(member domain.MemberID, agent string, id domain.LoginID) (string, error) {
+	dir, err := l.openLogin(member, agent, id)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = dir.Close() }()
+	stamp, err := stampIn(dir, []string{LoginCredentials, LoginAnthropic})
+	if err != nil {
+		return "", fmt.Errorf("memberhome: login %s: %w", id, err)
+	}
+	return stamp, nil
+}
+
 // Remove deletes a login's directory; an absent one is a no-op.
 func (l *Logins) Remove(member domain.MemberID, agent string, id domain.LoginID) error {
 	rel, err := l.rel(member, agent, id)
