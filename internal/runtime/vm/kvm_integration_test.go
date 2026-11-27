@@ -271,10 +271,21 @@ func TestKVMRepeatedSaveAndWakeKeepsMemoryAndProcesses(t *testing.T) {
 		if err := e.restore(t.Context(), key); err != nil {
 			t.Fatalf("restore %d: %v", cycle, err)
 		}
-		t.Logf("cycle %d: the save took %s and wrote %d MiB, the restore %s", cycle, saveTook.Round(time.Millisecond), saved>>20, time.Since(start).Round(time.Millisecond))
+		restoreTook := time.Since(start)
 		if _, err := os.Stat(e.path(key, snapshotDir)); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("cycle %d: the saved state outlived the wake that used it: %v", cycle, err)
 		}
+		for {
+			if _, err := os.Stat(e.path(key, usedSnapshotDir)); errors.Is(err, os.ErrNotExist) {
+				break
+			}
+			if time.Since(start) > restoreTook+time.Minute {
+				t.Fatalf("cycle %d: the saved state the wake used is still on disk a minute later", cycle)
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Logf("cycle %d: the save took %s and wrote %d MiB, the restore %s; the used state was deleted %s after it returned",
+			cycle, saveTook.Round(time.Millisecond), saved>>20, restoreTook.Round(time.Millisecond), (time.Since(start) - restoreTook).Round(time.Millisecond))
 		if after, _ := vmRun(t, e, key, alive); after != before {
 			t.Fatalf("cycle %d: after the wake the guest has processes and boot %q, want %q%s", cycle, after, before, e.logTail(key))
 		}
