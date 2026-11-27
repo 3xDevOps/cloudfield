@@ -195,27 +195,65 @@ func TestFollowSignInShowsAFailedStartOnce(t *testing.T) {
 	}
 }
 
-func TestFollowSignInRetriesASignInStillStarting(t *testing.T) {
-	pause := signInRetryPause
-	signInRetryPause = time.Millisecond
-	t.Cleanup(func() { signInRetryPause = pause })
+// silentControl is a control channel that never answers, as a server whose
+// sign-in has not ended does not answer agent.login.result.
+func silentControl(t *testing.T) *protocol.Client {
 	server, client := net.Pipe()
 	go func() { _, _ = io.Copy(io.Discard, server) }()
 	c := protocol.NewClient(client)
 	t.Cleanup(func() { _ = c.Close(); _ = server.Close() })
+	return c
+}
+
+func retryTimes(t *testing.T, pause, limit time.Duration) {
+	oldPause, oldLimit := signInRetryPause, signInRetryLimit
+	signInRetryPause, signInRetryLimit = pause, limit
+	t.Cleanup(func() { signInRetryPause, signInRetryLimit = oldPause, oldLimit })
+}
+
+func TestFollowSignInRetriesASignInStillStarting(t *testing.T) {
+	retryTimes(t, time.Millisecond, 30*time.Millisecond)
 	var out, errOut bytes.Buffer
 	opened := 0
 	starting := refusedTerminal(&opened, protocol.CodeConflict, "store: conflict: the sign-in of login lgn-test1 is starting; open its terminal again in a moment")
-	err := followSignIn(&out, &errOut, c, "claude", "lgn-test1", starting)
-	if err == nil || err.Error() != "the sign-in of login lgn-test1 is still starting; open its terminal again with:\n  cloudfield agent login claude --attach lgn-test1" {
+	err := followSignIn(&out, &errOut, silentControl(t), "claude", "lgn-test1", starting)
+	if err == nil || err.Error() != "the sign-in of login lgn-test1 is still starting after 30ms; open its terminal again with:\n  cloudfield agent login claude --attach lgn-test1" {
 		t.Errorf("followSignIn = %v; want the command to run again", err)
 	}
 	if got, want := errOut.String(), "cli: terminal: store: conflict: the sign-in of login lgn-test1 is starting; open its terminal again in a moment\n"+
-		"trying again every 1ms for up to a minute; Ctrl-C stops trying and leaves the sign-in running\n"; got != want {
+		"trying again every 1ms for up to 30ms; Ctrl-C stops trying and leaves the sign-in running\n"; got != want {
 		t.Errorf("stderr = %q, want %q", got, want)
 	}
-	if opened != signInAttempts || out.Len() != 0 {
-		t.Errorf("opened %d times, stdout %q; want %d attempts", opened, out.String(), signInAttempts)
+	if opened < 2 || out.Len() != 0 {
+		t.Errorf("opened %d times, stdout %q; want it opened again", opened, out.String())
+	}
+}
+
+func TestFollowSignInStopsRetryingAtItsDeadlineWhileAnOpenHangs(t *testing.T) {
+	retryTimes(t, time.Millisecond, 50*time.Millisecond)
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	opened := 0
+	refused := refusedTerminal(&opened, protocol.CodeConflict, "store: conflict: the sign-in of login lgn-test1 is starting; open its terminal again in a moment")
+	open := func() (*cli.TerminalStream, protocol.TerminalResponse, error) {
+		if opened == 0 {
+			return refused()
+		}
+		<-hang
+		return nil, protocol.TerminalResponse{}, errors.New("cli: terminal: closed")
+	}
+	done := make(chan error, 1)
+	go func() {
+		var out, errOut bytes.Buffer
+		done <- followSignIn(&out, &errOut, silentControl(t), "claude", "lgn-test1", open)
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.HasPrefix(err.Error(), "the sign-in of login lgn-test1 is still starting after 50ms;") {
+			t.Errorf("followSignIn = %v; want it to give up at the deadline", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("followSignIn waited on a hung open past its deadline")
 	}
 }
 

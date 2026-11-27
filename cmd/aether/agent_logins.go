@@ -89,12 +89,17 @@ func signIn(out io.Writer, conn *cli.Conn, c *protocol.Client, agent, id string)
 }
 
 // signInRetryPause is how long a refused sign-in terminal waits for the
-// sign-in's result before it is opened again.
-var signInRetryPause = 5 * time.Second
+// sign-in's result before it is opened again; signInRetryLimit bounds the
+// retries of a sign-in still starting, the opens included.
+var (
+	signInRetryPause = 5 * time.Second
+	signInRetryLimit = time.Minute
+)
 
-const signInAttempts = 12
-
-var errNotEnded = errors.New("the sign-in has not ended")
+var (
+	errNotEnded      = errors.New("the sign-in has not ended")
+	errStillStarting = errors.New("the sign-in is still starting")
+)
 
 // followSignIn waits for the sign-in's result while it opens the terminal:
 // the server refuses a sign-in that ended and one still starting with the
@@ -115,31 +120,57 @@ func followSignIn(out, errOut io.Writer, c *protocol.Client, agent, id string, o
 			}
 		})
 	}
-	for attempt := 1; ; attempt++ {
+	var deadline time.Time
+	for {
 		var stream *cli.TerminalStream
 		var ack protocol.TerminalResponse
-		err := interruptibly(func() (err error) {
-			stream, ack, err = open()
-			return err
+		err := interruptibly(func() error {
+			var expired <-chan time.Time
+			if !deadline.IsZero() {
+				expired = time.After(time.Until(deadline))
+			}
+			opened := make(chan error, 1)
+			go func() {
+				s, a, err := open()
+				stream, ack = s, a
+				opened <- err
+			}()
+			select {
+			case err := <-opened:
+				return err
+			case <-expired:
+				return errStillStarting
+			}
 		})
 		switch {
 		case errors.Is(err, errInterrupted):
 			return mayStillRun(err, agent, id)
+		case errors.Is(err, errStillStarting):
+			return stillStarting(agent, id)
 		case err == nil:
 			err = describeTerminalEnd(copyRaw(stream, 0))
 		case ack.Code == protocol.CodeNotFound:
 			return err
 		case ack.Code != 0:
-			resultErr := ended(time.After(signInRetryPause))
+			starting := ack.Code == protocol.CodeConflict
+			first := starting && deadline.IsZero()
+			if first {
+				deadline = time.Now().Add(signInRetryLimit)
+			}
+			wait := signInRetryPause
+			if starting {
+				wait = min(wait, time.Until(deadline))
+			}
+			resultErr := ended(time.After(wait))
 			switch {
 			case !errors.Is(resultErr, errNotEnded):
 				return signInEnded(out, agent, id, &login, resultErr)
-			case ack.Code != protocol.CodeConflict:
+			case !starting:
 				return err
-			case attempt == signInAttempts:
-				return fmt.Errorf("the sign-in of login %s is still starting; open its terminal again with:\n  %s", id, attachCommand(agent, id))
-			case attempt == 1:
-				if _, err := fmt.Fprintf(errOut, "%v\ntrying again every %v for up to a minute; Ctrl-C stops trying and leaves the sign-in running\n", err, signInRetryPause); err != nil {
+			case !time.Now().Before(deadline):
+				return stillStarting(agent, id)
+			case first:
+				if _, err := fmt.Fprintf(errOut, "%v\ntrying again every %v for up to %v; Ctrl-C stops trying and leaves the sign-in running\n", err, signInRetryPause, signInRetryLimit); err != nil {
 					return err
 				}
 			}
@@ -152,6 +183,10 @@ func followSignIn(out, errOut io.Writer, c *protocol.Client, agent, id string, o
 		}
 		return signInEnded(out, agent, id, &login, ended(nil))
 	}
+}
+
+func stillStarting(agent, id string) error {
+	return fmt.Errorf("the sign-in of login %s is still starting after %v; open its terminal again with:\n  %s", id, signInRetryLimit, attachCommand(agent, id))
 }
 
 // signInEnded prints the login the sign-in added, or returns why it added
