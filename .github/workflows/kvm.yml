@@ -14,21 +14,28 @@ on:
     inputs:
       uncap:
         description: 1 lifts the unit's MemoryMax before every save
-        default: "0"
+        default: "1"
 
 permissions:
   contents: read
 
 jobs:
   kvm:
-    name: incremental save ${{ matrix.fs }} ${{ matrix.mib }}
+    name: file bound ${{ matrix.arm }} ${{ matrix.fs }} ${{ matrix.mib }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        fs: [xfs, btrfs, ext4]
-        mib: [2048, 8192]
+        include:
+          - { arm: A, fs: xfs, mib: 8192, cycles: 16 }
+          - { arm: B, fs: xfs, mib: 8192, cycles: 16 }
+          - { arm: C, fs: xfs, mib: 8192, cycles: 16 }
+          - { arm: D, fs: xfs, mib: 8192, cycles: 16 }
+          - { arm: A, fs: xfs, mib: 2048, cycles: 16 }
+          - { arm: C, fs: xfs, mib: 2048, cycles: 16 }
+          - { arm: C, fs: ext4, mib: 8192, cycles: 10 }
+          - { arm: cost, fs: xfs, mib: 8192, cycles: 0 }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -71,5 +78,5 @@ jobs:
           echo "ce7133bf535ed5a4e2a63ea1f26025445a5b1241f73ddfb81ff2fbcb2e803a59  $RUNNER_TEMP/ch" | sha256sum -c
           sudo install -m 0755 "$RUNNER_TEMP/ch" /usr/local/bin/cloud-hypervisor
           cloud-hypervisor --version
-      - name: Incremental save measurement
-        run: sudo env "PATH=$PATH" "HOME=$HOME" "LAZY_UNCAP=${{ inputs.uncap }}" "RUNNER_NAME=$RUNNER_NAME" scripts/zz-lazy-incremental.sh ${{ matrix.fs }} ${{ matrix.mib }} "$PWD/dist/aether-vmlinux-x86_64"
+      - name: File bound measurement
+        run: sudo env "PATH=$PATH" "HOME=$HOME" "LAZY_UNCAP=${{ inputs.uncap }}" "RUNNER_NAME=$RUNNER_NAME" scripts/zz-lazy-file-bound.sh ${{ matrix.fs }} ${{ matrix.mib }} "$PWD/dist/aether-vmlinux-x86_64" ${{ matrix.arm }} ${{ matrix.cycles }}

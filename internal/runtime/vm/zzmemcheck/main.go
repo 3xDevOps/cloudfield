@@ -34,14 +34,17 @@ const (
 	page      = 4096
 	pageWords = page / 8
 	gamma     = 0x9E3779B97F4A7C15
+	spikeBase = 1 << 30
 )
 
 type state struct {
 	mu          sync.Mutex
 	main, churn []byte
+	spike       []byte
 	mainChunks  int
 	churnChunks int
 	mlock       string
+	nonzero     int
 
 	chainMu sync.Mutex
 	counter uint64
@@ -110,6 +113,8 @@ func checkChunk(mem []byte, firstPage uint64) (gen uint64, bad int, why string) 
 	return gen, bad, why
 }
 
+// alloc maps new anonymous memory and counts its pages that do not read as
+// zero, which no page the kernel hands out may.
 func (s *state) alloc(mib int) ([]byte, error) {
 	mem, err := unix.Mmap(-1, 0, mib<<20, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
 	if err != nil {
@@ -119,6 +124,15 @@ func (s *state) alloc(mib int) ([]byte, error) {
 		s.mlock = "failed: " + err.Error()
 	} else if s.mlock == "" {
 		s.mlock = "ok"
+	}
+	w := words(mem)
+	for p := 0; p < len(mem)/page; p++ {
+		for _, v := range w[p*pageWords : (p+1)*pageWords] {
+			if v != 0 {
+				s.nonzero++
+				break
+			}
+		}
 	}
 	return mem, nil
 }
@@ -143,7 +157,7 @@ func (s *state) handle(args []string) string {
 		}
 		fillChunks(s.main, 0, num(3))
 		fillChunks(s.churn, uint64(s.mainChunks)*chunk/page, num(3))
-		return fmt.Sprintf("ok mlock=%q took=%s", s.mlock, time.Since(start).Round(time.Millisecond))
+		return fmt.Sprintf("ok nonzero=%d mlock=%q took=%s", s.nonzero, s.mlock, time.Since(start).Round(time.Millisecond))
 	case "rewrite":
 		gen := num(1)
 		for i := 2; i < len(args); i++ {
@@ -167,6 +181,48 @@ func (s *state) handle(args []string) string {
 		}
 		fillChunks(s.churn, uint64(s.mainChunks)*chunk/page, num(1))
 		return fmt.Sprintf("ok mlock=%q", s.mlock)
+	case "move":
+		fresh, err := s.alloc(s.churnChunks)
+		if err != nil {
+			return "error: " + err.Error()
+		}
+		fillChunks(fresh, uint64(s.mainChunks)*chunk/page, num(1))
+		if err = unix.Munmap(s.churn); err != nil {
+			return "error: " + err.Error()
+		}
+		s.churn = fresh
+		return fmt.Sprintf("ok nonzero=%d took=%s", s.nonzero, time.Since(start).Round(time.Millisecond))
+	case "transient":
+		mem, err := s.alloc(int(num(1)))
+		if err != nil {
+			return "error: " + err.Error()
+		}
+		fillChunks(mem, spikeBase*2, 7)
+		if err = unix.Munmap(mem); err != nil {
+			return "error: " + err.Error()
+		}
+		return fmt.Sprintf("ok nonzero=%d took=%s", s.nonzero, time.Since(start).Round(time.Millisecond))
+	case "spike":
+		var err error
+		if s.spike, err = s.alloc(int(num(1))); err != nil {
+			return "error: " + err.Error()
+		}
+		fillChunks(s.spike, spikeBase, 99)
+		return fmt.Sprintf("ok nonzero=%d took=%s", s.nonzero, time.Since(start).Round(time.Millisecond))
+	case "unspike":
+		bad := 0
+		for c := 0; c < len(s.spike)/chunk; c++ {
+			gen, n, _ := checkChunk(s.spike[c*chunk:(c+1)*chunk], spikeBase+uint64(c)*chunk/page)
+			if gen != 99 && n == 0 {
+				n = chunk / page
+			}
+			bad += n
+		}
+		if err := unix.Munmap(s.spike); err != nil {
+			return "error: " + err.Error()
+		}
+		s.spike = nil
+		return fmt.Sprintf("ok bad=%d took=%s", bad, time.Since(start).Round(time.Millisecond))
 	case "verify":
 		var b strings.Builder
 		bad, first := 0, ""

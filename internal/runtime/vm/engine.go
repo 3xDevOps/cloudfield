@@ -515,19 +515,19 @@ func (e *engine) bootLaunch(ctx context.Context, rec *record) (launch, error) {
 			_, cfg.Network.Search = hostResolvConf()
 		}
 	}
-	cmdline, err := cfg.KernelArgs(cmdlineBase)
+	cmdline, err := cfg.KernelArgs(cmdlineBase + zzCmdline)
 	if errors.Is(err, guest.ErrCmdlineTooLong) && len(programs) > 0 {
 		slog.Warn("vm runtime: boot without the agent programs' disks, whose mounts do not fit the kernel command line", "vm", rec.Key)
 		if err = e.releasePrograms(rec); err != nil {
 			return launch{}, err
 		}
 		cfg.Mounts = p.mounts
-		cmdline, err = cfg.KernelArgs(cmdlineBase)
+		cmdline, err = cfg.KernelArgs(cmdlineBase + zzCmdline)
 	}
 	if errors.Is(err, guest.ErrCmdlineTooLong) && cfg.Network != nil && len(cfg.Network.Search) > 0 {
 		slog.Warn("vm runtime: boot without the host's search domains, which do not fit the kernel command line", "vm", rec.Key, "search", cfg.Network.Search)
 		cfg.Network.Search = nil
-		cmdline, err = cfg.KernelArgs(cmdlineBase)
+		cmdline, err = cfg.KernelArgs(cmdlineBase + zzCmdline)
 	}
 	if err != nil {
 		return launch{}, fmt.Errorf("vm runtime: kernel command line: %w", err)
@@ -861,6 +861,7 @@ func readNoFollow(path string) ([]byte, error) {
 // Scratch measurement knobs (scratch/lazy-ch-incremental-save); never merged.
 var (
 	zzShared      = "on"
+	zzCmdline     string
 	zzRestoreOpts string
 	zzRestoreArgs []string
 	zzKeepSource  bool

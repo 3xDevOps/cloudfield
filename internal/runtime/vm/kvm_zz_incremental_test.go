@@ -23,9 +23,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/3xDevOps/cloudfield/internal/guest"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
-	"github.com/3xDevOps/cloudfield/internal/vmimage"
 )
 
 // Scratch measurement (scratch/lazy-ch-incremental-save); never merged.
@@ -49,6 +47,11 @@ type zz struct {
 	mib  int
 	stat string
 	dump string
+	arm  string
+	dig  bool
+
+	transientMiB, spikeMiB int
+	spiked                 bool
 
 	gens        []uint64
 	mainChunks  int
@@ -63,7 +66,7 @@ type zz struct {
 
 func (z *zz) logf(format string, args ...any) {
 	z.t.Helper()
-	z.t.Logf("ZZ fs=%s mib=%d "+format, append([]any{z.fs, z.mib}, args...)...)
+	z.t.Logf("ZZ arm=%s fs=%s mib=%d "+format, append([]any{z.arm, z.fs, z.mib}, args...)...)
 }
 
 func (z *zz) guest(script string) string {
@@ -417,7 +420,7 @@ func (z *zz) memcg() string {
 	var kept []string
 	for line := range strings.SplitSeq(string(stat), "\n") {
 		switch name, _, _ := strings.Cut(line, " "); name {
-		case "anon", "file", "file_mapped", "file_dirty", "file_writeback":
+		case "anon", "shmem", "file", "file_mapped", "file_dirty", "file_writeback":
 			kept = append(kept, line)
 		}
 	}
@@ -468,6 +471,7 @@ func (z *zz) hypervisorLog(label string) {
 type saveResult struct {
 	snapshot, fsync time.Duration
 	devBytes        int64
+	dump            string
 }
 
 // save pauses the VM and snapshots it into into, measuring what that wrote.
@@ -488,7 +492,6 @@ func (z *zz) snapshot(label, into string, dump bool, changedMiB int) (saveResult
 		start := time.Now()
 		n := z.dumpRAM(pid, dumpPath)
 		z.logf("dump %s bytes=%d took=%s", label, n, time.Since(start).Round(time.Millisecond))
-		defer func() { _ = os.Remove(dumpPath) }()
 	}
 	if os.Getenv("LAZY_UNCAP") == "1" {
 		if out, err := exec.Command("systemctl", "set-property", "--runtime", unitName(z.key), "MemoryMax=infinity").CombinedOutput(); err != nil {
@@ -504,6 +507,9 @@ func (z *zz) snapshot(label, into string, dump bool, changedMiB int) (saveResult
 	err := api.snapshot(snapCtx, into)
 	cancel()
 	res := saveResult{snapshot: time.Since(start)}
+	if dump {
+		res.dump = dumpPath
+	}
 	if err != nil {
 		return res, err
 	}
@@ -586,6 +592,9 @@ func (z *zz) wake(label string, cold bool) {
 			z.t.Fatal(err)
 		}
 	}
+	if err := z.privateConfig(); err != nil {
+		z.t.Fatalf("rewrite the saved configuration: %v", err)
+	}
 	start := time.Now()
 	if err := z.e.restore(z.t.Context(), z.key); err != nil {
 		z.t.Fatalf("wake %s: %v%s", label, err, z.e.logTail(z.key))
@@ -604,239 +613,4 @@ func (z *zz) rewrite(gen uint64, chunks int) {
 		z.gens[c] = gen
 	}
 	z.call(fmt.Sprintf("rewrite %d %s", gen, strings.Join(args, " ")))
-}
-
-// churn frees the churn region and fills it again, twice: the first refill
-// makes its pages private copies, so the second free has the host drop
-// private copies that the last refill then takes again.
-func (z *zz) churn(label string, gen uint64) {
-	pid := z.chPID()
-	private := func() float64 {
-		p, _ := z.privateBytes(pid)
-		return float64(p) / (1 << 20)
-	}
-	before := private()
-	z.call("free")
-	time.Sleep(10 * time.Second)
-	freed := private()
-	z.call(fmt.Sprintf("realloc %d", gen))
-	refilled := private()
-	z.call("free")
-	low := refilled
-	for deadline := time.Now().Add(45 * time.Second); time.Now().Before(deadline); time.Sleep(3 * time.Second) {
-		if low = private(); low < refilled-float64(z.churnChunks)*0.8 {
-			break
-		}
-	}
-	z.call(fmt.Sprintf("realloc %d", gen+1000))
-	for i := z.mainChunks; i < len(z.gens); i++ {
-		z.gens[i] = gen + 1000
-	}
-	z.logf("churn %s churn_mib=%d private_mib before=%.1f after_free=%.1f after_refill=%.1f after_second_free=%.1f after_second_refill=%.1f",
-		label, z.churnChunks, before, freed, refilled, low, private())
-}
-
-func TestKVMZZIncrementalSave(t *testing.T) {
-	dir, kernel, server := os.Getenv("LAZY_DIR"), os.Getenv("AETHER_VM_TEST_KERNEL"), os.Getenv("AETHER_VM_TEST_SERVER")
-	if dir == "" {
-		t.Skip("set LAZY_DIR")
-	}
-	mib, err := strconv.Atoi(os.Getenv("LAZY_MIB"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	cycles := 12
-	if v := os.Getenv("LAZY_CYCLES"); v != "" {
-		if cycles, err = strconv.Atoi(v); err != nil {
-			t.Fatal(err)
-		}
-	}
-	zzShared, zzRestoreOpts, zzRestoreArgs, zzKeepSource = "off", ",memory_restore_mode=copyonwrite", []string{"-v"}, true
-	images, err := vmimage.Open(filepath.Join(dir, "vm", "images"), kernel, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := newEngine(Config{DataDir: dir, Images: images, Monitor: []string{server, MonitorCommand}, Helper: server, ProgramUnit: localBinProgram}, SystemdUnits{}, dialHelper)
-	z := &zz{t: t, e: e, key: "run-zz-incr", fs: os.Getenv("LAZY_FS"), mib: mib, stat: os.Getenv("LAZY_DEV_STAT"), dump: os.Getenv("LAZY_DUMP_DIR"),
-		chain: sha256.Sum256([]byte("zzmemcheck")), rng: rand.New(rand.NewSource(int64(mib)))}
-	t.Cleanup(func() { _ = e.destroy(context.Background(), z.key) })
-	shmMiB := 128
-	prepare := func() {
-		z.counter, z.chain = 0, sha256.Sum256([]byte("zzmemcheck"))
-		spec := runtime.Spec{
-			Image: "docker.io/library/ubuntu:24.04", CreationKey: z.key, Command: []string{"/bin/sh", "-c", "exec sleep infinity"},
-			Env: map[string]string{"AETHER_RUN_ID": z.key}, CPULimit: 2, MemoryLimitBytes: int64(mib) << 20,
-		}
-		if _, err = e.create(t.Context(), z.key, spec, options{}); err != nil {
-			t.Fatal(err)
-		}
-		start := time.Now()
-		if err = e.start(t.Context(), z.key); err != nil {
-			t.Fatal(err)
-		}
-		z.logf("boot took=%dms", time.Since(start).Milliseconds())
-		props, _ := exec.Command("systemctl", "show", "--property=DevicePolicy,DeviceAllow,ProtectKernelTunables,NoNewPrivileges,ProtectSystem,PrivateMounts,IOAccounting,MemoryMax,CapabilityBoundingSet,BindPaths,TemporaryFileSystem", unitName(z.key)).Output()
-		z.logf("unit %s", strings.ReplaceAll(strings.TrimSpace(string(props)), "\n", " ; "))
-		version, _ := exec.Command("cloud-hypervisor", "--version").Output()
-		launched, _ := os.ReadFile(e.path(z.key, launchFile))
-		z.logf("hypervisor %s memory_arg=%q", strings.TrimSpace(string(version)), regexp.MustCompile(`size=\d+M,shared=\w+`).Find(launched))
-
-		checker, err := os.ReadFile(os.Getenv("LAZY_MEMCHECK"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		p, att, err := e.spawn(t.Context(), z.key, guest.ProcessSpec{ID: processID("exec"), Argv: []string{"/bin/sh", "-c", "cat >/usr/local/bin/zzmemcheck && chmod 755 /usr/local/bin/zzmemcheck"}, Lossless: true})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err = att.Stdin().Write(checker); err != nil {
-			t.Fatal(err)
-		}
-		if err = p.CloseStdin(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-		if code, waitErr := p.Wait(t.Context()); code != 0 || waitErr != nil {
-			t.Fatalf("copy the checker into the guest: %d, %v", code, waitErr)
-		}
-		_ = att.Close()
-		sum := sha256.Sum256(checker)
-		if got := z.guest("sha256sum </usr/local/bin/zzmemcheck | cut -d' ' -f1"); got != hex.EncodeToString(sum[:]) {
-			t.Fatalf("the checker arrived as %s", got)
-		}
-		z.guest("setsid /usr/local/bin/zzmemcheck serve </dev/null >/var/log/zzmemcheck.log 2>&1 & sleep 1; test -S /run/zzmemcheck.sock")
-		z.churnChunks = 512
-		z.mainChunks = mib*5/8 - z.churnChunks
-		if mib >= 8192 {
-			shmMiB = 256
-		}
-		z.gens = make([]uint64, z.mainChunks+z.churnChunks)
-		for i := range z.gens {
-			z.gens[i] = 1
-		}
-		z.bootID = z.guest("cat /proc/sys/kernel/random/boot_id")
-		z.shmSum = z.guest(fmt.Sprintf("mount -o remount,size=90%% /dev/shm; head -c %dM /dev/urandom >/dev/shm/fill; sha256sum </dev/shm/fill | cut -d' ' -f1", shmMiB))
-		z.logf("fill %s pattern_mib=%d shm_mib=%d guest_meminfo=%q", z.call(fmt.Sprintf("fill %d %d 1", z.mainChunks, z.churnChunks)), len(z.gens), shmMiB,
-			z.guest("grep -E '^(MemTotal|MemFree|MemAvailable|Mlocked|SwapTotal|SwapFree):' /proc/meminfo | tr -s ' \\n' ' '"))
-		if _, err = fmt.Sscanf(z.call("status"), "pid=%s", &z.pid); err != nil {
-			t.Fatal(err)
-		}
-		z.verify("after fill")
-	}
-	prepare()
-
-	snapDir, nextDir := e.path(z.key, snapshotDir), e.path(z.key, "snapshot.next")
-	firstSave := func(label string) error {
-		z.settle(label)
-		if err = os.Mkdir(snapDir, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		_, saveErr := z.snapshot(label, snapDir, false, len(z.gens)+shmMiB)
-		return saveErr
-	}
-	if err = firstSave("0 first"); err != nil {
-		z.logf("FIRST-SAVE-FAILED at the unit's own MemoryMax: %v", err)
-		z.kernelLog("first save")
-		if err = e.destroy(t.Context(), z.key); err != nil {
-			t.Fatal(err)
-		}
-		prepare()
-		out, setErr := exec.Command("systemctl", "set-property", "--runtime", unitName(z.key), "MemoryMax=infinity").CombinedOutput()
-		z.logf("first save again with MemoryMax=infinity on the unit: %s %v", out, setErr)
-		if err = firstSave("0 first uncapped"); err != nil {
-			z.kernelLog("first save uncapped")
-			t.Fatalf("first save with MemoryMax=infinity: %v%s", err, e.logTail(z.key))
-		}
-	}
-	z.sleep()
-	z.logf("rest 0 fs_used_mib=%d other_files_mib=%d", z.fsUsed()>>20, z.otherBytes()>>20)
-
-	// mode full: check, rewrite 64 MiB, and churn every third cycle;
-	// checked: the full check and no other work; untouched: one command.
-	cycle := func(n int, mode string) {
-		label := strconv.Itoa(n)
-		z.wake(label, n == 6 || n == 12)
-		woke := z.privateMiB()
-		changed := 0
-		if mode == "untouched" {
-			z.guest("true")
-		} else if !z.verify("after wake " + label) {
-			t.Fatalf("cycle %d: the guest check failed%s", n, e.logTail(z.key))
-		}
-		checked := z.privateMiB()
-		if mode == "full" {
-			changed = 64
-			z.rewrite(uint64(n+1), 64)
-		}
-		rewritten := z.privateMiB()
-		if mode == "full" && n%3 == 0 {
-			z.churn(label, uint64(n+1))
-			changed += z.churnChunks
-			label += " churn"
-		}
-		if mode != "full" {
-			label += " " + mode
-		}
-		z.logf("private %s private_mib after_wake=%.1f after_check=%.1f after_rewrite=%.1f", label, woke, checked, rewritten)
-		z.settle(label)
-		if err = os.Mkdir(nextDir, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		used := z.fsUsed()
-		if _, err = z.snapshot(label, nextDir, n == 1 || n == 6 || n == 12, changed); err != nil {
-			z.kernelLog("save " + label)
-			t.Fatalf("save %d: %v%s", n, err, e.logTail(z.key))
-		}
-		both := z.fsUsed()
-		z.sleep()
-		if err = errors.Join(os.RemoveAll(snapDir), os.Rename(nextDir, snapDir)); err != nil {
-			t.Fatal(err)
-		}
-		z.syncfs()
-		count, shared, _, _ := extents(filepath.Join(snapDir, "memory-ranges"))
-		z.logf("rest %s fs_used_mib before_save=%d with_both=%d after_swap=%d other_files_mib=%d extents=%d shared_extents=%d",
-			label, used>>20, both>>20, z.fsUsed()>>20, z.otherBytes()>>20, count, shared)
-	}
-	for n := 1; n <= cycles; n++ {
-		cycle(n, "full")
-	}
-	cycle(cycles+1, "checked")
-	cycle(cycles+2, "untouched")
-	cycle(cycles+3, "untouched")
-
-	z.wake("final", false)
-	if !z.verify("after wake final") {
-		t.Fatalf("the guest check failed after the last save%s", e.logTail(z.key))
-	}
-
-	// Saved into the directory the guest's RAM is mapped from.
-	z.rewrite(uint64(cycles+5), 64)
-	z.settle("inplace")
-	digest := func() string {
-		var parts []string
-		for _, name := range []string{"config.json", "state.json", "memory-ranges"} {
-			info, statErr := os.Stat(filepath.Join(snapDir, name))
-			if statErr != nil {
-				parts = append(parts, name+"="+statErr.Error())
-				continue
-			}
-			parts = append(parts, fmt.Sprintf("%s=%d@%d", name, info.Size(), info.ModTime().UnixNano()))
-		}
-		return strings.Join(parts, " ")
-	}
-	before := digest()
-	_, err = z.snapshot("inplace over source", snapDir, false, 64)
-	z.logf("inplace over the mapped source: error=%v source_unchanged=%v", err, digest() == before)
-	if err != nil {
-		// What engine.save does today: delete the old state, then write.
-		if err = errors.Join(os.RemoveAll(snapDir), os.Mkdir(snapDir, 0o700)); err != nil {
-			t.Fatal(err)
-		}
-		_, err = z.snapshot("inplace after unlink", snapDir, true, 64)
-		z.logf("inplace after unlinking the mapped source: error=%v", err)
-	}
-	if err == nil {
-		z.sleep()
-		z.wake("inplace", false)
-		z.verify("after wake inplace")
-	}
 }
