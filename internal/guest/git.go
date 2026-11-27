@@ -293,6 +293,15 @@ func (g *Git) Install(ctx context.Context, key string, updates []RefUpdate, refl
 	return nil
 }
 
+// RenameBranch renames the checkout's branch from one name to another,
+// which HEAD follows.
+func (g *Git) RenameBranch(ctx context.Context, key, from, to string) error {
+	if _, err := g.api.RenameBranch(ctx, &guestpb.RenameBranchRequest{Key: key, From: from, To: to}); err != nil {
+		return gitErr("rename branch", key, err)
+	}
+	return nil
+}
+
 // TreeEntry is one child of a checkout directory.
 type TreeEntry struct {
 	Name string

@@ -383,3 +383,178 @@ func TestWorkspaceWithACloudfieldBranchKeepsTheAetherPrefix(t *testing.T) {
 		t.Errorf("WorkspaceBranchCommit(%q): %v; want the branch reserved", branch, err)
 	}
 }
+
+// runBranches lists the session branches of repo with their commits.
+func runBranches(t *testing.T, repo string) string {
+	t.Helper()
+	return runCheckoutGit(t, repo, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads/cloudfield/", "refs/heads/aether/")
+}
+
+func commitInCheckout(t *testing.T, checkout string) string {
+	t.Helper()
+	runCheckoutGit(t, checkout, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "work")
+	return runCheckoutGit(t, checkout, "rev-parse", "HEAD")
+}
+
+// A session started without a task, as a warm spare is, takes on the branch
+// a session started for the task gets, everywhere the old name was.
+func TestRenameRunBranchGivesTheBranchACheckoutForTheTaskGets(t *testing.T) {
+	e := newUnitEngine(t)
+	ctx := t.Context()
+	repo, err := e.InitWorkspaceRepo(ctx, "ws1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedBareMain(t, e, "ws1")
+	base := runCheckoutGit(t, repo, "rev-parse", "main")
+	checkout, _, err := e.CreateRunCheckout(ctx, "ws1", "run-spare1", "main", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = e.StartDiffWatch(ctx, "ws1", "run-spare1"); err != nil {
+		t.Fatal(err)
+	}
+
+	branch, err := e.RenameRunBranch(ctx, "run-spare1", "Fix the bug")
+	if err != nil {
+		t.Fatalf("RenameRunBranch: %v", err)
+	}
+	_, cold, err := e.CreateRunCheckout(ctx, "ws1", "run-cold1", "main", "Fix the bug", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if branch != "cloudfield/run-fix-the-bug-spare1" || strings.TrimSuffix(branch, "spare1") != strings.TrimSuffix(cold, "cold1") {
+		t.Fatalf("renamed branch %q, cold branch %q: want the same form", branch, cold)
+	}
+	if got, want := runBranches(t, repo), cold+" "+base+"\n"+branch+" "+base; got != want {
+		t.Fatalf("session branches:\n%s\nwant:\n%s", got, want)
+	}
+	if got := runCheckoutGit(t, checkout, "symbolic-ref", "--short", "HEAD"); got != branch {
+		t.Errorf("checkout is on %q, want %q", got, branch)
+	}
+	if got := runCheckoutGit(t, checkout, "config", cfgBranch); got != branch {
+		t.Errorf("%s = %q, want %q", cfgBranch, got, branch)
+	}
+	if meta, metaErr := e.readRunMeta("run-spare1"); metaErr != nil || meta.Branch != branch {
+		t.Errorf("identity record = %+v, %v; want branch %q", meta, metaErr, branch)
+	}
+	e.mu.Lock()
+	watched := e.registry["run-spare1"].branch
+	e.mu.Unlock()
+	if watched != branch {
+		t.Errorf("watch registry branch = %q, want %q", watched, branch)
+	}
+	e.StopDiffWatch("run-spare1")
+
+	head := commitInCheckout(t, checkout)
+	if published, publishErr := e.PublishRunBranch(ctx, "run-spare1"); publishErr != nil || published != head {
+		t.Fatalf("PublishRunBranch = %s, %v; want %s", published, publishErr, head)
+	}
+	for _, run := range []domain.RunID{"run-spare1", "run-cold1"} {
+		if err = e.RemoveRunCheckout(ctx, run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, want := runBranches(t, repo), cold+" "+base+"\n"+branch+" "+head; got != want {
+		t.Fatalf("session branches after removal:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestRenameRunBranchKeepsANameTheTaskGives(t *testing.T) {
+	e := newUnitEngine(t)
+	ctx := t.Context()
+	repo, err := e.InitWorkspaceRepo(ctx, "ws1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedBareMain(t, e, "ws1")
+	_, spare, err := e.CreateRunCheckout(ctx, "ws1", "run-spare1", "main", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := runBranches(t, repo)
+	for _, task := range []string{"", "!!!"} {
+		if branch, renameErr := e.RenameRunBranch(ctx, "run-spare1", task); renameErr != nil || branch != spare {
+			t.Errorf("RenameRunBranch(%q) = %q, %v; want %q", task, branch, renameErr, spare)
+		}
+	}
+	if after := runBranches(t, repo); after != before {
+		t.Errorf("session branches changed:\n%s\nwant:\n%s", after, before)
+	}
+}
+
+func TestRenameRunBranchFallsBackToTheFullIDOnCollision(t *testing.T) {
+	e := newUnitEngine(t)
+	ctx := t.Context()
+	if _, err := e.InitWorkspaceRepo(ctx, "ws1"); err != nil {
+		t.Fatal(err)
+	}
+	seedBareMain(t, e, "ws1")
+	const first = "01m0h6tym4y65102a721nq0jf3"
+	const colliding = "01m0aaaaaaaaaaaaaaaaanq0jf3" // same last six characters
+	if _, _, err := e.CreateRunCheckout(ctx, "ws1", first, "main", "Fix the Auth bug!", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.CreateRunCheckout(ctx, "ws1", colliding, "main", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	branch, err := e.RenameRunBranch(ctx, colliding, "Fix the Auth bug!")
+	if want := "cloudfield/run-fix-the-auth-bug-" + colliding; err != nil || branch != want {
+		t.Fatalf("RenameRunBranch = %q, %v; want %q", branch, err, want)
+	}
+}
+
+func TestRenameRunBranchKeepsTheAetherPrefix(t *testing.T) {
+	e := newUnitEngine(t)
+	ctx := t.Context()
+	repo, err := e.InitWorkspaceRepo(ctx, "forked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedBareMain(t, e, "forked")
+	runCheckoutGit(t, repo, "branch", "cloudfield", "main")
+	if _, _, err = e.CreateRunCheckout(ctx, "forked", "run-7k2m9q4xbd", "main", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	branch, err := e.RenameRunBranch(ctx, "run-7k2m9q4xbd", "Fix the bug")
+	if want := "aether/run-fix-the-bug-7k2m9q4xbd"; err != nil || branch != want {
+		t.Fatalf("RenameRunBranch = %q, %v; want %q", branch, err, want)
+	}
+}
+
+// A branch that already carries published work keeps its name: a client
+// may have fetched it.
+func TestRenameRunBranchRefusesAPublishedBranch(t *testing.T) {
+	e := newUnitEngine(t)
+	ctx := t.Context()
+	repo, err := e.InitWorkspaceRepo(ctx, "ws1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedBareMain(t, e, "ws1")
+	checkout, spare, err := e.CreateRunCheckout(ctx, "ws1", "run-spare1", "main", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitInCheckout(t, checkout)
+	if _, err = e.PublishRunBranch(ctx, "run-spare1"); err != nil {
+		t.Fatal(err)
+	}
+	before := runBranches(t, repo)
+
+	if branch, renameErr := e.RenameRunBranch(ctx, "run-spare1", "Fix the bug"); renameErr == nil {
+		t.Fatalf("RenameRunBranch of a published branch = %q, want an error", branch)
+	}
+	if after := runBranches(t, repo); after != before {
+		t.Errorf("session branches changed:\n%s\nwant:\n%s", after, before)
+	}
+	if got := runCheckoutGit(t, checkout, "symbolic-ref", "--short", "HEAD"); got != spare {
+		t.Errorf("checkout is on %q, want %q", got, spare)
+	}
+	if got := runCheckoutGit(t, checkout, "config", cfgBranch); got != spare {
+		t.Errorf("%s = %q, want %q", cfgBranch, got, spare)
+	}
+	if meta, metaErr := e.readRunMeta("run-spare1"); metaErr != nil || meta.Branch != spare {
+		t.Errorf("identity record = %+v, %v; want branch %q", meta, metaErr, spare)
+	}
+}

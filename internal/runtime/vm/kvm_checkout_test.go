@@ -356,6 +356,51 @@ func TestKVMCheckoutLivesOnTheVMDisk(t *testing.T) {
 	}
 }
 
+// TestKVMRenameRunBranchMovesTheVMCheckout claims a session started without
+// a task, as a warm spare is, for a task while its VM runs.
+func TestKVMRenameRunBranchMovesTheVMCheckout(t *testing.T) {
+	h := newCheckoutHost(t)
+	ws := domain.WorkspaceID("wsrename")
+	base := h.workspace(t, ws, 100)
+	key := fmt.Sprintf("run-vmrename-%x", time.Now().Unix())
+	run := domain.RunID(key)
+	t.Cleanup(func() { _ = h.e.destroy(context.Background(), key) })
+	t.Cleanup(func() { _ = h.git.RemoveRunHistory(context.Background(), run) })
+	checkout, spare, err := h.git.CreateRunCheckoutAt(t.Context(), ws, run, base, "main", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.boot(t, key, checkout, "1000:1000")
+	if err = h.git.StartDiffWatch(t.Context(), ws, run); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	branch, err := h.git.RenameRunBranch(t.Context(), run, "Fix the bug")
+	took := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("renaming %s to %s took %d ms", spare, branch, took.Milliseconds())
+	if got := h.sh(t, key, "git -C /workspace branch --show-current"); got != branch {
+		t.Fatalf("the VM's checkout is on %q, want %q", got, branch)
+	}
+	h.sh(t, key, "git -c user.name=Agent -c user.email=agent@localhost commit -q --allow-empty -m 'agent work'")
+	head := h.sh(t, key, "git rev-parse HEAD")
+	repo := filepath.Join(h.repos, string(ws)+".git")
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		out, _ := exec.Command("git", "-C", repo, "rev-parse", "refs/heads/"+branch).Output()
+		if strings.TrimSpace(string(out)) == head {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s never reached the VM's commit %s", branch, head)
+		}
+	}
+	if out, _ := exec.Command("git", "-C", repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+spare).Output(); len(out) > 0 {
+		t.Fatalf("the old branch %s is still in the workspace at %s", spare, out)
+	}
+}
+
 // TestKVMGitServiceBesideAFullSession runs the git service's heaviest work
 // while the session holds all the memory its cap leaves: a snapshot and a
 // commit of every file of a checkout, then a Files write and read at the

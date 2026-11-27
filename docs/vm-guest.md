@@ -674,6 +674,7 @@ port
 | `Install` | Indexes a pack the server sends into the checkout with `index-pack --strict`, applies ref updates in one transaction, and for a commit makes the staged index the checkout's. It runs git as the checkout's owner. |
 | `Tree`, `ReadFile`, `WriteFile`, `FileDiff` | The Files view on the checkout, including uploads. |
 | `Sync` | Serves a live overlay's endpoint (`cloudfield sync --live`) at the checkout. |
+| `RenameBranch` | Renames the checkout's branch, which HEAD follows, and sets `aether.branch` to the new name, running git as the checkout's owner. A failed call leaves both as they were. The server calls it when a session that started without a task takes one, so the checkout gets the branch that task names. |
 
 The server treats every reply as data from the session. It copies a
 snapshot's tree and HEAD into the session's `<run-id>.diffsnap/` store with

@@ -220,20 +220,11 @@ func (e *Engine) CreateRunCheckoutAt(ctx context.Context, ws domain.WorkspaceID,
 // git update-ref --create-reflog with an all-zero old value fails when
 // the ref already exists, which makes the claim atomic across concurrent
 // provisioning.
-//
-// A branch named cloudfield makes every cloudfield/run-* ref impossible,
-// because git stores refs/heads/cloudfield as a file where the directory
-// would go, so such a workspace keeps the aether/run- prefix.
 func (e *Engine) uniqueRunBranch(ctx context.Context, repo, base string, run domain.RunID, task string) (string, error) {
-	prefix := runBranchPrefix
-	blocked, err := e.branchExists(ctx, repo, "cloudfield")
+	short, full, err := e.runBranchNames(ctx, repo, run, task)
 	if err != nil {
 		return "", err
 	}
-	if blocked {
-		prefix = legacyRunBranchPrefix
-	}
-	short := runBranch(prefix, task, shortID(run))
 	claimed, err := e.claimBranch(ctx, repo, short, base)
 	if err != nil {
 		return "", err
@@ -241,7 +232,6 @@ func (e *Engine) uniqueRunBranch(ctx context.Context, repo, base string, run dom
 	if claimed {
 		return short, nil
 	}
-	full := runBranch(prefix, task, string(run))
 	claimed, err = e.claimBranch(ctx, repo, full, base)
 	if err != nil {
 		return "", err
@@ -250,6 +240,127 @@ func (e *Engine) uniqueRunBranch(ctx context.Context, repo, base string, run dom
 		return "", fmt.Errorf("gitengine: branch %s already exists for session %s", full, run)
 	}
 	return full, nil
+}
+
+// runBranchNames returns the two names uniqueRunBranch tries for run's task.
+//
+// A branch named cloudfield makes every cloudfield/run-* ref impossible,
+// because git stores refs/heads/cloudfield as a file where the directory
+// would go, so such a workspace keeps the aether/run- prefix.
+func (e *Engine) runBranchNames(ctx context.Context, repo string, run domain.RunID, task string) (short, full string, err error) {
+	prefix := runBranchPrefix
+	blocked, err := e.branchExists(ctx, repo, "cloudfield")
+	if err != nil {
+		return "", "", err
+	}
+	if blocked {
+		prefix = legacyRunBranchPrefix
+	}
+	return runBranch(prefix, task, shortID(run)), runBranch(prefix, task, string(run)), nil
+}
+
+// RenameRunBranch moves run's checkout, on which nothing is published yet,
+// to the branch a new checkout of run for task would get, and returns it.
+// A run already on a name creation gives task keeps it. On failure the run
+// keeps its branch everywhere: the workspace repository, its identity
+// record and the checkout.
+func (e *Engine) RenameRunBranch(ctx context.Context, run domain.RunID, task string) (string, error) {
+	checkout, err := e.existingCheckoutPath(run)
+	if err != nil {
+		return "", err
+	}
+	meta, err := e.readRunMeta(run)
+	if err != nil {
+		return "", err
+	}
+	repo, err := e.existingRepoPath(meta.Workspace)
+	if err != nil {
+		return "", err
+	}
+	short, full, err := e.runBranchNames(ctx, repo, run, task)
+	if err != nil {
+		return "", err
+	}
+	old := meta.Branch
+	if old == short || old == full {
+		return old, nil
+	}
+	move := func(ctx context.Context, from, to string) error {
+		return e.renameCheckoutBranch(ctx, checkout, from, to)
+	}
+	if meta.VM {
+		g, gitErr := e.vmGit(ctx, run)
+		if gitErr != nil {
+			return "", gitErr
+		}
+		move = func(ctx context.Context, from, to string) error {
+			return vmErr(g.RenameBranch(ctx, string(run), from, to))
+		}
+	}
+	branch, err := e.uniqueRunBranch(ctx, repo, meta.Base, run, task)
+	if err != nil {
+		return "", err
+	}
+	var undo []func(context.Context) error
+	fail := func(cause error) (string, error) {
+		undoCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotTimeout)
+		defer cancel()
+		errs := []error{cause}
+		for i := len(undo) - 1; i >= 0; i-- {
+			errs = append(errs, undo[i](undoCtx))
+		}
+		return "", fmt.Errorf("gitengine: move session %s from branch %s to %s: %w", run, old, branch, errors.Join(errs...))
+	}
+	undo = append(undo, func(ctx context.Context) error {
+		_, releaseErr := e.git(ctx, repo, "update-ref", "-d", "refs/heads/"+branch, meta.Base)
+		return releaseErr
+	})
+	if err = move(ctx, old, branch); err != nil {
+		return fail(err)
+	}
+	undo = append(undo, func(ctx context.Context) error { return move(ctx, branch, old) })
+	if err = e.setRunBranch(run, branch); err != nil {
+		return fail(err)
+	}
+	undo = append(undo, func(context.Context) error { return e.setRunBranch(run, old) })
+	// Deleting only from the fork point refuses a branch already published.
+	if _, err = e.git(ctx, repo, "update-ref", "-d", "refs/heads/"+old, meta.Base); err != nil {
+		return fail(err)
+	}
+	e.mu.Lock()
+	if info, ok := e.registry[run]; ok {
+		info.branch = branch
+		e.registry[run] = info
+	}
+	e.mu.Unlock()
+	return branch, nil
+}
+
+// renameCheckoutBranch renames the branch of the checkout on the server's
+// disk and the aether.branch that names it, leaving both as they were when
+// the rename fails. The checkout is agent-writable, so its hooks never run.
+func (e *Engine) renameCheckoutBranch(ctx context.Context, checkout, from, to string) error {
+	if _, err := e.git(ctx, checkout, "config", cfgBranch, to); err != nil {
+		return err
+	}
+	if _, err := e.git(ctx, checkout, "-c", "core.hooksPath="+os.DevNull, "branch", "-m", from, to); err != nil {
+		_, undoErr := e.git(context.WithoutCancel(ctx), checkout, "config", cfgBranch, from)
+		return errors.Join(err, undoErr)
+	}
+	return nil
+}
+
+// setRunBranch records branch in run's identity.
+func (e *Engine) setRunBranch(run domain.RunID, branch string) error {
+	lock := e.snapshotLock(run)
+	lock.Lock()
+	defer lock.Unlock()
+	meta, err := e.readRunMeta(run)
+	if err != nil {
+		return err
+	}
+	meta.Branch = branch
+	return e.writeRunMeta(run, meta)
 }
 
 // claimBranch creates refs/heads/<branch> at base, reporting false when
@@ -412,7 +523,7 @@ func (e *Engine) publishRunBranch(ctx context.Context, run domain.RunID) (commit
 		return "", err
 	}
 	if meta.VM {
-		return e.publishVM(ctx, run, meta)
+		return e.publishVM(ctx, run)
 	}
 	if nameErr := e.checkBranchName(ctx, meta.Branch); nameErr != nil {
 		return "", nameErr

@@ -50,6 +50,10 @@ service Git {
   // Sync serves a live overlay's endpoint at the checkout; the first chunk
   // names the checkout and every chunk carries the overlay's stream.
   rpc Sync(stream SyncChunk) returns (stream SyncChunk);
+  // RenameBranch renames the checkout's branch from one name to another,
+  // which HEAD follows, and sets aether.branch to the new one, as the
+  // checkout's owner. A failed call leaves both as they were.
+  rpc RenameBranch(RenameBranchRequest) returns (RenameBranchReply);
 }
 
 // GitFailure is the status detail of a call that failed for a reason the
@@ -220,3 +224,11 @@ message PatchReply {
   bool truncated = 3;
   string fork_tree = 4;
 }
+
+message RenameBranchRequest {
+  string key = 1;
+  string from = 2;
+  string to = 3;
+}
+
+message RenameBranchReply {}
