@@ -45,6 +45,7 @@ import { loadMergeProposals } from '@/store/members'
 import { loadEdge } from '@/store/edge'
 import { loadLinear } from '@/store/linear'
 import { pausedFromTimeline } from '@/store/board'
+import { laneEventTypes } from '@/store/lanes'
 import { scheduleBudgetRead, type BudgetPayload } from '@/store/cost'
 import { touchChildren } from '@/store/child-touches'
 import { inMessageScope, loadMessagePage } from '@/store/messages'
@@ -901,9 +902,10 @@ export function connect(store: RootStore, client: Api = api): () => void {
       if (await applyEvent(store, ev, client, signal)) continue
       // The event named something we could not fetch. A fresh snapshot is the
       // repair; the rest of the queue waits for it. The snapshot does not
-      // carry lane history, which now lacks this event: its workspace's goes,
-      // and a mounted Lanes view reads it again.
-      if (store.getState().laneHistory[ev.workspace_id]) {
+      // carry lane history, which now lacks this event if it is one Lanes
+      // holds: its workspace's goes, and a mounted Lanes view reads it again.
+      if (signal.aborted) return
+      if (laneEventTypes.includes(ev.type) && store.getState().laneHistory[ev.workspace_id]) {
         store.setState((s) => {
           const { [ev.workspace_id]: _incomplete, ...laneHistory } = s.laneHistory
           return { laneHistory }
