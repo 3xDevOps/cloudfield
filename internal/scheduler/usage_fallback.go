@@ -183,6 +183,10 @@ func (s *Scheduler) continueLiveRun(entry *supervised, terminal bool, message st
 	if s.releaseMoveClaim(entry) {
 		return usageEnded, ""
 	}
+	// The claim may have kept an earlier move from sending its continuation.
+	if swap := s.acp.owedContinuation(entry); swap != nil {
+		s.goMove(func() { s.acp.sendContinuation(entry, swap) })
+	}
 	return usageNoFallback, reason
 }
 
