@@ -24,7 +24,7 @@ jobs:
       fail-fast: false
       matrix:
         test: [TestKVMSleepWakeChain]
-        n: [1, 2, 3]
+        n: [1, 2, 3, 4, 5]
         include:
           - test: TestLargeKVMSleepWakeChain
             n: 1
