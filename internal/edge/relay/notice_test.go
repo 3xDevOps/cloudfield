@@ -84,6 +84,42 @@ func TestNoticesNameRelayOrigins(t *testing.T) {
 	}
 }
 
+// TestRetiredNoticesNameNoServedOrigin refuses a retired notice for a
+// served relay origin or with a replacement that is not one, and more
+// notices than a ready carries; it accepts a retired origin the edge no
+// longer serves.
+func TestRetiredNoticesNameNoServedOrigin(t *testing.T) {
+	_, key, _ := ed25519.GenerateKey(nil)
+	newWith := func(notices ...edgeproto.Notice) error {
+		r, err := New(t.Context(), Config{Origin: "https://edge.example.test", EdgeKey: key, Directory: &fakeDir{},
+			Egress: &fakeEgress{months: map[string]int64{}}, Notices: notices})
+		if r != nil {
+			_ = r.Shutdown(t.Context())
+		}
+		return err
+	}
+	for _, tt := range []struct {
+		n    edgeproto.Notice
+		want string
+	}{
+		{edgeproto.Notice{State: edgeproto.NoticeRetired, Origin: "https://edge.example.test", Replacement: "https://edge.example.test"},
+			"relay: the retired notice for https://edge.example.test names https://edge.example.test: https://edge.example.test must not be a relay origin of this edge, and https://edge.example.test must be one"},
+		{edgeproto.Notice{State: edgeproto.NoticeRetired, Origin: "https://old.example.test", Replacement: "https://edge9.example.test"},
+			"relay: the retired notice for https://old.example.test names https://edge9.example.test: https://old.example.test must not be a relay origin of this edge, and https://edge9.example.test must be one"},
+	} {
+		if err := newWith(tt.n); err == nil || err.Error() != tt.want {
+			t.Errorf("New with %+v = %v, want %q", tt.n, err, tt.want)
+		}
+	}
+	ok := edgeproto.Notice{State: edgeproto.NoticeRetired, Origin: "https://old.example.test", Replacement: "https://edge.example.test"}
+	if err := newWith(ok); err != nil {
+		t.Errorf("New with %+v = %v", ok, err)
+	}
+	if err := newWith(slices.Repeat([]edgeproto.Notice{ok}, edgeproto.MaxRelayOrigins+1)...); err == nil || err.Error() != "relay: 17 notices, limit 16" {
+		t.Errorf("New with 17 notices = %v", err)
+	}
+}
+
 // TestRelayedAnswerCarriesTheEdgesNotice forwards a connector request to
 // a server that answers with its own Aether-Edge-Retiring: that value
 // never passes, and the answer carries the edge's when the relay origin
