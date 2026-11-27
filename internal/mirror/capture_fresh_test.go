@@ -45,8 +45,8 @@ func TestCaptureStartsFromARefreshYoungerThanCaptureFresh(t *testing.T) {
 	git.refreshErr = nil
 	capture(1, warmed)
 	now = warmed.Add(captureFresh)
-	if err = svc.Warm(ctx, "w"); err != nil || git.refreshCalls != 2 {
-		t.Fatalf("a launch's warm of a refresh no capture starts from = %v after %d refreshes, want a second", err, git.refreshCalls)
+	if err = svc.Warm(ctx, "w"); err != nil || git.refreshCalls != 2 || git.refreshFetchTimeout != 0 {
+		t.Fatalf("a launch's warm of a refresh no capture starts from = %v after %d refreshes with fetch timeout %s, want a second its launch alone bounds", err, git.refreshCalls, git.refreshFetchTimeout)
 	}
 	launched := now
 	now = now.Add(captureFresh / 2)
@@ -59,9 +59,9 @@ func TestCaptureStartsFromARefreshYoungerThanCaptureFresh(t *testing.T) {
 	now = launched.Add(captureFresh)
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	if err = svc.WarmAhead(cancelled, "w"); err != nil || git.refreshCalls != 3 || git.refreshCtxErr != nil || !git.refreshBounded {
-		t.Fatalf("warm ahead for a caller that left = %v after %d refreshes on a context with error %v, bounded %v; want a third that outlives the caller and has a deadline",
-			err, git.refreshCalls, git.refreshCtxErr, git.refreshBounded)
+	if err = svc.WarmAhead(cancelled, "w"); err != nil || git.refreshCalls != 3 || git.refreshCtxErr != nil || git.refreshFetchTimeout != captureFresh {
+		t.Fatalf("warm ahead for a caller that left = %v after %d refreshes on a context with error %v, fetch timeout %s; want a third that outlives the caller and bounds its fetch",
+			err, git.refreshCalls, git.refreshCtxErr, git.refreshFetchTimeout)
 	}
 	now = now.Add(captureFresh / 2)
 	if err = svc.WarmAhead(ctx, "w"); err != nil || git.refreshCalls != 4 {

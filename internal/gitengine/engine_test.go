@@ -388,13 +388,13 @@ func TestMirrorFetchCancelEndsAHelperHoldingItsOutput(t *testing.T) {
 		Auth:           domain.MirrorAuthDeployKey,
 		PrivateKeyPath: "/srv/key",
 		KnownHostsPath: "/srv/known_hosts",
+		FetchTimeout:   200 * time.Millisecond,
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
-	defer cancel()
 	started := time.Now()
-	err := e.fetchMirror(ctx, t.TempDir(), req, "refs/aether/incoming/test")
-	if took := time.Since(started); err == nil || took > 5*time.Second {
-		t.Fatalf("fetch past its deadline = %v after %s, want an error once the deadline passes", err, took)
+	err := e.fetchMirror(t.Context(), t.TempDir(), req, "refs/aether/incoming/test")
+	kind, diagnostic := mirrorFetchProblem(err)
+	if took := time.Since(started); kind != MirrorErrorOffline || !strings.Contains(diagnostic, "deadline exceeded") || took > 5*time.Second {
+		t.Fatalf("fetch past its timeout = %v (%s: %s) after %s, want the deadline reported once it passes", err, kind, diagnostic, took)
 	}
 }
 
