@@ -319,6 +319,11 @@ included; a line from the session to itself is one the server wrote to wake
 it. What you send with `cloudfield message` reaches the agent as a prompt and
 is not listed.
 
+`cloudfield message --attach <path> <session-id> "<text>"` sends a file from
+this computer with the message, and `--steer` adds the message to an Enhanced
+agent's running turn instead of queueing it. Both flags go before the session
+id: every word after it is the message, and either flag there is refused.
+
 A permission request is the human's: show it with its options, and run the
 `cloudfield answer <session-id> <request-id> <option-id>` they pick. It allows or
 rejects once, never always. Relay a session's question to the human unless the
