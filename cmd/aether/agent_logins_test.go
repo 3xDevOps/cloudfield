@@ -254,3 +254,23 @@ func TestAddedLoginSignInNeedsAServerThatKeepsLogins(t *testing.T) {
 		t.Errorf("loginAgent(--attach) on a server with logins = %v, %v", found, err)
 	}
 }
+
+func TestAddRefusedNamesTheRunningSignInsAttachLine(t *testing.T) {
+	const ends = "that sign-in ends by itself 15 minutes after its terminal opened, or 10 minutes after it started if none did; "
+	for _, tc := range []struct{ message, want string }{
+		{`the sign-in of login "work" (lgn-test1) is still running; finish it first`,
+			"rpc error -32003: the sign-in of login \"work\" (lgn-test1) is still running; finish it first\n" + ends +
+				"to finish it sooner, return to it with:\n  cloudfield agent login claude --attach lgn-test1"},
+		{`the sign-in of login "lgn-old" (lgn-test2) is still running; finish it first`,
+			"rpc error -32003: the sign-in of login \"lgn-old\" (lgn-test2) is still running; finish it first\n" + ends +
+				"to finish it sooner, return to it with:\n  cloudfield agent login claude --attach lgn-test2"},
+		{`the sign-in of login "work" is still running; finish it first`,
+			"rpc error -32003: the sign-in of login \"work\" is still running; finish it first\n" + ends +
+				"to finish it sooner, run the cloudfield agent login claude --attach <login-id> line it printed when it started"},
+	} {
+		err := addRefused(&protocol.Error{Code: protocol.CodeConflict, Message: tc.message}, "claude")
+		if err == nil || err.Error() != tc.want {
+			t.Errorf("addRefused(%q) =\n%v\nwant\n%s", tc.message, err, tc.want)
+		}
+	}
+}

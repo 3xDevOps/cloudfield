@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -175,15 +176,23 @@ func mayStillRun(err error, agent, id string) error {
 	return err
 }
 
+// loginIDText is the form of an added login's id.
+var loginIDText = regexp.MustCompile(`lgn-[a-z0-9]+`)
+
 // addRefused adds to the refusal of a second sign-in how the first one
-// ends: the server names the running sign-in, not its id.
+// ends. A login's name may look like an id, so the id is the last one the
+// server names; a server that names none leaves the person the line the
+// first sign-in printed.
 func addRefused(err error, agent string) error {
 	var rpc *protocol.Error
 	if !errors.As(err, &rpc) || rpc.Code != protocol.CodeConflict || !strings.Contains(rpc.Message, "is still running") {
 		return err
 	}
-	return fmt.Errorf("%w\nthat sign-in ends by itself 15 minutes after its terminal opened, or 10 minutes after it started if none did; "+
-		"to finish it sooner, run the %s line it printed when it started", err, attachCommand(agent, "<login-id>"))
+	const ends = "that sign-in ends by itself 15 minutes after its terminal opened, or 10 minutes after it started if none did"
+	if ids := loginIDText.FindAllString(rpc.Message, -1); len(ids) > 0 {
+		return fmt.Errorf("%w\n%s; to finish it sooner, return to it with:\n  %s", err, ends, attachCommand(agent, ids[len(ids)-1]))
+	}
+	return fmt.Errorf("%w\n%s; to finish it sooner, run the %s line it printed when it started", err, ends, attachCommand(agent, "<login-id>"))
 }
 
 // describeLogin is a login's name and what Claude Code recorded at sign-in.
