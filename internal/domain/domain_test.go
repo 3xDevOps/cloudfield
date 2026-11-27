@@ -278,3 +278,23 @@ func TestASubsessionOutcomeIsForItsParentOnly(t *testing.T) {
 		t.Error("a top-level success awaits review")
 	}
 }
+
+func TestOriginWithoutUserinfo(t *testing.T) {
+	for origin, want := range map[string]string{
+		"":                                 "",
+		"https://github.com/acme/shop.git": "https://github.com/acme/shop.git",
+		"https://ada:not-a-real-value@git.example.test/acme/shop.git": "https://git.example.test/acme/shop.git",
+		"https://not-a-real-value@git.example.test/acme/shop":         "https://git.example.test/acme/shop",
+		"http://ada:not-a-real-value@git.example.test:8080/shop":      "http://git.example.test:8080/shop",
+		"https://ada:not-a-real-value@git.example.test":               "https://git.example.test",
+		"https://git.example.test/acme/a@b.git":                       "https://git.example.test/acme/a@b.git",
+		"ssh://git@git.example.test/acme/shop.git":                    "ssh://git@git.example.test/acme/shop.git",
+		"ssh://ada:not-a-real-value@git.example.test/acme/shop.git":   "ssh://git.example.test/acme/shop.git",
+		"git@git.example.test:acme/shop.git":                          "git@git.example.test:acme/shop.git",
+		"/srv/git/shop.git":                                           "/srv/git/shop.git",
+	} {
+		if got := OriginWithoutUserinfo(origin); got != want {
+			t.Errorf("OriginWithoutUserinfo(%q) = %q, want %q", origin, got, want)
+		}
+	}
+}

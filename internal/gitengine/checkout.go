@@ -197,7 +197,7 @@ func (e *Engine) CreateRunCheckoutAt(ctx context.Context, ws domain.WorkspaceID,
 	if origin != "" {
 		if _, err := e.git(ctx, checkoutPath, "remote", "set-url", "origin", origin); err != nil {
 			cleanup()
-			return "", "", fmt.Errorf("gitengine: point session %s origin at %s: %w", run, origin, err)
+			return "", "", fmt.Errorf("gitengine: point session %s origin at %s: %w", run, domain.OriginWithoutUserinfo(origin), err)
 		}
 	}
 	if err := e.writeRunMeta(run, runMeta{Base: baseCommit, Branch: branch, BaseBranch: baseBranch, Workspace: ws}); err != nil {

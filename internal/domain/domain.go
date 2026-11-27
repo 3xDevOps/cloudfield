@@ -647,6 +647,32 @@ func NormalizeOrigin(origin string) string {
 	return "https://github.com/" + strings.TrimPrefix(path, "/")
 }
 
+// OriginWithoutUserinfo returns origin as it may be shown to others: a URL
+// origin loses the userinfo before its host when that can hold a credential,
+// which is any userinfo of an http or https origin (a token is often given
+// as the user) and one with a password in any other scheme. The scp-like
+// form and a bare user such as ssh://git@host name no secret and stay.
+func OriginWithoutUserinfo(origin string) string {
+	scheme, rest, ok := strings.Cut(origin, "://")
+	if !ok {
+		return origin
+	}
+	authority, path, _ := strings.Cut(rest, "/")
+	at := strings.LastIndex(authority, "@")
+	if at < 0 {
+		return origin
+	}
+	web := scheme == "http" || scheme == "https"
+	if !web && !strings.Contains(authority[:at], ":") {
+		return origin
+	}
+	shown := scheme + "://" + authority[at+1:]
+	if strings.Contains(rest, "/") {
+		shown += "/" + path
+	}
+	return shown
+}
+
 // Member is a person. Identity is the SSH public key, the tailnet login
 // resolved via Tailscale WhoIs, or both - either may be empty, never both.
 // The color is the stable attribution color used everywhere in the UI.

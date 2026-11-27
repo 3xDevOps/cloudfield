@@ -354,6 +354,14 @@ cloudfield workspace origin --workspace myproject --clear
 A `git@github.com:` address is stored as its HTTPS form, because sessions can
 authenticate over HTTPS only.
 
+Do not put a credential in the address (`https://user:token@host/...`). The
+address is stored as given and every member who can read the workspace sees
+it: `workspace.list` returns it, the dashboard shows it, and it is the
+`origin` remote in every session's checkout. The timeline note for a change
+("workspace origin set to ...") and a launch error that names the address
+leave the part before `@` out; notes written before that change keep what
+they hold. If a token was ever set this way, rotate it.
+
 ### Source mirror
 
 A local-only workspace lets collaborators push the base branch directly. A
