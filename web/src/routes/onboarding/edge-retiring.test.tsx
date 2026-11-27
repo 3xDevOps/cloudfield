@@ -91,6 +91,12 @@ describe('a signed-in edge that says its address is retiring', () => {
     expect(client.localEdgeStatus).toHaveBeenCalledWith(true)
   })
 
+  it('takes a sign-in at another spelling of the new address for none', async () => {
+    seed()
+    await open({ state: 'retiring', replacement: next }, [next + ':443'])
+    expect(noticeText()).toContain('Confirm that address with whoever runs the edge before you sign in there.')
+  })
+
   it('asks for notices again when the window gets focus', async () => {
     seed()
     const client = await open()

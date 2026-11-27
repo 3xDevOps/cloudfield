@@ -497,20 +497,10 @@ function JoinPanel({
   )
 }
 
-/** An edge origin in the form edgeclient.Canonical gives it, null for
- * anything else. It compares as the gateway does, so https://127.1 and
- * https://127.0.0.1 stay two addresses. */
-function canonicalEdge(origin: string): string | null {
-  const m = /^(https?):\/\/([^/?#@\s]+)\/?$/.exec(origin)
-  if (!m) return null
-  const host = m[2].toLowerCase()
-  return m[1] === 'https' ? `https://${host.replace(/:443$/, '')}` : `http://${host}`
-}
-
 function retiringNotice(e: SignedInEdge, all: SignedInEdge[]) {
   if (!e.retiring) return null
-  const replacement = canonicalEdge(e.retiring.replacement)
-  const signedInThere = all.some((o) => replacement !== null && canonicalEdge(o.edge) === replacement)
+  // Tokens are per exact origin: another spelling is another sign-in.
+  const signedInThere = all.some((o) => o.edge === e.retiring!.replacement)
   return <RetiringNotice key={e.edge} edge={e.edge} notice={e.retiring} signedInThere={signedInThere} />
 }
 
