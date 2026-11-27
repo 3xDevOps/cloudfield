@@ -186,19 +186,23 @@ func (s *Scheduler) applyAgentReportIf(ctx context.Context, run domain.RunID, re
 	priorReport, priorPending, priorTurn := entry.agentReport, entry.pendingInputs, entry.turnStartedAt
 	priorIdle, priorShown, priorSince := entry.idleReason, entry.idleShown, entry.reportsSince
 	entry.agentReport, entry.pendingInputs = execution, pending
+	priorHeld := entry.reportsHeld
 	switch {
 	case turnStarts:
-		entry.turnStartedAt = turnAt
 		// An Enhanced turn repeats its start with every state it reports,
 		// and a session adopted after a restart reports its old one.
+		if !turnAt.Equal(entry.turnStartedAt) {
+			entry.reportsHeld = false
+		}
 		if turnAt.After(entry.reportsSince) {
 			entry.reportsSince = turnAt
 		}
-		if inputsChanged {
-			entry.reportsSince = now
-		}
-	case inputsChanged || (report.State != "" && (execution.State != agentstatus.Working || execution.Reason != "")):
+		entry.turnStartedAt = turnAt
+	case report.State != "" && (execution.State != agentstatus.Working || execution.Reason != ""):
 		entry.reportsSince = now
+	}
+	if inputsChanged {
+		entry.reportsHeld = true
 	}
 	switch {
 	case showsIdle:
@@ -235,7 +239,7 @@ func (s *Scheduler) applyAgentReportIf(ctx context.Context, run domain.RunID, re
 	}
 	if transitionErr != nil {
 		entry.agentReport, entry.pendingInputs, entry.turnStartedAt = priorReport, priorPending, priorTurn
-		entry.idleReason, entry.idleShown, entry.reportsSince = priorIdle, priorShown, priorSince
+		entry.idleReason, entry.idleShown, entry.reportsSince, entry.reportsHeld = priorIdle, priorShown, priorSince, priorHeld
 		if showsIdle {
 			// The native boundary is still true when parking its outcome
 			// fails. Keep it durable so the poll/recovery path can retry

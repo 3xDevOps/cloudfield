@@ -271,11 +271,12 @@ func (s *Scheduler) FinishReported(ctx context.Context, run domain.RunID, report
 }
 
 // ReportsSince is when the stretch of run's work that its outcome reports
-// are compared within began, zero when unknown.
+// are compared within began. It is zero, so that no report repeats another,
+// for an agent that reports no turns and after a member's message.
 func (s *Scheduler) ReportsSince(run domain.RunID) time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if entry := s.runs[run]; entry != nil {
+	if entry := s.runs[run]; entry != nil && !entry.turnStartedAt.IsZero() && !entry.reportsHeld {
 		return entry.reportsSince
 	}
 	return time.Time{}

@@ -46,9 +46,9 @@ type OutcomeSink interface {
 	ReportWaiting(ctx context.Context, run domain.RunID, id, waitingFor, summary string, at time.Time) error
 	ReportAnswered(ctx context.Context, run domain.RunID, id, summary string, at time.Time) error
 	// ReportsSince is when the stretch of run's work that its reports are
-	// compared within began: its turn start, a member's message or answer,
-	// the last time its agent stopped working on a prompt, or the server's
-	// start. Zero when unknown.
+	// compared within began: its turn start, the last time its agent
+	// stopped working on a prompt, or the server's start. Zero when
+	// unknown or when a member's message may have changed the work.
 	ReportsSince(run domain.RunID) time.Time
 }
 

@@ -686,9 +686,10 @@ func (s *Scheduler) injectLive(ctx context.Context, entry *supervised, workspace
 	if err != nil {
 		return "", err
 	}
-	// What the agent reports next may answer this message.
+	// What the agent reports from here to its next turn may answer this
+	// message, whenever it reads it.
 	s.mu.Lock()
-	entry.reportsSince = time.Now().UTC()
+	entry.reportsHeld = true
 	s.mu.Unlock()
 	// The agent already has the message, so crediting the steerer must not
 	// depend on the caller staying connected.
