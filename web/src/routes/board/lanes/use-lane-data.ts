@@ -100,8 +100,9 @@ export function useLaneHistory(workspaceIDs: string[], floor: number, budget: nu
       events: histories.flatMap((h) => h.events),
       loading: histories.some((h) => h.loading),
       error: histories.find((h) => h.error)?.error ?? null,
-      // Only history this window still lacks: a narrower window the held events cover has nothing to load.
-      capped: histories.some((h) => h.capped && h.floor > floor),
+      // Only history this window still lacks, and only where Load more can read: a narrower window the
+      // held events cover has nothing to load, and a failed read waits for Retry.
+      capped: histories.some((h) => h.capped && !h.error && h.floor > floor),
       more: () => useStore.getState().raiseLaneBudget(useStore.getState().laneBudget + historyStep),
       retry,
     }

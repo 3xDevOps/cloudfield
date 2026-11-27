@@ -1039,6 +1039,23 @@ describe('lanes view', () => {
     expect(useStore.getState().laneHistory[workspace.id].events).toHaveLength(historyBudget + 1000)
   })
 
+  it('offers Load more only for history the window lacks and only where no read has failed', async () => {
+    seed([working])
+    await openLanes()
+    await waitFor(() => expect(useStore.getState().laneHistory[workspace.id]?.loading).toBe(false))
+    const hour = 60 * 60_000
+    // Capped, but held back to three hours ago: the 1h window lacks nothing.
+    act(() => useStore.getState().setLaneHistory(workspace.id, { capped: true, floor: Date.now() - 3 * hour, olderSeq: 10 }))
+    expect(screen.queryByText('Older history not loaded')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull()
+    act(() => useStore.getState().setLaneHistory(workspace.id, { floor: Date.now() - 10 * 60_000 }))
+    expect(screen.getByRole('button', { name: 'Load more' })).toBeDefined()
+    // A failed read is Retry's to repeat; Load more would raise the budget and read nothing.
+    act(() => useStore.getState().setLaneHistory(workspace.id, { error: 'server did not answer workspace.timeline within 1m0s' }))
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeDefined()
+  })
+
   it('keeps none of a page that live events left no room for', async () => {
     seed([working])
     const start = Date.now() - 30 * 60_000

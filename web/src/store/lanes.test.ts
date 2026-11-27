@@ -34,6 +34,11 @@ describe('lane history', () => {
     expect(store.getState().laneBudget).toBe(25_000)
     release()
     expect(store.getState().laneBudget).toBe(historyBudget)
+    // A server reset drops history, and the budget raised for it.
+    store.getState().holdLanes()
+    store.getState().raiseLaneBudget(35_000)
+    store.getState().resetSeq()
+    expect(store.getState().laneBudget).toBe(historyBudget)
   })
 
   it('keeps the newest events up to the budget and moves the history floor to the oldest kept', () => {

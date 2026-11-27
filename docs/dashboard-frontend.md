@@ -2103,8 +2103,10 @@ until it passes the window's start, the log's start or the budget per
 workspace: 5000 events for a window up to 6h, 10,000 up to 24h, 25,000
 beyond (`historyBudgetFor`; an event held costs the browser about 0.3 KB).
 "Older history not loaded" marks the last case, with **Load more** beside
-it, which adds 10,000 to the budget and reads on. The budget only rises
-while a view holds history. History counts as read back to the page's `older_time` (how far the server
+it, which adds 10,000 to the budget and reads on. Both show only while the
+window reaches back past what is held and no read has failed (a failed read
+shows **Retry**). The budget only rises while a view holds history; a server
+switch or a new signed-in member puts it back to the window's own. History counts as read back to the page's `older_time` (how far the server
 read, rereads included), or to its first event when a server does not send
 one. Of a page that would pass the budget only the newest events that fit
 are kept, and history then counts as read back to the oldest of those. `sync.ts` appends
