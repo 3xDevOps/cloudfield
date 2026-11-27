@@ -10,7 +10,6 @@ import { Tooltip } from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
 import { useIsMobile } from '@/lib/breakpoints'
 import { canReopenRun } from '@/lib/commands'
-import { useFileDrop } from '@/lib/file-drag'
 import { coarsePointer, useMediaQuery } from '@/lib/hooks'
 import { isPress, shortcutLabel, useKeybindings } from '@/lib/keybindings'
 import { message } from '@/lib/format'
@@ -19,8 +18,8 @@ import type { ConfigOption } from '@/lib/session-types'
 import { notFinishedYet } from '@/lib/status'
 import { useImplicitControl, type AgentTerminal } from '@/routes/run/agent-terminal'
 import { AttachmentChips } from '@/routes/run/composer-attachments'
-import { AttachButton, DropOverlay, dropRoom } from '@/routes/run/composer-dropzone'
-import { hasImages, useComposerImages, type ComposerImageState } from '@/routes/run/composer-images'
+import { AttachButton, dropRoom, useComposerDrop, type ComposerDropStatus } from '@/routes/run/composer-dropzone'
+import { hasImages, useComposerImages } from '@/routes/run/composer-images'
 import { ContextWindow } from '@/routes/run/context-window'
 import { usePromptHistory } from '@/routes/run/composer-history'
 import { commandSuggestions, currentChoice, OptionPills, SuggestionList, triggerAt, useFileSuggestions, type Suggestion } from '@/routes/run/composer-menus'
@@ -51,7 +50,7 @@ interface ComposerProps {
   docked?: boolean
   dock?: React.ReactNode
   onEscape: () => void
-  onDropStatus?: (status: { limit: number; blocked?: string; upload?: (files: File[]) => Promise<void> }) => void
+  onDropStatus?: (status: ComposerDropStatus) => void
 }
 
 function ComposerFrame({ docked, children }: { docked?: boolean; children: React.ReactNode }) {
@@ -115,7 +114,7 @@ const pillLook: Record<Pill, { label: string; Icon: typeof ArrowUp; variant: 'pr
   resume: { label: 'Resume', Icon: Play, variant: 'primary' },
 }
 
-function ComposerBox({ textarea, autoFocus, collapsed, value, onChange, onCaret, onFocusChange, onSend, onQueue, onEscape, placeholder, describedBy, menu, onKeyDown, combobox, onPaste, readOnly, images, attach, footer }: {
+function ComposerBox({ textarea, autoFocus, collapsed, value, onChange, onCaret, onFocusChange, onSend, onQueue, onEscape, placeholder, describedBy, menu, onKeyDown, combobox, onPaste, readOnly, images, footer }: {
   textarea: React.RefObject<HTMLTextAreaElement | null>
   autoFocus?: boolean
   collapsed?: boolean
@@ -134,13 +133,9 @@ function ComposerBox({ textarea, autoFocus, collapsed, value, onChange, onCaret,
   onPaste?: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void
   readOnly?: boolean
   images?: React.ReactNode
-  /** What a file dropped on the box joins, and whether the box takes none now. */
-  attach: { images: ComposerImageState; disabled: boolean }
   footer: React.ReactNode
 }) {
   const coarse = useMediaQuery(coarsePointer)
-  const room = dropRoom(attach.images, attach.disabled)
-  const drop = useFileDrop({ onFiles: (files) => void attach.images.upload(files), limit: room.limit })
   const [focused, setFocused] = useState(false)
   const caretPlaced = useRef(false)
   const dictating = useDictationState(textarea).active
@@ -184,10 +179,9 @@ function ComposerBox({ textarea, autoFocus, collapsed, value, onChange, onCaret,
     } : {}),
   } : {})
   return (
-    <div className="relative" {...drop.handlers}>
+    <div className="relative">
       <DictationNotice textarea={textarea} className="mb-2" />
       {menu}
-      {drop.count !== null && <DropOverlay count={drop.count} refused={drop.refused} blocked={room.blocked} limit={room.limit} />}
       <div
         className={cn('@container overflow-hidden rounded-composer border border-seam bg-chrome', focused && 'border-control', collapsed && 'flex items-center pr-1')}
         onMouseDown={(event) => {
@@ -372,7 +366,6 @@ function StandardComposer({ run, agent, room, textarea, autoFocus, onFocusChange
         describedBy={hintID}
         onPaste={images.onPaste}
         images={<AttachmentChips images={images} disabled={busy} />}
-        attach={{ images, disabled: attachOff }}
         footer={(
           <>
             <div className="flex items-center gap-1">
@@ -631,7 +624,6 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
         readOnly={busy}
         onPaste={images.onPaste}
         images={<AttachmentChips images={images} disabled={busy} />}
-        attach={{ images, disabled: attachOff }}
         footer={(
           <>
             <div className="flex items-center gap-1">
@@ -714,14 +706,24 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
 
 export function Composer(props: ComposerProps) {
   const { run, dock } = props
+  const drop = useComposerDrop()
+  const onDropStatus = props.onDropStatus ?? drop.reportStatus
   const self = useSelf(run.workspace_id)
   const cap = useCapability()
   const steerOthers = useStore((s) => s.workspaces[run.workspace_id]?.steer_others)
   const maySteer = allowed('steer', self, { owner: run.member_id, protected: run.protected, steerOthers })
   const canReopen = maySteer && cap.hasMethod('run.relaunch') && canReopenRun(run)
   useEffect(() => {
-    if (canReopen) props.onDropStatus?.({ limit: 0, blocked: 'Files cannot be attached now' })
-  }, [canReopen, props.onDropStatus])
+    if (canReopen) onDropStatus({ limit: 0, blocked: 'Files cannot be attached now' })
+  }, [canReopen, onDropStatus])
   if (canReopen) return <ClosedRun key={run.id} run={run} reason={composerBlock(run, maySteer, true)!} dock={dock} />
-  return props.run.acp ? <EnhancedComposer key={props.run.id} {...props} /> : <StandardComposer key={props.run.id} {...props} />
+  const ModeComposer = run.acp ? EnhancedComposer : StandardComposer
+  const composer = <ModeComposer key={run.id} {...props} onDropStatus={onDropStatus} />
+  if (props.onDropStatus) return composer
+  return (
+    <div className="relative shrink-0" {...drop.handlers}>
+      {composer}
+      {drop.overlay}
+    </div>
+  )
 }

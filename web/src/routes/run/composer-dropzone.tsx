@@ -1,11 +1,11 @@
-import { useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import type * as React from 'react'
 import { Plus } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { DropIllustration, DropZone } from '@/components/ui/drop-zone'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Spinner } from '@/components/ui/spinner'
-import { fitLabel } from '@/lib/file-drag'
+import { fitLabel, useFileDrop } from '@/lib/file-drag'
 import { coarsePointer, useMediaQuery } from '@/lib/hooks'
 import { AttachmentList } from '@/routes/run/attachment-rows'
 import { limitsHint, maxAttachments, type ComposerImageState } from '@/routes/run/composer-images'
@@ -23,7 +23,7 @@ export function DropOverlay({ count, refused, blocked, limit }: { count: number;
     <div
       data-slot="drop-overlay"
       data-drag={blocked || refused ? undefined : ''}
-      className="group/zone pointer-events-none absolute inset-0 z-10 flex animate-scrim-in items-center justify-center overflow-hidden rounded-composer border border-dashed border-control bg-chrome data-drag:border-accent motion-reduce:animate-none"
+      className="group/zone pointer-events-none absolute inset-0 z-10 flex animate-scrim-in items-center justify-center overflow-hidden rounded-composer border border-dashed border-control bg-chrome/70 data-drag:border-accent motion-reduce:animate-none"
     >
       <span aria-hidden className="absolute inset-0 hidden bg-accent-soft group-data-drag/zone:block" />
       <span className="relative flex flex-col items-center gap-2 text-ui font-medium">
@@ -32,6 +32,27 @@ export function DropOverlay({ count, refused, blocked, limit }: { count: number;
       </span>
     </div>
   )
+}
+
+export interface ComposerDropStatus {
+  limit: number
+  blocked?: string
+  upload?: (files: File[]) => Promise<void>
+}
+
+export function useComposerDrop() {
+  const [status, setStatus] = useState<ComposerDropStatus>({ limit: 0, blocked: 'Files cannot be attached now' })
+  const upload = useRef<ComposerDropStatus['upload']>(undefined)
+  const reportStatus = useCallback(({ limit, blocked, upload: next }: ComposerDropStatus) => {
+    upload.current = next
+    setStatus((current) => current.limit === limit && current.blocked === blocked ? current : { limit, blocked })
+  }, [])
+  const { handlers, count, refused } = useFileDrop({
+    limit: status.limit,
+    onFiles: (files) => void upload.current?.(files),
+  })
+  const overlay = count === null ? null : <DropOverlay count={count} refused={refused} blocked={status.blocked} limit={status.limit} />
+  return { handlers, overlay, reportStatus }
 }
 
 export function AttachButton({ images, disabled, unsupported, textarea }: {

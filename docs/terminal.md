@@ -135,7 +135,8 @@ to it.
 
 Talk to the agent in the **Chat** view's composer. Press **Enter** or
 **Send**, and **Shift+Enter** for a newline. **Attach files** (**+**) adds up to
-eight files per message.
+eight files per message. Drop files over the conversation or composer to
+attach them.
 
 - A message from the current controller reaches the agent's terminal at once
   (**Sends to the agent's terminal.**), also while the controller's dashboard
