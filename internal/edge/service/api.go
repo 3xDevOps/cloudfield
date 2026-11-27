@@ -91,7 +91,21 @@ func (s *Service) apiDeviceStart(r *http.Request) (any, error) {
 	if err := req.Validate(); err != nil {
 		return nil, pageErr(http.StatusBadRequest, "%v", err)
 	}
+	if p := s.pair(r); req.RelayOrigin != "" {
+		relay, err := edgeproto.Origin(req.RelayOrigin)
+		if err != nil {
+			return nil, pageErr(http.StatusBadRequest, "relay_origin: %v", err)
+		}
+		if !sameOrigin(relay, p.relay) {
+			return nil, pageErr(http.StatusBadRequest,
+				"%s signs devices in for the relay origin %s, not for %s; sign in with: cloudfield login --edge <the relay origin you use>", p.signin, p.relay, relay)
+		}
+	}
 	key, _ := edgeproto.ParseDeviceKey(req.Key) // Validate parsed it.
+	var relay string
+	if s.recording.Load() {
+		relay = CanonicalOrigin(s.pair(r).relay)
+	}
 	deviceCode := edgeproto.NewToken()
 	now := s.now()
 	// A new user code rarely collides with a live one; three draws make
@@ -106,6 +120,7 @@ func (s *Service) apiDeviceStart(r *http.Request) (any, error) {
 			Key:          edgeproto.DeviceKeyLine(key),
 			ClientAddr:   clientAddr(r).String(),
 			SigninOrigin: s.signinOrigin(r.Context()),
+			RelayOrigin:  relay,
 			CreatedAt:    now,
 			ExpiresAt:    now.Add(deviceCodeTTL),
 		})
@@ -140,7 +155,18 @@ func (s *Service) apiDeviceToken(r *http.Request) (any, error) {
 	ctx := r.Context()
 	hash := edgeproto.HashToken(req.DeviceCode)
 	now := s.now()
-	a, err := s.store.PollDeviceAuth(ctx, hash, now)
+	a, err := s.store.DeviceAuth(ctx, hash)
+	if err == nil {
+		if p := s.pair(r); !startedAt(a, p) {
+			if sameOrigin(a.SigninOrigin, p.signin) {
+				return nil, pageErr(http.StatusBadRequest, "this sign-in was started for the relay origin %s, which %s no longer signs devices in for; "+
+					"start it again with: cloudfield login --edge %s", a.RelayOrigin, p.signin, p.relay)
+			}
+			return nil, pageErr(http.StatusBadRequest, "this sign-in was started at %s, not at %s for %s; finish it there",
+				startedWhere(a), p.signin, p.relay)
+		}
+		a, err = s.store.PollDeviceAuth(ctx, hash, now)
+	}
 	if errors.Is(err, edgestore.ErrNotFound) {
 		return nil, deviceState(edgeproto.DeviceExpired)
 	}
@@ -219,4 +245,19 @@ func (s *Service) apiEdgeInfo(r *http.Request) (any, error) {
 		info.Retiring, info.RetiringDate = rt.relay, rt.date
 	}
 	return info, nil
+}
+
+// startedAt reports whether the device authorization a was started at the
+// pair p, as far as a records its origins. While the edge records origins
+// every row records both, since a start deletes those without a relay.
+func startedAt(a edgestore.DeviceAuth, p *pair) bool {
+	return (a.SigninOrigin == "" || sameOrigin(a.SigninOrigin, p.signin)) && (a.RelayOrigin == "" || sameOrigin(a.RelayOrigin, p.relay))
+}
+
+// startedWhere names the origins the device authorization a records.
+func startedWhere(a edgestore.DeviceAuth) string {
+	if a.RelayOrigin == "" {
+		return a.SigninOrigin
+	}
+	return a.SigninOrigin + " for the relay origin " + a.RelayOrigin
 }

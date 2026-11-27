@@ -35,3 +35,11 @@ func TestGetenv(t *testing.T) {
 		t.Fatalf("Getenv with an empty CLOUDFIELD_ name = %q, want old", got)
 	}
 }
+
+func TestLegacy(t *testing.T) {
+	t.Setenv("AETHER_ENVNAME_TEST", "old")
+	t.Setenv("CLOUDFIELD_ENVNAME_TEST", "new")
+	if got := Legacy("AETHER_ENVNAME_TEST"); got != "old" {
+		t.Fatalf("Legacy = %q, want old: an image older than v0.8.7 reads only the AETHER_ name", got)
+	}
+}

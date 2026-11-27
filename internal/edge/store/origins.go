@@ -21,34 +21,60 @@ const OriginsSchema = 2
 // unseen.
 const recordingGap = 10 * time.Minute
 
-// RecordPairs records, as of now, that the edge serves each relay origin
-// with the sign-in origin it names and records origins. A relay origin
-// keeps its row after the edge stops serving it. The recording period
+// Run is what RecordPairs writes, in one transaction, as a recording run
+// starts.
+type Run struct {
+	// Pairs maps each relay origin the edge serves to its sign-in origin.
+	Pairs map[string]string
+	// Retire deletes the device tokens, sessions and device authorizations
+	// whose sign-in origin is one of RetiredSignIns or that have none.
+	Retire         bool
+	RetiredSignIns []string
+}
+
+// RecordPairs deletes the sign-ins run retires and records, as of now,
+// that the edge serves each relay origin of run.Pairs with the sign-in
+// origin it names and records origins, all in one transaction, and
+// returns how many sign-ins it retired. It deletes the device
+// authorizations not bound to the relay origin of a pair, which a binary
+// that records no origins started. A relay origin
+// keeps its row after the edge stops serving it, and every pairing ever
+// written to origin_pairs, by any binary, stays in origin_pair_history
+// (Pairings). The recording period
 // goes on when the edge's last recording run stopped cleanly
 // (StopRecording) within recordingGap, and starts at now otherwise.
-func (s *Store) RecordPairs(ctx context.Context, relayToSignin map[string]string, now time.Time) error {
+func (s *Store) RecordPairs(ctx context.Context, run Run, now time.Time) (SignIns, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("edgestore: record origin pairs: %w", err)
+		return SignIns{}, fmt.Errorf("edgestore: record origin pairs: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
-	for relay, signin := range relayToSignin {
+	var deleted SignIns
+	if run.Retire {
+		if deleted, err = deleteSignIns(ctx, tx, run.RetiredSignIns); err != nil {
+			return SignIns{}, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM device_authorizations WHERE relay_origin IS NULL`); err != nil {
+		return SignIns{}, fmt.Errorf("edgestore: delete device authorizations not bound to a pair: %w", err)
+	}
+	for relay, signin := range run.Pairs {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO origin_pairs (relay_origin, signin_origin, served_at) VALUES (?, ?, ?)
 			ON CONFLICT (relay_origin) DO UPDATE SET signin_origin = excluded.signin_origin, served_at = excluded.served_at`,
 			relay, signin, unix(now)); err != nil {
-			return fmt.Errorf("edgestore: record origin pair %s %s: %w", signin, relay, err)
+			return SignIns{}, fmt.Errorf("edgestore: record origin pair %s %s: %w", signin, relay, err)
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO origin_recording (id, since, started_at) VALUES (1, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET started_at = excluded.started_at, stopped_at = NULL,
 			since = CASE WHEN stopped_at >= started_at AND stopped_at BETWEEN ? AND ? THEN since ELSE excluded.since END`,
 		unix(now), unix(now), unix(now.Add(-recordingGap)), unix(now)); err != nil {
-		return fmt.Errorf("edgestore: record origin pairs: recording period: %w", err)
+		return SignIns{}, fmt.Errorf("edgestore: record origin pairs: recording period: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("edgestore: record origin pairs: %w", err)
+		return SignIns{}, fmt.Errorf("edgestore: record origin pairs: %w", err)
 	}
-	return nil
+	return deleted, nil
 }
 
 // StopRecording records that the edge, which records origins, stops at
@@ -85,17 +111,10 @@ type SignIns struct {
 
 var signInTables = []string{"devices", "web_sessions", "device_authorizations"}
 
-// DeleteSignIns deletes, in one transaction, the device tokens, sessions
-// and device authorizations whose sign-in origin is one of origins or
-// that have none, and returns how many it deleted. With no origins it
-// still deletes every row without one: call it only for an edge that
-// retires a pair.
-func (s *Store) DeleteSignIns(ctx context.Context, origins []string) (SignIns, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return SignIns{}, fmt.Errorf("edgestore: delete sign-ins: %w", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+// deleteSignIns deletes, in tx, the device tokens, sessions and device
+// authorizations whose sign-in origin is one of origins or that have none,
+// and returns how many it deleted.
+func deleteSignIns(ctx context.Context, tx *sql.Tx, origins []string) (SignIns, error) {
 	where := `signin_origin IS NULL`
 	if len(origins) > 0 {
 		where += ` OR signin_origin IN (?` + strings.Repeat(`, ?`, len(origins)-1) + `)`
@@ -116,10 +135,70 @@ func (s *Store) DeleteSignIns(ctx context.Context, origins []string) (SignIns, e
 		}
 		*n = int(deleted)
 	}
-	if err := tx.Commit(); err != nil {
-		return SignIns{}, fmt.Errorf("edgestore: delete sign-ins: %w", err)
+	return out, nil
+}
+
+// SignInOrigins lists the sign-in origins that device tokens, sessions and
+// device authorizations record.
+func (s *Store) SignInOrigins(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT signin_origin FROM devices WHERE signin_origin IS NOT NULL
+		UNION SELECT signin_origin FROM web_sessions WHERE signin_origin IS NOT NULL
+		UNION SELECT signin_origin FROM device_authorizations WHERE signin_origin IS NOT NULL ORDER BY 1`)
+	if err != nil {
+		return nil, fmt.Errorf("edgestore: list sign-in origins: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only
+	var out []string
+	for rows.Next() {
+		var o string
+		if err := rows.Scan(&o); err != nil {
+			return nil, fmt.Errorf("edgestore: list sign-in origins: %w", err)
+		}
+		out = append(out, o)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("edgestore: list sign-in origins: %w", err)
 	}
 	return out, nil
+}
+
+// Pairing is a relay origin and a sign-in origin the edge recorded
+// serving together. Seq orders pairings by when the edge last recorded
+// them, whatever the clock said.
+type Pairing struct {
+	RelayOrigin, SigninOrigin string
+	Seq                       int64
+}
+
+// Pairings lists every pairing the edge recorded serving, current and
+// earlier.
+func (s *Store) Pairings(ctx context.Context) ([]Pairing, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT relay_origin, signin_origin, seq FROM origin_pair_history ORDER BY 1, 2`)
+	if err != nil {
+		return nil, fmt.Errorf("edgestore: list origin pairings: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only
+	var out []Pairing
+	for rows.Next() {
+		var p Pairing
+		if err := rows.Scan(&p.RelayOrigin, &p.SigninOrigin, &p.Seq); err != nil {
+			return nil, fmt.Errorf("edgestore: list origin pairings: %w", err)
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("edgestore: list origin pairings: %w", err)
+	}
+	return out, nil
+}
+
+// Recorded reports whether the edge ever began a recording period.
+func (s *Store) Recorded(ctx context.Context) (bool, error) {
+	var ok bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM origin_recording)`).Scan(&ok); err != nil {
+		return false, fmt.Errorf("edgestore: read the recording period: %w", err)
+	}
+	return ok, nil
 }
 
 // SignInsWithoutOrigin counts the device tokens, sessions and device
