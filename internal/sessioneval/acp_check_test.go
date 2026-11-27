@@ -23,7 +23,8 @@ import (
 // TestACPCheck drives the real Claude Code ACP adapter, as an Enhanced
 // session does, through one turn of a staged session and records how it
 // reported and whether it replied after its last report.
-// CLOUDFIELD_SESSION_EVAL_ACP is the adapter's entry script.
+// CLOUDFIELD_SESSION_EVAL_ACP is the adapter's entry script. The adapter
+// loads the caller's own Claude Code settings, which it cannot leave out.
 func TestACPCheck(t *testing.T) {
 	adapter := os.Getenv("CLOUDFIELD_SESSION_EVAL_ACP")
 	if adapter == "" {
@@ -39,7 +40,10 @@ func TestACPCheck(t *testing.T) {
 	}
 	out := envOr("CLOUDFIELD_SESSION_EVAL_OUT", filepath.Join(os.TempDir(), "session-eval"))
 	label := envOr("CLOUDFIELD_SESSION_EVAL_LABEL", "acp")
-	runs, _ := strconv.Atoi(envOr("CLOUDFIELD_SESSION_EVAL_RUNS", "3"))
+	runs, err := strconv.Atoi(envOr("CLOUDFIELD_SESSION_EVAL_RUNS", "3"))
+	if err != nil || runs < 1 {
+		t.Fatalf("CLOUDFIELD_SESSION_EVAL_RUNS must be a positive number")
+	}
 	only := strings.Split(envOr("CLOUDFIELD_SESSION_EVAL_ONLY", "small-fix"), ",")
 	if err = os.MkdirAll(out, 0o755); err != nil {
 		t.Fatal(err)
@@ -49,7 +53,11 @@ func TestACPCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range only {
-		s := scenarios[slices.IndexFunc(scenarios, func(s Scenario) bool { return s.ID == id })]
+		i := slices.IndexFunc(scenarios, func(s Scenario) bool { return s.ID == id })
+		if i < 0 {
+			t.Fatalf("CLOUDFIELD_SESSION_EVAL_ONLY: unknown scenario %q", id)
+		}
+		s := scenarios[i]
 		for n := 1; n <= runs; n++ {
 			name := label + "-" + s.ID + "-" + strconv.Itoa(n)
 			t.Run(name, func(t *testing.T) {
@@ -110,7 +118,8 @@ func TestACPCheck(t *testing.T) {
 				for {
 					st := sess.State()
 					started = started || st.TurnInFlight
-					if started && !st.TurnInFlight {
+					// Background work is followed by a turn of the agent's own.
+					if started && !st.TurnInFlight && !st.Background {
 						break
 					}
 					select {
