@@ -45,11 +45,14 @@ import { loadMergeProposals } from '@/store/members'
 import { loadEdge } from '@/store/edge'
 import { loadLinear } from '@/store/linear'
 import { pausedFromTimeline } from '@/store/board'
+import { isReread } from '@/lib/events'
+import { laneEventTypes } from '@/store/lanes'
 import { scheduleBudgetRead, type BudgetPayload } from '@/store/cost'
 import { touchChildren } from '@/store/child-touches'
 import { inMessageScope, loadMessagePage } from '@/store/messages'
 import { watchOutcomeSeen } from '@/store/outcome-seen'
 import { serverUpdateApplying, type UnreachableKind } from '@/store/server'
+import { historyBudget } from '@/store/lanes'
 
 /**
  * The local gateway reports a dead transport as 503 with the failing hop in the
@@ -227,7 +230,7 @@ export async function hydrate(
       store.getState().resetNotes()
       store.getState().resetAssistant()
       store.getState().setLinear(null)
-      store.setState({ invitations: null, revokingInvitations: [], agentModels: {}, mergedInto: {}, deletingRuns: {}, laneHistory: {}, watches: {}, watchNotices: {}, watchesFor: null, closeConfirmation: null })
+      store.setState({ invitations: null, revokingInvitations: [], agentModels: {}, mergedInto: {}, deletingRuns: {}, laneHistory: {}, laneBudget: historyBudget, watches: {}, watchNotices: {}, watchesFor: null, closeConfirmation: null })
     }
     s.setCapabilities(capabilities)
     // Resolve Edge before restoring drafts: another app can serve script on
@@ -242,6 +245,9 @@ export async function hydrate(
         ignore()
       }
     }
+    // A Lanes view may have started a read for the member before, while the link status was awaited:
+    // its history goes with that identity, so the view reads for this one without waiting for it.
+    if (identityChanged) store.setState({ laneHistory: {} })
     s.setIdentityKey(incomingIdentity)
     noteServerTime(store, info.time)
     s.setInfo(info)
@@ -900,7 +906,16 @@ export function connect(store: RootStore, client: Api = api): () => void {
       const ev = queue.shift() as Event
       if (await applyEvent(store, ev, client, signal)) continue
       // The event named something we could not fetch. A fresh snapshot is the
-      // repair; the rest of the queue waits for it.
+      // repair; the rest of the queue waits for it. The snapshot does not
+      // carry lane history, which now lacks this event if it is one Lanes
+      // holds: its workspace's goes, and a mounted Lanes view reads it again.
+      if (signal.aborted) return
+      if (laneEventTypes.includes(ev.type) && !isReread(ev) && store.getState().laneHistory[ev.workspace_id]) {
+        store.setState((s) => {
+          const { [ev.workspace_id]: _incomplete, ...laneHistory } = s.laneHistory
+          return { laneHistory }
+        })
+      }
       void load()
       return
     }

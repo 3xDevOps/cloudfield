@@ -521,8 +521,8 @@ type supervised struct {
 	spendMu   sync.Mutex
 	uncharged events.RunCostPayload
 	// appServer marks a Standard run whose terminal is attached to the
-	// agent's app-server (appServerDriver). serverTurn marks a turn mail or
-	// a report reminder started there, which does not answer a shown question.
+	// agent's app-server (appServerDriver). serverTurn marks a turn mail
+	// started there, which does not answer a shown question.
 	appServer  bool
 	serverTurn bool
 	// idleWake marks a Standard run whose terminal loads an idle wake
@@ -612,7 +612,7 @@ type supervised struct {
 	sleepGen    uint64
 	waking      chan struct{}
 	wakeErr     error
-	// abortSleep, set while a sleep saves or pauses a VM that still
+	// abortSleep, set while the sleep sweep saves or pauses a VM that still
 	// answers, makes it give up if its guest has yet to be paused.
 	// wakeWaits is set once a wake waits for the sleep, which a sleep that
 	// has yet to set abortSleep reads instead.

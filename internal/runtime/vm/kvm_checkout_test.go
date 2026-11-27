@@ -45,7 +45,7 @@ func newCheckoutHost(t *testing.T) *checkoutHost {
 	if dir == "" || kernel == "" || server == "" || os.Geteuid() != 0 {
 		t.Skip("set AETHER_VM_TEST_DIR, AETHER_VM_TEST_KERNEL and AETHER_VM_TEST_SERVER and run as root to boot real VMs")
 	}
-	images, err := vmimage.Open(filepath.Join(dir, "vm", "images"), kernel, nil)
+	images, err := vmimage.Open(filepath.Join(dir, "vm", "images"), kernel, nil, -1)
 	if err != nil {
 		t.Fatal(err)
 	}

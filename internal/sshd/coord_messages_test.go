@@ -100,3 +100,45 @@ func TestCoordMessagesListCutsAWaitsWakeForViewers(t *testing.T) {
 		}
 	}
 }
+
+// A report's message says how large the report's body is, and carries the
+// body only when the list is asked for bodies, to whoever may see the message.
+func TestCoordMessagesListCarriesAReportBodyOnRequest(t *testing.T) {
+	e := newTestEnv(t, nil)
+	ctx := context.Background()
+	parent := &domain.Run{
+		WorkspaceID: e.ws.ID, MemberID: e.member.ID, Task: "parent",
+		Harness: "claude", Mode: domain.LaunchTUI, Status: domain.RunRunning, Branch: "aether/parent",
+	}
+	if err := e.db.CreateRun(ctx, parent); err != nil {
+		t.Fatal(err)
+	}
+	report := &store.CoordReport{
+		WorkspaceID: e.ws.ID, RunID: e.run.ID, Outcome: store.CoordOutcomeSuccess, Summary: "2 findings",
+		NextAction: "review retained evidence", IdempotencyKey: "review", Body: "1. x.go:12\n2. y.go:40",
+	}
+	if _, err := e.db.ReserveCoordReport(ctx, report); err != nil {
+		t.Fatal(err)
+	}
+	msg := &store.RunMessage{WorkspaceID: e.ws.ID, FromRun: e.run.ID, ToRun: parent.ID, Body: report.Summary, Kind: store.RunMessageKindMessage, CorrelationID: report.ID}
+	if err := e.db.AppendRunMessage(ctx, msg, 100); err != nil {
+		t.Fatal(err)
+	}
+	_, viewer := addMember(t, e, "Vera", domain.RoleViewer, false)
+	for _, bodies := range []bool{false, true} {
+		var list protocol.CoordMessagesListResult
+		if err := handlerCallJSON(t, e, viewer.ID, protocol.MethodCoordMessagesList, protocol.CoordMessagesListParams{
+			WorkspaceID: string(e.ws.ID), CorrelationID: report.ID, ReportBodies: bodies,
+		}, &list); err != nil {
+			t.Fatal(err)
+		}
+		want := ""
+		if bodies {
+			want = report.Body
+		}
+		if len(list.Messages) != 1 || list.Messages[0].Kind != protocol.CoordMessageKindReport ||
+			list.Messages[0].ReportBodyBytes != len(report.Body) || list.Messages[0].ReportBody != want {
+			t.Fatalf("list with report_bodies=%v = %+v, want the size and body %q", bodies, list.Messages, want)
+		}
+	}
+}

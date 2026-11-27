@@ -172,8 +172,10 @@ func TestIntegrationRealAgents(t *testing.T) {
 					t.Parallel()
 					a := &realAgentRun{srv: srv, ctrl: ctrl, model: model, workspace: string(e.ws.ID), agent: agent, mode: mode, marker: "real-agent-" + agent + "-" + modeName}
 					// Aether asks a turn that ended without a report for one: a
-					// Standard Claude Code stop is held, and an Enhanced session
-					// and a Standard Codex one are prompted.
+					// Standard Claude Code stop is held, an Enhanced session is
+					// prompted. Standard Codex is not asked: Aether loads no
+					// hooks into it, so its silent turn parks as waiting.
+					gated := agent != "codex" || mode != domain.LaunchTUI
 					gate := a.marker + "/gate"
 					model.script(gate, step{command: realAgentCommand})
 					launch(t, a, tagged(gate)+" run the command, then stop.")
@@ -183,7 +185,11 @@ func TestIntegrationRealAgents(t *testing.T) {
 						a.instructed(t)
 						a.waitIdle(ctx, t, 0)
 						a.waitFor(ctx, t, "the model's answer in the run", func() bool { return strings.Contains(a.transcript(), realAgentAnswer) })
-						a.check(ctx, t, gate, 0, turnWant{activity: domain.ActivityAnswered, cause: events.CauseReport, outcome: protocol.CoordOutcomeAnswered, summary: remindedPrefix + gate, reminders: 1})
+						want := turnWant{activity: domain.ActivityAnswered, cause: events.CauseReport, outcome: protocol.CoordOutcomeAnswered, summary: remindedPrefix + gate, reminders: 1}
+						if !gated {
+							want = turnWant{activity: domain.ActivityWaiting, cause: events.CauseTurnEnd}
+						}
+						a.check(ctx, t, gate, 0, want)
 					}) {
 						return
 					}
@@ -255,6 +261,9 @@ func TestIntegrationRealAgents(t *testing.T) {
 							return []step{{subagent: subagentTagged(turn+"/sub") + " run the subagent's step."}}
 						},
 						want: func(turn string) turnWant {
+							if !gated {
+								return turnWant{activity: domain.ActivityWaiting, cause: events.CauseTurnEnd, subagent: turn + "/sub"}
+							}
 							return turnWant{activity: domain.ActivityAnswered, cause: events.CauseReport, outcome: protocol.CoordOutcomeAnswered, summary: remindedPrefix + turn, reminders: 1, subagent: turn + "/sub"}
 						},
 					}, {

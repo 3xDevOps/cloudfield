@@ -525,6 +525,8 @@ the time of the event at `older_seq`: the page covers everything after it,
 including events a filter left out. A session snapshot's
 `unacked_messages` counts mail addressed to the session that it has not
 acknowledged, and `oldest_unacked_at` is when the oldest of it was sent.
+`cloudfield sessions` shows the count in its `MAIL` column, and `cloudfield
+sessions <session-id>` shows both on its `mail` line.
 
 Mail stays as history until its session is explicitly deleted, including through
 workspace deletion. When a session's sandbox is released, mail it never
@@ -1459,9 +1461,12 @@ report whole before the next read acknowledges it. A longer body is
 refused, by the command with `body exceeds 12288 bytes` and by the server
 with `body is <n> bytes and exceeds 12288`, and a body on another
 outcome with `body is only valid with the "success", "failure" or "blocked"
-outcome`. The body is stored with the report and read through the parent's inbox; the
-dashboard does not show it yet. Nothing is redacted from a summary or a body:
-write no secret into either. A report's body counts toward the 16 KiB of an inbox batch, so a report
+outcome`. The body is stored with the report and read through the parent's inbox. In the
+dashboard a report with a body has a **Full report** button on its row under
+Agent messages, which opens the body in place; whoever may see that message may
+open it. `coord.messages.list` gives each report's `report_body_bytes`, and the
+body itself as `report_body` when called with `report_bodies`. Nothing is
+redacted from a summary or a body: write no secret into either. A report's body counts toward the 16 KiB of an inbox batch, so a report
 with a long body is read in a batch of its own. A parent whose command or bridge predates report bodies gets the body after
 the summary in `body`, which it shows. A server older than report bodies stores the report without the
 body; the command and the `aether_report` tool then fail with `the report was
@@ -1704,27 +1709,7 @@ reported. If the server cannot check, the stop is applied. If neither a hook
 nor terminal output follows the hold for a minute, as when the answer never
 reached Claude Code, the server ends the turn itself. Enhanced sessions get
 the same rule as a [report reminder](enhanced-sessions.md#report-reminder)
-prompt. So does a Standard Codex session, which loads no hooks. When its
-thread goes idle, the server reads the thread's last turn from the app-server
-(`thread/turns/list`). Codex 0.131.0 answers that read only for a client that
-opted into its experimental API, so the server's client sends
-`capabilities.experimentalApi` in `initialize`. If that turn is `completed`,
-has an agent message and owes a report, the server does not show it as ended:
-it sends the reminder as a new turn, under the reminder's admission, and
-applies the end of that turn whatever it reported. The server keeps that mark
-in memory only: after a server restart during the reminder's turn, the end of
-that turn is held once more. An `interrupted` turn, as after Esc, is never
-held, nor is a `!command` or `/compact`, which the app-server lists as a
-`completed` turn with no agent message. A session that was idle before a
-server restart is not asked again after it. If the read fails, the turn is
-not held and the server logs the error. If admission refuses the reminder,
-the turn ends as it would have. The server sends the reminder only while the
-app-server lists no turn in progress: if one has started by then, such as a
-follow-up queued in the terminal, the first turn ends as it would have and
-the new one owes its own report. Codex 0.167.2 takes a `turn/start` during a
-turn as input to that turn, so a turn that starts between that check and the
-reminder's `turn/start` takes the reminder and ends as the reminder's turn.
-Background sessions, and Standard sessions of other agents, are not held.
+prompt. Background sessions, and Standard sessions of other agents, are not held.
 
 `run.report` carries the agent's last message in one case: the turn end of a
 Standard subsession, which the server forwards to its parent as the
@@ -1739,16 +1724,13 @@ message. The server keeps the held message in memory only, so after a server
 restart the stop that follows the reminder forwards its own. A Claude Code
 `SessionEnd` hook's `run.report` carries `session_end: true` and forwards
 nothing: `/clear` and `/exit` end no turn, and a turn cut off with Esc sends
-no `Stop`. For Codex, the message comes from the same read of the thread's
-last turn. A `completed` turn forwards its last agent message, and an
-`interrupted` one, as after Esc, forwards nothing. A reminded turn forwards
-its own message, not the reminder turn's, also when the reminder's turn is
-cut off or fails. After a server restart during the reminder's turn, the
-reminder turn's message is forwarded in its place. If the read fails, the
-report reads `(none)` and the server logs the error. A Claude Code session
-with no parent sends no message, and the server forwards none of a Codex
-one's. A subsession that a handoff detached from its parent still sends its
-message or has it read, and the server discards it.
+no `Stop`. For Codex, which loads no hooks, the server reads the thread's
+last turn from the app-server, for a subsession only. A `completed` turn
+forwards its last agent message, and an `interrupted` one, as after Esc,
+forwards nothing. If the read fails, the report reads `(none)` and the server
+logs the error. A session with no parent sends and reads neither. A
+subsession that a handoff detached from its parent still does, and the server
+discards the message.
 
 Coordination also does not provide a universal inbound terminal hook. When a
 human messages a Standard session, Cloudfield delivers the message through the

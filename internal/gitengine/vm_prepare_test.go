@@ -63,6 +63,38 @@ func (d *keptDisks) ForgetCheckoutDisks(group string) error {
 	return nil
 }
 
+type heldDisks struct {
+	keptDisks
+	asked   chan string
+	release chan struct{}
+}
+
+func (d *heldDisks) KeepCheckoutDisk(_ context.Context, _, _, key string, _ int64, _ func(context.Context, string) error) error {
+	d.asked <- key
+	<-d.release
+	return nil
+}
+
+func TestABaseLeftWhileAnotherBuildsIsNotPrepared(t *testing.T) {
+	e := newTestEngine(t, nil)
+	disks := &heldDisks{keptDisks: keptDisks{kept: map[string]string{"ws/1-1": ""}}, asked: make(chan string, 3), release: make(chan struct{})}
+	e.cfg.VM = &VM{Disks: disks}
+	e.prepareCheckouts("ws", "", "a")
+	first := <-disks.asked
+	e.prepareCheckouts("ws", "", "b")
+	e.prepareCheckouts("ws", "", "c")
+	close(disks.release)
+	e.preparing.Wait()
+	close(disks.asked)
+	var later []string
+	for key := range disks.asked {
+		later = append(later, key)
+	}
+	if first != "checkout-ws-a-1-1" || !slices.Equal(later, []string{"checkout-ws-c-1-1"}) {
+		t.Fatalf("built %s then %v, want a then only c", first, later)
+	}
+}
+
 func TestMirrorAdvancePreparesTheCheckoutDiskOfTheNewBase(t *testing.T) {
 	e := newTestEngine(t, nil)
 	disks := &keptDisks{dir: t.TempDir(), kept: map[string]string{}}

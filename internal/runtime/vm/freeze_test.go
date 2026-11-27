@@ -93,22 +93,43 @@ func TestAFailedSaveLeavesTheVMRunning(t *testing.T) {
 	}
 }
 
-// A save whose context ends while the guest still runs gives up there: it
-// neither pauses the guest nor syncs it again.
-func TestASaveGivenUpBeforeThePauseLeavesTheVMRunning(t *testing.T) {
-	h := newHarness(t)
-	h.createStarted("run-a", sessionSpec("run-a"))
-	h.engine.reportPoll = time.Hour
-	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
-	defer cancel()
-	if err := h.engine.save(ctx, "run-a"); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("save = %v, want its context's end", err)
-	}
-	if calls := h.units.vmm("run-a").called(); slices.Contains(calls, "vm.pause") {
-		t.Errorf("a save given up before the pause called %v", calls)
-	}
-	if g := h.guest("run-a"); g.syncs > 1 {
-		t.Errorf("the save synced the guest %d times after it was given up", g.syncs)
+// A save or park whose context ends while the guest still runs gives up
+// there: it neither pauses the guest nor syncs it again.
+func TestASleepGivenUpBeforeThePauseLeavesTheVMRunning(t *testing.T) {
+	sleeps := map[string]func(*engine, context.Context, string) error{"save": (*engine).save, "park": (*engine).park}
+	for name, sleep := range sleeps {
+		t.Run(name+" during the wait for freed pages", func(t *testing.T) {
+			h := newHarness(t)
+			h.createStarted("run-a", sessionSpec("run-a"))
+			h.engine.reportPoll = time.Hour
+			ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+			defer cancel()
+			if err := sleep(h.engine, ctx, "run-a"); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("%s = %v, want its context's end", name, err)
+			}
+			if calls := h.units.vmm("run-a").called(); slices.Contains(calls, "vm.pause") {
+				t.Errorf("a %s given up before the pause called %v", name, calls)
+			}
+			if g := h.guest("run-a"); g.syncs > 1 {
+				t.Errorf("the %s synced the guest %d times after it was given up", name, g.syncs)
+			}
+		})
+		t.Run(name+" during the first sync", func(t *testing.T) {
+			h := newHarness(t)
+			h.createStarted("run-a", sessionSpec("run-a"))
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			g := h.guest("run-a")
+			g.mu.Lock()
+			g.onSync, g.syncErr = cancel, context.Canceled
+			g.mu.Unlock()
+			if err := sleep(h.engine, ctx, "run-a"); !errors.Is(err, context.Canceled) {
+				t.Fatalf("%s = %v, want its context's end", name, err)
+			}
+			if calls := h.units.vmm("run-a").called(); slices.Contains(calls, "vm.pause") {
+				t.Errorf("a %s given up during its sync called %v", name, calls)
+			}
+		})
 	}
 }
 

@@ -17,6 +17,9 @@ type CoordMessagesListParams struct {
 	CorrelationID string `json:"correlation_id,omitempty"`
 	Before        string `json:"before,omitempty"`
 	Limit         int    `json:"limit,omitempty"`
+	// ReportBodies asks for each report's body with its message; without
+	// it a report says only how large its body is.
+	ReportBodies bool `json:"report_bodies,omitempty"`
 }
 
 type RunMessage struct {
@@ -33,6 +36,10 @@ type RunMessage struct {
 	Outcome       string  `json:"outcome,omitempty"`
 	Summary       string  `json:"summary,omitempty"`
 	NextAction    string  `json:"next_action,omitempty"`
+	// ReportBodyBytes is the size of the body a report carries beside its
+	// summary, and ReportBody that body where the request asked for it.
+	ReportBodyBytes int    `json:"report_body_bytes,omitempty"`
+	ReportBody      string `json:"report_body,omitempty"`
 }
 
 type CoordMessagesListResult struct {
@@ -53,6 +60,7 @@ func CoordMessagesPageFromStore(page *store.RunMessagePage) CoordMessagesListRes
 		if m.Report != nil {
 			row.Kind = CoordMessageKindReport
 			row.Outcome, row.Summary, row.NextAction = string(m.Report.Outcome), m.Report.Summary, m.Report.NextAction
+			row.ReportBodyBytes, row.ReportBody = m.ReportBodyBytes, m.Report.Body
 		}
 		out.Messages = append(out.Messages, row)
 	}

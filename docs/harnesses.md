@@ -1011,13 +1011,9 @@ its Stop hook blocks the stop and Claude Code shows **Stop hook feedback**
 asking the agent to report
 ([coordination.md](coordination.md#lifecycle-status-is-separate)). Enhanced
 sessions get a [report reminder](enhanced-sessions.md#report-reminder) prompt
-instead. So does a Standard Codex session, through its app-server: the
-reminder shows in the terminal as a prompt and starts one more turn. It
-follows only a turn the app-server lists as `completed` with an agent
-message, so not a turn you cut off with Esc, a `!command` or `/compact`. A
-protected session and one whose terminal a member
-[controls](terminal.md#session-control) get none. Standard sessions of other
-agents are not held.
+instead. Standard sessions of other agents are not held: Codex sessions load no
+hooks, and the app-server gives a thread the same `idle` status after a
+finished turn and after you press Esc. Only the turn's own status differs.
 
 When a Standard [subsession](teams.md#subsessions) of an agent with status
 reporting ends a turn without an outcome report, its parent gets a provisional
