@@ -43,6 +43,8 @@ func TestKVMIdleVMPausedInMemoryAnswersAtOnce(t *testing.T) {
 		e := h.e
 		id := runtime.ID(idPrefix + key)
 		sum, _ := vmRun(t, e, key, "head -c 200M /dev/urandom >/dev/shm/fill; setsid sleep 4000 </dev/null >/dev/null 2>&1 & cksum </dev/shm/fill")
+		// A page cache as a build leaves one.
+		vmRun(t, e, key, "head -c 300M /dev/urandom >/var/tmp/cache && sync && cat /var/tmp/cache >/dev/null && cat /var/tmp/cache >/dev/null")
 		before, _ := vmRun(t, e, key, alive)
 		held := func() uint64 {
 			use, useErr := e.memoryUse()
@@ -52,17 +54,23 @@ func TestKVMIdleVMPausedInMemoryAnswersAtOnce(t *testing.T) {
 			return use[id]
 		}
 
+		awake := held()
 		start := time.Now()
-		if err := e.pause(t.Context(), key); err != nil {
+		if err := e.park(t.Context(), key); err != nil {
 			t.Fatalf("%s: pause: %v", key, err)
 		}
 		pauseTook := time.Since(start)
+		// A frozen session's guest reports the pages its sync freed after
+		// the pause, in passes; the wait also lets a clock that stood
+		// still show.
+		time.Sleep(reportTimeout)
 		holds := held()
 		if holds == 0 {
 			t.Fatalf("%s: a paused VM counts no memory, so admission and the memory guard would not see what it holds", key)
 		}
-		// Long enough for a clock that stood still to show.
-		time.Sleep(5 * time.Second)
+		if holds+50<<20 > awake {
+			t.Errorf("%s: the paused VM holds %d MiB of the %d MiB it held awake with a 300 MiB file in its page cache; the pause returned too little", key, holds>>20, awake>>20)
+		}
 		start = time.Now()
 		if err := e.resume(t.Context(), key); err != nil {
 			t.Fatalf("%s: resume: %v", key, err)
@@ -75,13 +83,13 @@ func TestKVMIdleVMPausedInMemoryAnswersAtOnce(t *testing.T) {
 			t.Fatalf("%s: the first command after the resume exited %d with %q", key, code, out)
 		}
 		lag := float64(time.Now().UnixNano())/1e9 - guest
-		t.Logf("%s: pause %s; paused it held %d MiB; resume %s, resume to the first command's return %s; guest clock %.2f s behind the host",
-			key, pauseTook.Round(100*time.Microsecond), holds>>20, resumeTook.Round(100*time.Microsecond), woke.Round(100*time.Microsecond), lag)
+		t.Logf("%s: awake and idle with a 300 MiB file in its page cache it held %d MiB; pause %s; paused it held %d MiB; resume %s, resume to the first command's return %s; guest clock %.2f s behind the host",
+			key, awake>>20, pauseTook.Round(100*time.Microsecond), holds>>20, resumeTook.Round(100*time.Microsecond), woke.Round(100*time.Microsecond), lag)
 		if woke > time.Second {
 			t.Errorf("%s: a VM paused in memory took %s to answer its first command", key, woke)
 		}
 		if math.Abs(lag) > 2 {
-			t.Errorf("%s: the guest's clock is %.2f s off the host's after 5 s paused", key, lag)
+			t.Errorf("%s: the guest's clock is %.2f s off the host's after %s paused", key, lag, reportTimeout)
 		}
 		if after, _ := vmRun(t, e, key, alive); after != before {
 			t.Fatalf("%s: after the resume the guest has processes and boot %q, want %q", key, after, before)
@@ -99,6 +107,7 @@ func TestKVMIdleVMPausedInMemoryAnswersAtOnce(t *testing.T) {
 		}
 		saveTook := time.Since(start)
 		saved, _ := e.savedMemory(key)
+		t.Logf("%s: saved to disk it holds %d MiB of the host's memory", key, held()>>20)
 		start = time.Now()
 		if err := e.restore(t.Context(), key); err != nil {
 			t.Fatalf("%s: restore: %v", key, err)

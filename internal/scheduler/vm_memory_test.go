@@ -424,6 +424,54 @@ func TestTheMemoryGuardWakesAVMItSavedIntoTheRoomPausedVMsHold(t *testing.T) {
 	}
 }
 
+// Paused VMs that together hold too little for the session the guard saved
+// stay paused: saving them would wake nobody.
+func TestTheMemoryGuardKeepsPausedVMsThatCannotMakeRoomForAWake(t *testing.T) {
+	t.Parallel()
+	e, mr := newMemoryEnv(t)
+	working := e.launchVM(t, mr, acpmock.PromptWait, 3<<30)
+	workingRun := e.runOf(t, working)
+	mr.setAvailable(3 << 30)
+	e.guard(t)
+	if !mr.isSaved(working) {
+		t.Fatal("the guard did not save the working VM")
+	}
+	mr.setAvailable(20 << 30)
+	paused := e.launchVM(t, mr, "say pong", 1<<30)
+	e.pauseIdle(t, paused)
+
+	// 0.6 GiB above the stop level, and 1 GiB more in the paused VM.
+	mr.setAvailable(7 << 30)
+	e.guard(t)
+	if mr.isSaved(paused) || !e.asleep(workingRun) {
+		t.Fatalf("the paused VM is saved %v, the VM the guard saved asleep %v; want the first left paused and the second asleep", mr.isSaved(paused), e.asleep(workingRun))
+	}
+}
+
+// A VM that has stayed paused for vmPausedFor is saved to disk by the sleep
+// sweep, with the host's memory free.
+func TestAVMPausedForLongIsSavedToDisk(t *testing.T) {
+	t.Parallel()
+	e, mr := newMemoryEnv(t)
+	old := e.launchVM(t, mr, "say pong", 1<<30)
+	fresh := e.launchVM(t, mr, "say pong", 1<<30)
+	e.pauseIdle(t, old, fresh)
+	oldRun := e.runOf(t, old)
+	e.sched.mu.Lock()
+	e.sched.runs[oldRun].asleepSince = time.Now().UTC().Add(-vmPausedFor)
+	e.sched.mu.Unlock()
+
+	e.sched.cfg.VMSleepAfter = time.Hour
+	e.sched.sleepIdle(t.Context())
+	waitFor(t, "the long-paused VM saved", func() bool { return mr.isSaved(old) && !e.sched.Sleep(oldRun).InMemory })
+	if state := e.sched.Sleep(oldRun); !state.Saved {
+		t.Fatalf("a VM saved after a long pause sleeps as %+v", state)
+	}
+	if mr.isSaved(fresh) {
+		t.Fatal("the sweep saved a VM paused a moment ago")
+	}
+}
+
 func TestTheMemoryGuardSavesAWorkingVMWhenNoneIsIdleAndWakesEachOnceItsMemoryFits(t *testing.T) {
 	t.Parallel()
 	e, mr := newMemoryEnv(t)

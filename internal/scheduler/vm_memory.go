@@ -28,6 +28,9 @@ const (
 	// saves of the others. A frozen VM's save took about a second on a
 	// 29 GiB host.
 	memorySaveHold = 30 * time.Second
+	// vmPausedFor is how long an idle VM stays paused in memory before the
+	// sleep sweep saves it to disk, whatever the host has free.
+	vmPausedFor = time.Hour
 )
 
 const (
@@ -114,6 +117,18 @@ func (s *Scheduler) checkVMMemory(ctx context.Context) (uint64, bool) {
 	// A session saved while it worked wakes into the room the paused VMs
 	// give back.
 	if want := s.memoryWanted(); want > available-2*floor {
+		var paused uint64
+		candidates, writing := s.memoryCandidates(ctx)
+		for _, c := range candidates {
+			if c.resident && s.saveFits(c, writing, false) {
+				paused += c.memory
+			}
+		}
+		// Saving them for a session that would still not fit frees nothing
+		// anyone uses.
+		if want > available-2*floor+paused {
+			return available - 2*floor, true
+		}
 		if available, err = s.savePausedVMs(ctx, 2*floor+want); err != nil || available < 2*floor {
 			return 0, false
 		}
@@ -122,13 +137,14 @@ func (s *Scheduler) checkVMMemory(ctx context.Context) (uint64, bool) {
 }
 
 // memoryWanted is the least memory a session the guard saved while it
-// worked needs to wake, or 0 when none waits.
+// worked needs to wake, or 0 when none waits. One whose wake is under way
+// has its room reserved already.
 func (s *Scheduler) memoryWanted() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var least uint64
 	for _, e := range s.runs {
-		if e.asleepSaved && !e.retained && e.memorySaved > 0 && (least == 0 || e.memorySaved < least) {
+		if e.asleepSaved && !e.retained && e.waking == nil && e.memorySaved > 0 && (least == 0 || e.memorySaved < least) {
 			least = e.memorySaved
 		}
 	}
@@ -155,6 +171,39 @@ func (s *Scheduler) savePausedVMs(ctx context.Context, target uint64) (uint64, e
 	}
 	available, _, err := s.hostMemory()
 	return available, err
+}
+
+// saveLongPaused saves the VMs that have stayed paused in memory for
+// vmPausedFor, one after another, so an idle session does not hold the
+// host's memory for days. It writes no timeline note: the session's sleep
+// row says where it is kept.
+func (s *Scheduler) saveLongPaused(ctx context.Context) {
+	candidates, writing := s.memoryCandidates(ctx)
+	var long []memoryCandidate
+	for _, c := range candidates {
+		if c.resident && time.Since(c.since) >= vmPausedFor && s.saveFits(c, writing, false) {
+			long = append(long, c)
+			writing += c.memory
+		}
+	}
+	if len(long) == 0 {
+		return
+	}
+	saved := make([]func(), len(long))
+	for i, c := range long {
+		saved[i] = s.markSaving(c.e)
+	}
+	s.goMove(func() {
+		for i, c := range long {
+			if c.e.lifecycleMu.TryLock() {
+				if err := s.saveAsleepRunning(s.superCtx, c.e); err != nil {
+					slog.Warn("scheduler: save a session VM that stayed paused", "run", c.e.runID, "error", err)
+				}
+				c.e.lifecycleMu.Unlock()
+			}
+			saved[i]()
+		}
+	})
 }
 
 // hostMemory is the host's available memory, read from /proc/meminfo with

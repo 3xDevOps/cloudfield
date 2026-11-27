@@ -869,16 +869,18 @@ no dashboard setting.
 With `--session-runtime vm`, a sleep pauses the session's whole VM in the
 server's memory, with every process in it, and a wake resumes it: on a
 hosted test runner a paused VM returned its first command 30 to 47 ms after
-the resume began (`TestKVMIdleVMPausedInMemoryAnswersAtOnce`). A paused VM
-keeps the memory it holds, 365 to 403 MiB in that test, which every
-launch's memory check counts as used. While less than twice the memory
+the resume began (`TestKVMIdleVMPausedInMemoryAnswersAtOnce`). The guest
+drops its page cache before the pause, so a paused VM keeps the memory its
+processes use, which every launch's memory check counts as used. A VM that
+has stayed paused for an hour is saved to disk and holds none. While less
+than twice the memory
 floor is free, the server saves paused VMs to disk, the longest paused
 first, until twice the floor is free again ([Recover from memory
 pressure](#recover-from-memory-pressure)): 1.6 to 2.3 seconds each in that
 test. So paused VMs hold only memory above that line, and a small host
 saves most of them soon after they pause. A session the server saved while
-it worked wakes on its own into the room paused VMs hold: the server saves
-them first. A paused VM is saved only while the data filesystem has its
+it worked wakes on its own into the room paused VMs hold, when they hold
+enough for it: the server saves them first. A paused VM is saved only while the data filesystem has its
 reserve, 4 GiB and the VM's memory free, so an idle VM is paused only while
 it does: on a fuller disk a sleep saves it at once, and disk reclaim makes
 the room. A VM already paused when the disk fills stays paused, a launch

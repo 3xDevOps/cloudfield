@@ -519,10 +519,11 @@ as each pass reports it, before the save ends. A VM frozen because the host
 was running out of memory
 ([failure-handling.md](failure-handling.md#recover-from-memory-pressure))
 is saved with neither `Sync` nor the wait, which would let its guest run:
-its saved state holds its page cache too. So is an idle VM paused in
-memory, whose page cache the guest's own trim
-([Memory the guest returns](#memory-the-guest-returns)) has cut to what
-the session keeps in use by then.
+its saved state holds its page cache too. An idle VM is paused in memory
+after one `Sync`, so it holds what its processes use and not its page
+cache: a frozen session's guest kernel reports the freed pages after the
+pause, and a VM whose vCPUs stop waits for them first, as a save does. A
+later save of the paused VM writes it as it stands.
 
 ## Save and restore
 

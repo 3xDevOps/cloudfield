@@ -148,7 +148,7 @@ func (s *Scheduler) saveMarked(ctx context.Context, entry *supervised, saver run
 			}
 		}
 	} else if detachErr = s.detachForSave(saveCtx, entry); park {
-		saveErr = s.cfg.Runtime.Pause(saveCtx, cid)
+		saveErr = saver.Park(saveCtx, cid)
 	} else {
 		saveErr = saver.Save(saveCtx, cid)
 	}

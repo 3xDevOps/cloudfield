@@ -610,6 +610,7 @@ func (s *Scheduler) sleepIdle(ctx context.Context) {
 			s.goSleep(c.e, s.sleepClosed)
 		}
 	}
+	s.saveLongPaused(ctx)
 }
 
 // mayRunSleep checks the run row: the agent, which any VM keeps through a

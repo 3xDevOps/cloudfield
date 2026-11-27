@@ -91,6 +91,8 @@ func (r *saveRuntime) Pause(ctx context.Context, id runtime.ID) error {
 	return r.acpRuntime.Pause(ctx, id)
 }
 
+func (r *saveRuntime) Park(ctx context.Context, id runtime.ID) error { return r.Pause(ctx, id) }
+
 func (r *saveRuntime) Save(_ context.Context, id runtime.ID) error {
 	if err := r.held(); err != nil {
 		return err
