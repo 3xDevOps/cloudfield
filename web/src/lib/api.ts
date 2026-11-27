@@ -740,6 +740,7 @@ export const api = {
     correlation_id?: string
     before?: string
     limit?: number
+    report_bodies?: boolean
   }) => call<CoordMessagesListResult>('coord.messages.list', params),
   runRoomStatus: (params: { workspace_id: string; run_id: string }, signal?: AbortSignal) =>
     call<RoomStatusResult>('run.room.status', params, signal),
