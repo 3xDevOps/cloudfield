@@ -643,3 +643,12 @@ func TestRemoveLoginWithoutATerminalNeedsYes(t *testing.T) {
 		t.Fatalf("removeLogin without a terminal = %v; want --yes asked for before connecting", err)
 	}
 }
+
+func TestLoginsHelpEndsWithTheGuide(t *testing.T) {
+	for _, path := range []string{"agent login", "agent logins"} {
+		out, err := captureStdout(t, func() error { return dispatch(append(strings.Fields(path), "--help")) })
+		if err != nil || !strings.HasSuffix(out, "\nGuide: docs/agents.md#several-logins\n") {
+			t.Errorf("cloudfield %s --help = %q, %v; want it to end with the guide", path, out, err)
+		}
+	}
+}

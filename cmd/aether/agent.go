@@ -38,6 +38,10 @@ func init() {
 			"cloudfield agent logins order work default\n" +
 			"cloudfield agent add codex --enhanced\n" +
 			"cloudfield agent remove codex",
+		guides: map[string]string{
+			"agent login":  "docs/agents.md#several-logins",
+			"agent logins": "docs/agents.md#several-logins",
+		},
 		run: runAgent,
 	})
 }
