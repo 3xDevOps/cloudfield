@@ -316,35 +316,10 @@ func (e *engine) restore(ctx context.Context, key string) error {
 		if up {
 			e.kill(ctx, key)
 		}
-		// The guest's mounts were made at boot: the shares keep the indexes
-		// they had then, whatever the host holds now.
-		var booted launch
-		if booted, err = readLaunch(e.dir(key)); err != nil {
+		if err = e.loadSaved(ctx, rec); err != nil {
 			return err
 		}
-		l := launch{Home: booted.Home, Reveal: booted.Reveal, Args: []string{
-			"--api-socket", "path=" + e.path(key, apiSocket), "--event-monitor", "path=" + e.path(key, eventsFile),
-			"--restore", "source_url=file://" + dir,
-		}}
-		if rec.Net != offline {
-			if err = e.ensureNetwork(ctx); err != nil {
-				return err
-			}
-		}
-		runtime.Step(ctx, "network")
-		if err = e.launch(ctx, rec, l); err != nil {
-			return err
-		}
-		runtime.Step(ctx, "unit")
-		loadCtx, cancel := context.WithTimeout(ctx, restoreTimeout+time.Duration(unitMemoryMiB(rec)<<20/snapshotRate)*time.Second)
-		err = e.awaitRestored(loadCtx, key, api)
-		cancel()
-		e.stepHypervisor(ctx, key)
-		runtime.Step(ctx, "restore")
-		if err == nil {
-			rec.Resumed, err = diskTimes(dir)
-		}
-		if err == nil {
+		if rec.Resumed, err = diskTimes(dir); err == nil {
 			rec.Exited = false
 			rec.CacheRan, rec.CacheSynced = rec.Cache.Path != "", false
 			err = e.store(rec)
@@ -413,6 +388,41 @@ func (e *engine) restore(ctx context.Context, key string) error {
 			slog.Warn("vm runtime: delete the saved state a wake used", "vm", key, "error", rmErr)
 		}
 	}()
+	return err
+}
+
+// loadSaved starts a monitor on rec's saved state and waits until it holds
+// the guest, still paused.
+func (e *engine) loadSaved(ctx context.Context, rec *record) error {
+	key := rec.Key
+	// The guest's mounts were made at boot: the shares keep the indexes
+	// they had then, whatever the host holds now.
+	booted, err := readLaunch(e.dir(key))
+	if err != nil {
+		return err
+	}
+	l := launch{Home: booted.Home, Reveal: booted.Reveal, Args: []string{
+		"--api-socket", "path=" + e.path(key, apiSocket), "--event-monitor", "path=" + e.path(key, eventsFile),
+		"--restore", "source_url=file://" + e.path(key, snapshotDir),
+	}}
+	if rec.Net != offline {
+		if err = e.ensureNetwork(ctx); err != nil {
+			return err
+		}
+	}
+	runtime.Step(ctx, "network")
+	if err = e.launch(ctx, rec, l); err != nil {
+		return err
+	}
+	runtime.Step(ctx, "unit")
+	loadCtx, cancel := context.WithTimeout(ctx, restoreTimeout+time.Duration(unitMemoryMiB(rec)<<20/snapshotRate)*time.Second)
+	err = e.awaitRestored(loadCtx, key, newCHAPI(e.path(key, apiSocket)))
+	cancel()
+	e.stepHypervisor(ctx, key)
+	runtime.Step(ctx, "restore")
+	if err != nil {
+		e.kill(context.WithoutCancel(ctx), key)
+	}
 	return err
 }
 
