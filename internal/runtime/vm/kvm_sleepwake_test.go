@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -35,7 +36,7 @@ var errGeneration = errors.New("a chunk of the pattern holds another generation"
 
 // TestKVMSleepWakeChain saves and wakes one 2 GiB session VM twelve times
 // and checks after every wake that the guest is the one that went to
-// sleep: the same boot and processes, a 1280 MiB pattern in which every
+// sleep: the same boot and processes, a 1024 MiB pattern in which every
 // page names its index and the generation that last wrote it, the sha256
 // of a file in /dev/shm, a loop that takes and frees memory still turning,
 // and a kernel log with no trouble in it. The host keeps the generation
@@ -44,16 +45,21 @@ var errGeneration = errors.New("a chunk of the pattern holds another generation"
 // last cycle the saved state is also loaded as a wake loads it and, with
 // the guest still paused, saved again: the two memory files must be equal.
 //
-// Two controls prove the checks can fail. A memory file cut to half its
-// length must be refused by the wake. A wake from the save before the last
-// must fail the generation check.
-func TestKVMSleepWakeChain(t *testing.T) { sleepWakeChain(t, "run-sleepwake", 2048) }
+// Two controls prove the checks can fail. A wake from the save before the
+// last must fail the generation check. A wake from a memory file cut to
+// half its length must fail, or leave a guest that fails the checks:
+// Cloud Hypervisor v54.1 loads such a file, and the guest then crashes.
+//
+// The pattern is half the session's limit, not more: with 1280 MiB the
+// monitor of one run in three was killed mid-save, its unit out of memory
+// from the guest's memory plus the page cache of the file being written.
+func TestKVMSleepWakeChain(t *testing.T) { sleepWakeChain(t, "run-sleepwake", 2048, 1024) }
 
 // TestLargeKVMSleepWakeChain is the chain at 8 GiB, where Cloud Hypervisor
 // maps the guest's memory past 4 GiB apart from the first 3 GiB. Its name
 // keeps it out of the tests make test-kvm runs unless KVM_RUN names it: it
 // takes too long for every run.
-func TestLargeKVMSleepWakeChain(t *testing.T) { sleepWakeChain(t, "run-sleepwake-large", 8192) }
+func TestLargeKVMSleepWakeChain(t *testing.T) { sleepWakeChain(t, "run-sleepwake-large", 8192, 5120) }
 
 type sleepWake struct {
 	t   *testing.T
@@ -66,7 +72,7 @@ type sleepWake struct {
 	rounds     uint64
 }
 
-func sleepWakeChain(t *testing.T, key string, limitMiB int) {
+func sleepWakeChain(t *testing.T, key string, limitMiB, patternMiB int) {
 	e := kvmEngine(t)
 	t.Cleanup(func() { _ = e.destroy(context.Background(), key) })
 	self, err := os.Executable()
@@ -84,7 +90,7 @@ func sleepWakeChain(t *testing.T, key string, limitMiB int) {
 	if err = e.start(t.Context(), key); err != nil {
 		t.Fatal(err)
 	}
-	s := &sleepWake{t: t, e: e, key: key, gens: make([]uint64, limitMiB*5/8)}
+	s := &sleepWake{t: t, e: e, key: key, gens: make([]uint64, patternMiB)}
 	for c := range s.gens {
 		s.gens[c] = 1
 	}
@@ -105,6 +111,8 @@ func sleepWakeChain(t *testing.T, key string, limitMiB int) {
 	}
 
 	dir, older := e.path(key, snapshotDir), e.path(key, "snapshot.older")
+	// before is what the guest held at the last save of the chain.
+	var before sleepWake
 	for cycle := 1; cycle <= sleepWakeCycles; cycle++ {
 		start := time.Now()
 		s.save()
@@ -115,6 +123,7 @@ func sleepWakeChain(t *testing.T, key string, limitMiB int) {
 		}
 		if cycle == sleepWakeCycles {
 			s.keep(dir, older)
+			before = sleepWake{gens: slices.Clone(s.gens), rounds: s.rounds}
 		}
 		// Every other wake reads its memory from the disk, as after a long
 		// sleep on a busy host; the rest find it in the page cache.
@@ -135,20 +144,9 @@ func sleepWakeChain(t *testing.T, key string, limitMiB int) {
 		s.rewrite(uint64(cycle) + 1)
 	}
 
+	// The wake from the save before the last: the guest it leaves holds
+	// what the pattern was before the last rewrite.
 	s.save()
-	memory := filepath.Join(dir, "memory-ranges")
-	info, err := os.Stat(memory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.Truncate(memory, info.Size()/2); err != nil {
-		t.Fatal(err)
-	}
-	if err = e.restore(t.Context(), key); err == nil {
-		t.Fatalf("a wake took a memory file cut from %d bytes to half", info.Size())
-	}
-	t.Logf("the wake from a memory file cut to half: %v", err)
-
 	if err = os.RemoveAll(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +159,27 @@ func sleepWakeChain(t *testing.T, key string, limitMiB int) {
 	if err = s.check(); !errors.Is(err, errGeneration) {
 		t.Fatalf("after a wake from the save before the last the check said %v, want %v", err, errGeneration)
 	}
-	t.Logf("the wake from the save before the last: %v", err)
+	t.Logf("after the wake from the save before the last: %v", err)
+
+	// The wake from a memory file cut to half, saved from that guest and
+	// checked against what it held.
+	s.gens, s.rounds = before.gens, before.rounds
+	s.save()
+	memory := filepath.Join(dir, "memory-ranges")
+	info, err := os.Stat(memory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Truncate(memory, info.Size()/2); err != nil {
+		t.Fatal(err)
+	}
+	if err = e.restore(t.Context(), key); err == nil {
+		err = s.check()
+	}
+	if err == nil {
+		t.Fatalf("a wake from a memory file cut from %d bytes to half left a guest that passes the checks", info.Size())
+	}
+	t.Logf("the wake from a memory file cut to half: %v", err)
 }
 
 // guest runs script in the session and returns its output lines by their
