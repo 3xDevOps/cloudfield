@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -44,6 +45,10 @@ const (
 	CoordMaxMessageIDBytes = 256
 	// CoordMaxSummaryBytes bounds a durable outcome summary.
 	CoordMaxSummaryBytes = 4 << 10
+	// CoordMaxReportBodyBytes bounds the body a success, failure or blocked
+	// report may carry beside its summary. With the summary it fits one
+	// inbox read.
+	CoordMaxReportBodyBytes = 12 << 10
 	// CoordMaxEvidenceRefs bounds the number of evidence references in one
 	// report, while CoordMaxEvidenceRefBytes bounds each reference.
 	CoordMaxEvidenceRefs     = 32
@@ -298,9 +303,12 @@ type CoordMessage struct {
 	FromRunID     string `json:"from_run_id"`
 	// Outcome is the reported outcome of a report: success, failure or
 	// blocked.
-	Outcome   string `json:"outcome,omitempty"`
-	Body      string `json:"body"`
-	CreatedAt string `json:"created_at"`
+	Outcome string `json:"outcome,omitempty"`
+	Body    string `json:"body"`
+	// ReportBody is the body a report carries beside its summary, which is
+	// Body.
+	ReportBody string `json:"report_body,omitempty"`
+	CreatedAt  string `json:"created_at"`
 }
 
 // CoordInboxResult is the result of coord.inbox: one batch, oldest first,
@@ -321,8 +329,11 @@ type CoordReportParams struct {
 	Summary        string   `json:"summary" jsonschema:"what you verified; for needs-input the question for the user; for blocked what a human must do; for waiting what you wait on; for answered what you replied"`
 	EvidenceRefs   []string `json:"evidence_refs,omitempty" jsonschema:"retained evidence packet ids; not for needs-input, waiting or answered"`
 	IdempotencyKey string   `json:"idempotency_key" jsonschema:"a fresh key you choose for each new report; reuse it only to retry the same report, since the same key with another outcome or summary is refused"`
-	WaitingFor     string   `json:"waiting_for,omitempty" jsonschema:"only with waiting: agents (the default), ci or process"`
-	Until          []string `json:"until,omitempty" jsonschema:"only with waiting: up to 4 conditions that wake you when any resolves: pr:<owner>/<repo>#<n>:merged, pr:<owner>/<repo>#<n>:checks or run:<run-id>:finished"`
+	// Body is the report's full result, such as a review's findings. A
+	// subsession's parent reads it with the report.
+	Body       string   `json:"body,omitempty" jsonschema:"only with success, failure or blocked: the full result (findings, details), up to 12 KiB; a subsession's parent reads it with the report"`
+	WaitingFor string   `json:"waiting_for,omitempty" jsonschema:"only with waiting: agents (the default), ci or process"`
+	Until      []string `json:"until,omitempty" jsonschema:"only with waiting: up to 4 conditions that wake you when any resolves: pr:<owner>/<repo>#<n>:merged, pr:<owner>/<repo>#<n>:checks or run:<run-id>:finished"`
 }
 
 // CoordReportResult is the complete durable outcome receipt. EvidenceRef is
@@ -338,6 +349,18 @@ type CoordReportResult struct {
 	// Resolved are until conditions already resolved when the report was
 	// recorded: the agent learns them here, and no wake follows.
 	Resolved []WaitCondition `json:"resolved,omitempty"`
+	// BodyBytes is the size of the body the server stored with the report.
+	// A server older than the body leaves it zero.
+	BodyBytes int `json:"body_bytes,omitempty"`
+}
+
+// CheckReportBody is the error for a report whose body its server did not
+// store: a server older than the field accepts the report without it.
+func CheckReportBody(sent string, result CoordReportResult) error {
+	if sent == "" || result.BodyBytes > 0 {
+		return nil
+	}
+	return errors.New("the report was recorded WITHOUT its body: this server is older than report bodies. Send the body's content with aether-internal send instead")
 }
 
 // RunReportParams carries independent execution and correlated input updates.

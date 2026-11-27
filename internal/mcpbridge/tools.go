@@ -182,6 +182,9 @@ func registerTools(srv *mcp.Server, socket string, g *gate, cli string) error {
 		if err := coordtransport.Call(ctx, socket, protocol.MethodCoordReport, in, &out); err != nil {
 			return failed(err), out, nil
 		}
+		if err := protocol.CheckReportBody(in.Body, out); err != nil {
+			return failed(err), out, nil
+		}
 		return nil, out, nil
 	})
 	return registerMemoryTools(srv, socket)

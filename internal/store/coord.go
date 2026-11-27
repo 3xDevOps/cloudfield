@@ -124,6 +124,8 @@ type CoordReport struct {
 	FinalizedAt       *time.Time
 	PublishedAt       *time.Time
 	SupersededAt      *time.Time
+	// Body is the report's full result beside its summary; empty for none.
+	Body string
 	// OutcomeNote is not stored: FinalizeCoordReport sets it to the outcome
 	// note the report wrote.
 	OutcomeNote OutcomeNote
@@ -243,7 +245,7 @@ const runMessageCols = `id, workspace_id, from_run, to_run, body, kind, correlat
 
 const unreadMessage = `acked_at IS NULL AND retired_at IS NULL`
 
-const coordReportCols = `id, workspace_id, run_id, outcome, summary, next_action, evidence_refs, input_evidence_refs, idempotency_key, state, created_at, finalized_at, published_at, superseded_at`
+const coordReportCols = `id, workspace_id, run_id, outcome, summary, next_action, evidence_refs, input_evidence_refs, idempotency_key, state, created_at, finalized_at, published_at, superseded_at, body`
 
 func (d *DB) AppendRunMessage(ctx context.Context, m *RunMessage, maxUnacked int) error {
 	_, err := d.AppendRunMessageCreated(ctx, m, maxUnacked)
@@ -698,6 +700,7 @@ func (d *DB) AppendCoordReport(ctx context.Context, report *CoordReport) error {
 
 const (
 	maxCoordReportSummaryBytes     = 4 << 10
+	maxCoordReportBodyBytes        = 12 << 10
 	maxCoordReportNextActionBytes  = 512
 	maxCoordReportEvidenceRefs     = 32
 	maxCoordReportEvidenceRefBytes = 512
@@ -714,6 +717,9 @@ func validateCoordReport(report *CoordReport) error {
 	if len([]byte(report.Summary)) > maxCoordReportSummaryBytes ||
 		len([]byte(report.NextAction)) > maxCoordReportNextActionBytes {
 		return errors.New("store: coord report: summary or next action is too long")
+	}
+	if len([]byte(report.Body)) > maxCoordReportBodyBytes {
+		return errors.New("store: coord report: body is too long")
 	}
 	if err := validateCoordReportRefs(report.EvidenceRefs); err != nil {
 		return err
@@ -788,14 +794,14 @@ func (d *DB) ReserveCoordReport(ctx context.Context, report *CoordReport) (bool,
 		return false, fmt.Errorf("store: reserve coord report: supersede previous: %w", err)
 	}
 	res, err := tx.ExecContext(ctx, `INSERT INTO coord_reports (`+coordReportCols+`)
-		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?
 		WHERE NOT EXISTS (
 			SELECT 1 FROM coord_reports
 			WHERE run_id = ? AND outcome IN ('success', 'failure') AND superseded_at IS NULL)
 		ON CONFLICT (run_id, idempotency_key) DO NOTHING`,
 		id, report.WorkspaceID, report.RunID, report.Outcome, report.Summary,
 		report.NextAction, refs, inputRefsJSON, report.IdempotencyKey, CoordReportPending, createdAt,
-		report.RunID)
+		report.Body, report.RunID)
 	if err != nil {
 		return false, fmt.Errorf("store: reserve coord report: %w", mapConstraint(err, ErrNotFound))
 	}
@@ -816,7 +822,7 @@ func (d *DB) ReserveCoordReport(ctx context.Context, report *CoordReport) (bool,
 		if prior.SupersededAt != nil {
 			return false, fmt.Errorf("%w: session %s, idempotency key %q", ErrCoordReportSuperseded, report.RunID, report.IdempotencyKey)
 		}
-		if prior.Outcome != report.Outcome || prior.Summary != report.Summary ||
+		if prior.Outcome != report.Outcome || prior.Summary != report.Summary || prior.Body != report.Body ||
 			prior.NextAction != report.NextAction ||
 			!equalStringSlices(prior.InputEvidenceRefs, report.InputEvidenceRefs) {
 			return false, fmt.Errorf("%w: session %s", ErrCoordReportIdempotencyConflict, report.RunID)
@@ -1175,7 +1181,7 @@ func scanCoordReport(row interface{ Scan(...any) error }) (*CoordReport, error) 
 	)
 	if err := row.Scan(&report.ID, &report.WorkspaceID, &report.RunID, &report.Outcome,
 		&report.Summary, &report.NextAction, &refs, &inputRefs, &report.IdempotencyKey, &state,
-		&createdAt, &finalizedAt, &publishedAt, &supersededAt); err != nil {
+		&createdAt, &finalizedAt, &publishedAt, &supersededAt, &report.Body); err != nil {
 		return nil, err
 	}
 	if refs == "" {

@@ -201,6 +201,27 @@ func TestIntegrationRepeatReports(t *testing.T) {
 			t.Fatalf("parent mail %q, want the answered turn's last message under a header that names its report", mail)
 		}
 	})
+	t.Run("findings in the report body arrive in one read", func(t *testing.T) {
+		e.t = t
+		parent, child := e.family("head -c 9000 /dev/zero | tr \"\\000\" x >/tmp/findings; echo END-OF-FINDINGS >>/tmp/findings; " +
+			"$CLI report --outcome success --summary two-findings --body-file /tmp/findings --idempotency-key a")
+		defer e.kill(parent, child)
+		if said := assistantText(waitTurns(ctx, t, e.srv, child, 2)); !strings.Contains(said, `"body_bytes":9016`) {
+			t.Fatalf("the subsession's report was not stored with its body: %s", said)
+		}
+		e.settle(child, parent)
+		if mail, wakes := e.mail(child, parent), e.wakes(parent); len(mail) != 1 || mail[0] != "two-findings" || wakes != 1 {
+			t.Fatalf("parent mail %q in %d wakes, want the one report in one wake", mail, wakes)
+		}
+		turns := turnsEnded(t, e.srv, parent)
+		if err := e.srv.sched.WakeEnhanced(ctx, parent, acpmock.PromptRun+coordtransport.CLIPath+" inbox"); err != nil {
+			t.Fatal(err)
+		}
+		read := assistantText(waitTurns(ctx, t, e.srv, parent, turns+1))
+		if !strings.Contains(read, `"kind":"report"`) || !strings.Contains(read, `"report_body":"xxxx`) || !strings.Contains(read, `END-OF-FINDINGS`) {
+			t.Fatalf("the parent's inbox read lacks the report's whole body: %.400s", read)
+		}
+	})
 	t.Run("findings in three mails and a report", func(t *testing.T) {
 		send := func(part string) string { return "$CLI send --to PARENT --body " + part }
 		mail, wakes, _ := run(t, send("part-1")+"; sleep 8; "+send("part-2")+"; sleep 8; "+send("part-3")+"; sleep 8; "+report("success", "sent-my-findings", "a"), 1, 0)

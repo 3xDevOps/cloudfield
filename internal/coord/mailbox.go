@@ -494,7 +494,7 @@ func (s *Service) Inbox(ctx context.Context, run domain.RunID, p protocol.CoordI
 				return protocol.CoordInboxResult{}, internalError(method, rerr)
 			}
 			if rerr == nil && report.RunID == m.FromRun {
-				item.Kind, item.Outcome = protocol.CoordMessageKindReport, string(report.Outcome)
+				item.Kind, item.Outcome, item.ReportBody = protocol.CoordMessageKindReport, string(report.Outcome), report.Body
 			}
 		}
 		out = append(out, item)
@@ -566,6 +566,15 @@ func (s *Service) CoordReport(ctx context.Context, run domain.RunID, p protocol.
 	if summary == "" {
 		return protocol.CoordReportResult{}, invalidParams(method, "summary is required")
 	}
+	final := p.Outcome == protocol.CoordOutcomeSuccess || p.Outcome == protocol.CoordOutcomeFailure || p.Outcome == protocol.CoordOutcomeBlocked
+	switch {
+	case p.Body != "" && !final:
+		return protocol.CoordReportResult{}, invalidParams(method, "body is only valid with the \"success\", \"failure\" or \"blocked\" outcome")
+	case len([]byte(p.Body)) > protocol.CoordMaxReportBodyBytes:
+		return protocol.CoordReportResult{}, invalidParams(method,
+			fmt.Sprintf("body is %d bytes and exceeds %d; shorten it, or put the rest in a file on your branch and name it", len([]byte(p.Body)), protocol.CoordMaxReportBodyBytes))
+	}
+	body := cleanReportBody(p.Body)
 	specs, problem := parseUntil(p.Outcome, p.Until)
 	if problem != "" {
 		return protocol.CoordReportResult{}, invalidParams(method, problem)
@@ -633,7 +642,7 @@ func (s *Service) CoordReport(ctx context.Context, run domain.RunID, p protocol.
 	}
 	report := &store.CoordReport{
 		WorkspaceID: self.WorkspaceID, RunID: run, Outcome: store.CoordOutcome(p.Outcome),
-		Summary: summary, NextAction: nextAction, EvidenceRefs: refs, IdempotencyKey: p.IdempotencyKey,
+		Summary: summary, NextAction: nextAction, EvidenceRefs: refs, IdempotencyKey: p.IdempotencyKey, Body: body,
 	}
 	supersededMessage := fmt.Sprintf("%s: the report under idempotency_key %q was superseded; report again with a new idempotency key", method, p.IdempotencyKey)
 	if _, err := s.cfg.Mail.GetCoordStateReport(ctx, run, p.IdempotencyKey); err == nil {
@@ -753,7 +762,7 @@ func coordReportResult(report *store.CoordReport) protocol.CoordReportResult {
 	return protocol.CoordReportResult{
 		ReportID: report.ID, Outcome: string(report.Outcome), Summary: report.Summary,
 		NextAction: report.NextAction, EvidenceRef: lastEvidenceRef(report.EvidenceRefs),
-		EvidenceRefs: append([]string(nil), report.EvidenceRefs...),
+		EvidenceRefs: append([]string(nil), report.EvidenceRefs...), BodyBytes: len(report.Body),
 	}
 }
 func lastEvidenceRef(refs []string) string {
@@ -1419,6 +1428,18 @@ func invalidParams(method, msg string) *protocol.Error {
 
 func internalError(method string, err error) *protocol.Error {
 	return &protocol.Error{Code: protocol.CodeInternal, Message: method + ": " + err.Error()}
+}
+
+// cleanReportBody makes a report's body safe to render and keeps its lines
+// and indentation: invalid UTF-8 is dropped and control bytes other than
+// newline and tab become spaces, which never makes it longer.
+func cleanReportBody(body string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || !unicode.IsControl(r) {
+			return r
+		}
+		return ' '
+	}, strings.ToValidUTF8(body, ""))
 }
 
 func cleanCoordText(text string, maxBytes int) string {
