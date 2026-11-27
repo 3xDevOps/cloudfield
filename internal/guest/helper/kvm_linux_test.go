@@ -113,7 +113,7 @@ func TestKVMHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err := vmimage.Open(filepath.Join(dir, "images"), kernel, nil)
+	store, err := vmimage.Open(filepath.Join(dir, "images"), kernel, nil, -1)
 	if err != nil {
 		t.Fatal(err)
 	}

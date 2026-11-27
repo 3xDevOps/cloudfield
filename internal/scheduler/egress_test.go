@@ -3,9 +3,9 @@ package scheduler
 import (
 	"context"
 	"strings"
-	"sync"
 	"testing"
 
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
 )
@@ -90,7 +90,7 @@ func TestAccountMoveKeepsTheRunsEgressControl(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sched.Close() })
-	sched.UseUsageFallback(UsageFallback{Usage: claudeUsage{e.owner.ID: 10}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	sched.UseUsageFallback(UsageFallback{Usage: claudeUsage{e.owner.ID: 10}, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 	startScheduler(t, sched)
 
 	if spec := e.assertMovedToOwner(t, run.ID, notes); !spec.Egress || spec.Env["HTTPS_PROXY"] != proxy {

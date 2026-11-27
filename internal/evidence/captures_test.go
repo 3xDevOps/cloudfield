@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/gitengine"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
@@ -419,7 +420,7 @@ func TestExplicitCaptureRechecksQueuedAndStagedAuthority(t *testing.T) {
 	for _, phase := range []string{"queued", "git-captured", "selected-copied"} {
 		t.Run(phase, func(t *testing.T) {
 			f := newDurableCaptureFixture(t)
-			gate := &sync.Mutex{}
+			gate := &ctxlock.Mutex{}
 			f.cfg.AuthorizationMu = gate
 			f.cfg.Transcript = &evidenceTestTranscript{data: []byte("private transcript")}
 			artifact, _ := f.source.add(t, f.run.ID, 1)
@@ -503,7 +504,7 @@ func (s *admissionPacketStore) CreateEvidencePacket(ctx context.Context, packet 
 
 func TestExplicitCapturePublicationPrecedesRevocation(t *testing.T) {
 	f := newDurableCaptureFixture(t)
-	gate := &sync.Mutex{}
+	gate := &ctxlock.Mutex{}
 	f.cfg.AuthorizationMu = gate
 	st := &admissionPacketStore{DB: f.db, entered: make(chan struct{}), release: make(chan struct{})}
 	f.cfg.Store = st
@@ -565,7 +566,7 @@ func TestExplicitCapturePublicationPrecedesRevocation(t *testing.T) {
 
 func TestExplicitCaptureDoesNotDeadlockDeletionAdmission(t *testing.T) {
 	f := newDurableCaptureFixture(t)
-	gate := &sync.Mutex{}
+	gate := &ctxlock.Mutex{}
 	f.cfg.AuthorizationMu = gate
 	entered, release := make(chan struct{}), make(chan struct{})
 	var releaseOnce sync.Once
@@ -638,7 +639,7 @@ func TestExplicitCaptureIdempotencyRequiresCurrentAuthorityAndGate(t *testing.T)
 		t.Fatal("explicit capture admitted without a shared authorization gate")
 	}
 	assertDeniedCaptureRemoved(t, f, s, req)
-	f.cfg.AuthorizationMu = &sync.Mutex{}
+	f.cfg.AuthorizationMu = &ctxlock.Mutex{}
 	s = f.service(t)
 	packet, err := s.Capture(t.Context(), req)
 	if err != nil {

@@ -97,7 +97,7 @@ type ChildOptionsResult struct {
 type ChildStartParams struct {
 	Harness         string `json:"harness" jsonschema:"agent from aether_subsession_options"`
 	Model           string `json:"model,omitempty" jsonschema:"model id; empty keeps the agent's default"`
-	Mode            string `json:"mode,omitempty" jsonschema:"standard, enhanced or background; empty picks enhanced where installed"`
+	Mode            string `json:"mode,omitempty" jsonschema:"standard, enhanced or background; empty picks enhanced where installed, else standard, or background where mail cannot wake the agent in standard"`
 	AccountMemberID string `json:"account_member_id,omitempty" jsonschema:"account from aether_subsession_options; empty is the parent's account for the parent's agent, else the owner's own"`
 	Purpose         string `json:"purpose" jsonschema:"3-8 words shown in the dashboard, e.g. adversarial review of auth change"`
 	Task            string `json:"task" jsonschema:"everything the child needs: it sees only this text and your last commit"`

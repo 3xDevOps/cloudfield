@@ -4,7 +4,7 @@ import { api } from '@/lib/api'
 import { message } from '@/lib/format'
 import type { AgentLoad } from '@/routes/board/lanes/model'
 import { sameIdentity, useStore } from '@/store'
-import { emptyLaneHistory, historyBudget, laneEventTypes, type LaneHistory } from '@/store/lanes'
+import { emptyLaneHistory, historyStep, laneEventTypes, type LaneHistory } from '@/store/lanes'
 import { sessionStreamOpen } from '@/store/session-stream'
 import { itemsOf } from '@/store/sessions'
 import { indexItems, noAgents } from '@/store/subagents'
@@ -20,19 +20,21 @@ const reads = new Map<string, object>()
 async function readBack(workspaceID: string, floor: number): Promise<void> {
   wanted.set(workspaceID, floor)
   const current = useStore.getState().laneHistory[workspaceID]
-  if (current && (current.loading || current.error || current.capped || current.floor <= floor)) return
+  // A capped history reads on once the budget has room again.
+  const full = current?.capped && current.events.length >= useStore.getState().laneBudget
+  if (current && (current.loading || current.error || full || current.floor <= floor)) return
   const read = {}
   reads.set(workspaceID, read)
   const owns = () => reads.get(workspaceID) === read
   const same = sameIdentity()
   const { setLaneHistory } = useStore.getState()
-  setLaneHistory(workspaceID, { loading: true })
+  setLaneHistory(workspaceID, { loading: true, capped: false })
   try {
     for (;;) {
       const history = useStore.getState().laneHistory[workspaceID]
       if (!history || !owns() || !same()) return
       if (history.floor <= (wanted.get(workspaceID) ?? floor)) break
-      if (history.events.length >= historyBudget) {
+      if (history.events.length >= useStore.getState().laneBudget) {
         setLaneHistory(workspaceID, { capped: true })
         break
       }
@@ -48,7 +50,7 @@ async function readBack(workspaceID: string, floor: number): Promise<void> {
       if (!latest || !owns() || !same()) return
       // Live events past the budget dropped the oldest held events during this read, so the page no longer meets them.
       if (latest.olderSeq !== history.olderSeq) continue
-      const room = historyBudget - latest.events.length
+      const room = useStore.getState().laneBudget - latest.events.length
       // Live events filled the budget during the read; only the news that nothing older exists still applies.
       if (room <= 0 && (page.more || page.events.length > 0)) continue
       // A smaller limit would shrink the server's scan with it, so the page is a full one and only its newest that fit are kept.
@@ -71,15 +73,18 @@ async function readBack(workspaceID: string, floor: number): Promise<void> {
   }
 }
 
-/** Holds lane history for the workspaces on screen and reads back to `floor`. */
-export function useLaneHistory(workspaceIDs: string[], floor: number) {
+/** Holds lane history for the workspaces on screen and reads back to `floor`, up to `budget` events a workspace. */
+export function useLaneHistory(workspaceIDs: string[], floor: number, budget: number) {
   useEffect(() => useStore.getState().holdLanes(), [])
+  const held = useStore((s) => s.laneBudget)
+  // A reset drops the budget with the history; the mounted view asks for its own again.
+  useEffect(() => useStore.getState().raiseLaneBudget(budget), [budget, held])
   const key = workspaceIDs.join('\n')
   // A server reset or a dropped hold clears history under a mounted view; read it back.
   const missing = useStore((s) => workspaceIDs.some((id) => !s.laneHistory[id]))
   useEffect(() => {
     for (const id of key ? key.split('\n') : []) void readBack(id, floor)
-  }, [key, floor, missing])
+  }, [key, floor, missing, held])
   const histories = useStore(useShallow((s) => workspaceIDs.map((id) => s.laneHistory[id] ?? emptyLaneHistory)))
   const retry = useCallback(() => {
     for (const id of key ? key.split('\n') : []) {
@@ -95,10 +100,13 @@ export function useLaneHistory(workspaceIDs: string[], floor: number) {
       events: histories.flatMap((h) => h.events),
       loading: histories.some((h) => h.loading),
       error: histories.find((h) => h.error)?.error ?? null,
-      capped: histories.some((h) => h.capped),
+      // Only history this window still lacks, and only where Load more can read: a narrower window the
+      // held events cover has nothing to load, and a failed read waits for Retry.
+      capped: histories.some((h) => h.capped && !h.error && h.floor > floor),
+      more: () => useStore.getState().raiseLaneBudget(useStore.getState().laneBudget + historyStep),
       retry,
     }
-  }, [key, histories, retry])
+  }, [key, histories, retry, floor])
 }
 
 /** `resident` reads the session's live index; a session's store entry outlives its stream, so only an open stream counts. */
