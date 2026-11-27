@@ -216,15 +216,21 @@ func (s *Scheduler) saveLongPaused(ctx context.Context) {
 // hostMemory is the host's available memory, read from /proc/meminfo with
 // no daemon in the way, and admission's floor.
 func (s *Scheduler) hostMemory() (available, floor uint64, err error) {
+	total, available, err := s.hostMemoryTotal()
+	return available, memoryFloor(total), err
+}
+
+// hostMemoryTotal is the host's whole and available memory.
+func (s *Scheduler) hostMemoryTotal() (total, available uint64, err error) {
 	read := s.cfg.hostMemory
 	if read == nil {
 		read = func() (uint64, uint64, error) { return sysstats.HostMemory(procRoot) }
 	}
-	total, available, err := read()
+	total, available, err = read()
 	if err == nil && (total == 0 || available > total) {
 		err = errors.New("the host memory measurement is invalid")
 	}
-	return available, memoryFloor(total), err
+	return total, available, err
 }
 
 // memoryStall is the host's memory stall now, as systemd-oomd reads it, and
@@ -297,7 +303,11 @@ func (s *Scheduler) heldSave(c memoryCandidate, working bool) (saved, held bool)
 	done := make(chan bool, 1)
 	saving := s.markSaving(c.e)
 	s.goMove(func() {
+		available, floor, _ := s.hostMemory()
 		saved := s.saveCandidate(s.superCtx, c, working)
+		if saved {
+			s.countSave(c, available, floor)
+		}
 		saving()
 		done <- saved
 	})

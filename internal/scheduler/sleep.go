@@ -318,7 +318,7 @@ func (s *Scheduler) wakeLive(ctx context.Context, entry *supervised) (woke, erro
 		resident = inspectErr == nil && !info.Exited
 	}
 	if !resident {
-		release, err = s.reserveWake(ctx, cid)
+		release, err = s.reserveWake(ctx, entry.runID, cid)
 	}
 	if err == nil {
 		defer release()

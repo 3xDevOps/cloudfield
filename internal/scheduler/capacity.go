@@ -109,6 +109,9 @@ func memoryFloor(total uint64) uint64 {
 // show as used yet.
 type memoryClaim struct {
 	bytes uint64
+	// op and run name the admission in the capacity counters.
+	op  string
+	run domain.RunID
 	// vm is the saved VM a wake restores, which goes on loading its memory
 	// once the wake returns. held is the most of bytes it has held, grew is
 	// when that last rose, and released is set once the wake returned.
@@ -130,22 +133,37 @@ func (e *memoryShortage) Error() string {
 
 func (e *memoryShortage) Unwrap() error { return ErrMemoryPressure }
 
-// reserveCapacity admits a start that brings up a new container or VM.
+// reserveCapacity admits a start that brings up a new container or VM and
+// is not a session launch.
 func (s *Scheduler) reserveCapacity(ctx context.Context) (func(), error) {
-	return s.reserve(ctx, &memoryClaim{bytes: startupMemoryBytes})
+	return s.reserve(ctx, &memoryClaim{bytes: startupMemoryBytes, op: opStart})
+}
+
+// reserveLaunch admits the launch of a session, which has the ID run when
+// one was reserved for it.
+func (s *Scheduler) reserveLaunch(ctx context.Context, run domain.RunID, retry bool) (func(), error) {
+	op := opLaunch
+	if retry {
+		op = opLaunchRetry
+	}
+	return s.reserve(ctx, &memoryClaim{bytes: startupMemoryBytes, op: op, run: run})
 }
 
 // reserveWake admits the wake of a sleeping container: a saved VM must fit
 // the memory its restore loads back.
-func (s *Scheduler) reserveWake(ctx context.Context, cid runtime.ID) (func(), error) {
-	return s.reserve(ctx, s.wakeClaim(cid))
+func (s *Scheduler) reserveWake(ctx context.Context, run domain.RunID, cid runtime.ID) (func(), error) {
+	claim := s.wakeClaim(cid)
+	claim.op, claim.run = opWake, run
+	return s.reserve(ctx, claim)
 }
 
 // reserveBoot admits the boot of a stopped VM to commit its work on memory
 // alone, as a wake: disk reclaim runs that boot to free checkouts, so it
 // neither waits on disk nor saves idle VMs.
-func (s *Scheduler) reserveBoot(ctx context.Context, cid runtime.ID) (func(), error) {
+func (s *Scheduler) reserveBoot(ctx context.Context, run domain.RunID, cid runtime.ID) (release func(), err error) {
 	claim := s.wakeClaim(cid)
+	claim.op, claim.run = opBoot, run
+	defer func() { s.countRefusal(ctx, claim, err) }()
 	probeCtx, cancel := context.WithTimeout(ctx, capacityProbeTimeout)
 	defer cancel()
 	select {
@@ -193,8 +211,9 @@ func (s *Scheduler) wakeClaim(cid runtime.ID) *memoryClaim {
 // yet to take, not the sum of container memory ceilings. A completed
 // reservation is released under the same gate so the next probe cannot reuse
 // a pre-completion snapshot.
-func (s *Scheduler) reserve(ctx context.Context, claim *memoryClaim) (func(), error) {
-	release, err := s.tryReserveCapacity(ctx, claim)
+func (s *Scheduler) reserve(ctx context.Context, claim *memoryClaim) (release func(), err error) {
+	defer func() { s.countRefusal(ctx, claim, err) }()
+	release, err = s.tryReserveCapacity(ctx, claim)
 	// One reclaim or save pass, then fresh measurements. Never loop or
 	// reinterpret unavailable capacity.
 	var short *memoryShortage

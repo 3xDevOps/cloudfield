@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"slices"
 	"time"
@@ -78,6 +79,11 @@ func (s *Scheduler) brakeVMMemory(ctx context.Context, vms runtime.FreezeRuntime
 		}
 		if !s.vmMemoryBraked {
 			slog.Warn("scheduler: memory guard: the host is short of memory; froze the session VMs", "available", available, "floor", floor, "vms", len(froze))
+			// The brake must not wait for the database.
+			s.goMove(func() {
+				s.countCapacity(domain.CapacityEvent{Kind: domain.CapacityFreeze, AvailableBytes: available, FloorBytes: floor,
+					Text: fmt.Sprintf("froze %d session VMs", len(froze))})
+			})
 		}
 		s.vmMemoryBraked = true
 	}
