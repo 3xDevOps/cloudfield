@@ -382,7 +382,9 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 	rt.mu.Unlock()
 	shown, code = ada.onTerminal(map[string]string{"Paste code here": "test-code\r"}, "agent", "login", "claude", "--as", "work")
 	t.Logf("$ cloudfield agent login claude --as work\n%s", shown)
-	if code != 0 || !strings.Contains(shown, "added login work: subscription, plan max, ada@work.example.test, organisation Test Org\n") {
+	if code != 0 || !strings.Contains(shown, "added login work: subscription, plan max, ada@work.example.test, organisation Test Org\n"+
+		"Automatic is on: Cloudfield may start or move your sessions onto it; turn it off with: cloudfield agent logins auto work off\n"+
+		"Use for shares is on: teammates you share your account with can be served by it; turn it off with: cloudfield agent logins share work off\n") {
 		t.Fatalf("agent login claude --as work on a terminal = %d:\n%s", code, shown)
 	}
 	rt.mu.Lock()
@@ -422,7 +424,7 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 	}{
 		{[]string{"rename", "work", "job"}, "renamed login work to job\n"},
 		{[]string{"order", "job", "default"}, "login order: 1 job, 2 default\n"},
-		{[]string{"auto", "job", "off"}, "login job: used only when you name it with cloudfield session --login job\n"},
+		{[]string{"auto", "job", "off"}, "login job: used only when you name it with cloudfield session --agent claude --login job\n"},
 		{[]string{"share", "job", "off"}, "login job: only your own sessions run on it; Cloudfield moves teammates' sessions off it, and stops those no other login can run\n"},
 	} {
 		out, stderr, code := ada.cli(append([]string{"agent", "logins"}, step.args...)...)
@@ -444,7 +446,8 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 		{[]string{"rename", "nope", "x"}, `you have no login named "nope"; cloudfield agent logins lists yours`},
 		{[]string{"order", "job"}, "login_ids must name each of your logins once, default included"},
 		{[]string{"rename", "job", "Bad Name"}, `login name "Bad Name": use lowercase letters, digits and '-', starting with a letter or digit`},
-		{[]string{"remove", "default"}, "the default login is the one in your home; it is not renamed or removed here"},
+		{[]string{"remove", "default", "--yes"}, "the default login is the one in your home; it is not renamed or removed here"},
+		{[]string{"remove", "job"}, "--yes is required because cloudfield agent logins remove deletes the login's files from Cloudfield: cloudfield agent logins remove job --yes"},
 	} {
 		_, stderr, code := ada.cli(append([]string{"agent", "logins"}, refused.args...)...)
 		t.Logf("$ cloudfield agent logins %s\n%s", strings.Join(refused.args, " "), stderr)
@@ -453,10 +456,12 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 		}
 	}
 
-	out, stderr, code = ada.cli("agent", "logins", "remove", "job")
-	t.Logf("$ cloudfield agent logins remove job\n%s", out)
-	if code != 0 || out != "removed login job and its files from Cloudfield; this does not sign it out at Anthropic\n" {
-		t.Fatalf("agent logins remove job = %d %q %q", code, out, stderr)
+	shown, code = ada.onTerminal(map[string]string{"Remove? [y/N]: ": "y\r"}, "agent", "logins", "remove", "job")
+	t.Logf("$ cloudfield agent logins remove job\n%s", shown)
+	if code != 0 || !strings.HasPrefix(shown, "login job: subscription, plan max, ada@work.example.test, organisation Test Org\n"+
+		"Removing it deletes its files from Cloudfield and does not sign it out at Anthropic; Cloudfield refuses while a session is on it. Remove? [y/N]: ") ||
+		!strings.HasSuffix(shown, "removed login job and its files from Cloudfield; this does not sign it out at Anthropic\n") {
+		t.Fatalf("agent logins remove job on a terminal = %d:\n%s", code, shown)
 	}
 	if got := rows(); len(got) != 0 {
 		t.Fatalf("rows after removing the last added login: %+v", got)
@@ -477,7 +482,7 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 	shown, code = ada.onTerminal(nil, "agent", "login", "claude", "--as", "other")
 	t.Logf("$ cloudfield agent login claude --as other\n%s", shown)
 	if code == 0 || !strings.Contains(shown, `the sign-in of login "later" (`+attach[2]+`) is still running; finish it first`+"\n"+
-		"that sign-in ends by itself 15 minutes after its terminal opened, or 10 minutes after it started if none did; "+
+		"that sign-in ends by itself about 15 minutes after its terminal opened, or 10 minutes after it was started if none did; "+
 		"to finish it sooner, return to it with:\n  "+attach[1]+"\n") {
 		t.Fatalf("a second add while one runs = %d:\n%s", code, shown)
 	}
@@ -486,7 +491,9 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 	rt.mu.Unlock()
 	shown, code = ada.onTerminal(map[string]string{"Paste code here": "test-reattach-code\r"}, "agent", "login", "claude", "--attach", attach[2])
 	t.Logf("$ %s\n%s", attach[1], shown)
-	if code != 0 || !strings.Contains(shown, "added login later: subscription, plan max, ada@later.example.test, organisation Test Org\n") {
+	if code != 0 || !strings.Contains(shown, "added login later: subscription, plan max, ada@later.example.test, organisation Test Org\n"+
+		"Automatic is on: Cloudfield may start or move your sessions onto it; turn it off with: cloudfield agent logins auto later off\n"+
+		"Use for shares is on: teammates you share your account with can be served by it; turn it off with: cloudfield agent logins share later off\n") {
 		t.Fatalf("%s = %d:\n%s", attach[1], code, shown)
 	}
 	rt.mu.Lock()
@@ -497,7 +504,9 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 	shown, code = ada.onTerminal(nil, "agent", "login", "claude", "--attach", attach[2])
 	t.Logf("$ %s   (again, after it ended)\n%s", attach[1], shown)
 	if code != 0 || shown != "returning to the sign-in of login "+attach[2]+": claude auth login runs in a container of its own; follow its prompts\n"+
-		"added login later: subscription, plan max, ada@later.example.test, organisation Test Org\n" {
+		"added login later: subscription, plan max, ada@later.example.test, organisation Test Org\n"+
+		"Automatic is on: Cloudfield may start or move your sessions onto it; turn it off with: cloudfield agent logins auto later off\n"+
+		"Use for shares is on: teammates you share your account with can be served by it; turn it off with: cloudfield agent logins share later off\n" {
 		t.Fatalf("%s after the sign-in ended = %d:\n%s", attach[1], code, shown)
 	}
 }

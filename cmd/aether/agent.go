@@ -24,7 +24,7 @@ func init() {
 			"cloudfield agent login <name> [--as <login> | --attach <login-id>]\n" +
 			"cloudfield agent logins [<agent>] [--json]\n" +
 			"cloudfield agent logins rename <login> <new-name>\n" +
-			"cloudfield agent logins remove <login>\n" +
+			"cloudfield agent logins remove <login> [--yes]\n" +
 			"cloudfield agent logins order <login> [<login> ...]\n" +
 			"cloudfield agent logins auto <login> on|off\n" +
 			"cloudfield agent logins share <login> on|off\n" +
@@ -38,6 +38,10 @@ func init() {
 			"cloudfield agent logins order work default\n" +
 			"cloudfield agent add codex --enhanced\n" +
 			"cloudfield agent remove codex",
+		guides: map[string]string{
+			"agent login":  "docs/agents.md#several-logins",
+			"agent logins": "docs/agents.md#several-logins",
+		},
 		run: runAgent,
 	})
 }

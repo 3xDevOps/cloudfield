@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"cmp"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 	"github.com/3xDevOps/cloudfield/internal/shellquote"
+	"golang.org/x/term"
 )
 
 // addedLoginsAgent is the one agent whose logins the subcommands of
@@ -209,7 +211,19 @@ func signInEnded(out io.Writer, agent, id string, login *protocol.AgentLogin, er
 		}
 		return mayStillRun(err, agent, id)
 	}
-	_, err = fmt.Fprintf(out, "added login %s\n", describeLogin(*login))
+	lines := []string{"added login " + describeLogin(*login)}
+	charged := ""
+	if login.PerUse {
+		charged = ", and those sessions are charged per use to it"
+	}
+	name := shellquote.Quote(login.Name)
+	if login.Automatic {
+		lines = append(lines, "Automatic is on: Cloudfield may start or move your sessions onto it"+charged+"; turn it off with: cloudfield agent logins auto "+name+" off")
+	}
+	if login.Shared {
+		lines = append(lines, "Use for shares is on: teammates you share your account with can be served by it"+charged+"; turn it off with: cloudfield agent logins share "+name+" off")
+	}
+	_, err = fmt.Fprintln(out, strings.Join(lines, "\n"))
 	return err
 }
 
@@ -233,7 +247,7 @@ func addRefused(err error, agent string) error {
 	if !errors.As(err, &rpc) || rpc.Code != protocol.CodeConflict || !strings.Contains(rpc.Message, "is still running") {
 		return err
 	}
-	const ends = "that sign-in ends by itself 15 minutes after its terminal opened, or 10 minutes after it started if none did"
+	const ends = "that sign-in ends by itself about 15 minutes after its terminal opened, or 10 minutes after it was started if none did"
 	if ids := loginIDText.FindAllString(rpc.Message, -1); len(ids) > 0 {
 		return fmt.Errorf("%w\n%s; to finish it sooner, return to it with:\n  %s", err, ends, attachCommand(agent, ids[len(ids)-1]))
 	}
@@ -535,20 +549,37 @@ func renameLogin(args []string) error {
 }
 
 func removeLogin(args []string) error {
-	if len(args) != 1 {
-		return errors.New("usage: cloudfield agent logins remove <login>")
+	yes := len(args) == 2 && args[1] == "--yes"
+	if len(args) != 1 && !yes {
+		return errors.New("usage: cloudfield agent logins remove <login> [--yes]")
+	}
+	interactive := term.IsTerminal(int(os.Stdin.Fd()))
+	if !yes && !interactive {
+		return errors.New("--yes is required because cloudfield agent logins remove deletes the login's files from Cloudfield: cloudfield agent logins remove " + shellquote.Quote(args[0]) + " --yes")
 	}
 	return withLogins(func(c *protocol.Client, logins []protocol.AgentLogin) error {
-		id, err := loginID(logins, args[0])
-		if err != nil {
-			return err
-		}
-		if err := c.Call(protocol.MethodAgentLoginRemove, protocol.AgentLoginParams{Agent: addedLoginsAgent, LoginID: id}, nil); err != nil {
-			return err
-		}
-		fmt.Printf("removed login %s and its files from Cloudfield; this does not sign it out at Anthropic\n", args[0])
-		return nil
+		return removeLoginOf(c, logins, args[0], yes, os.Stdin, os.Stdout)
 	})
+}
+
+func removeLoginOf(c *protocol.Client, logins []protocol.AgentLogin, name string, yes bool, in io.Reader, out io.Writer) error {
+	id, err := loginID(logins, name)
+	if err != nil {
+		return err
+	}
+	if !yes {
+		login := logins[slices.IndexFunc(logins, func(l protocol.AgentLogin) bool { return l.ID == id })]
+		_, _ = fmt.Fprintf(out, "login %s\nRemoving it deletes its files from Cloudfield and does not sign it out at Anthropic; "+
+			"Cloudfield refuses while a session is on it. Remove? [y/N]: ", describeLogin(login))
+		if !yesAnswer(bufio.NewReader(in)) {
+			return errors.New("cloudfield agent logins remove: nothing was removed")
+		}
+	}
+	if err = c.Call(protocol.MethodAgentLoginRemove, protocol.AgentLoginParams{Agent: addedLoginsAgent, LoginID: id}, nil); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(out, "removed login %s and its files from Cloudfield; this does not sign it out at Anthropic\n", name)
+	return err
 }
 
 func orderLogins(args []string) error {
@@ -592,7 +623,7 @@ func automaticLogin(args []string) error {
 		if on {
 			fmt.Printf("login %s: Cloudfield may choose it and move sessions onto it\n", args[0])
 		} else {
-			fmt.Printf("login %s: used only when you name it with cloudfield session --login %s\n", args[0], shellquote.Quote(args[0]))
+			fmt.Printf("login %s: used only when you name it with cloudfield session --agent %s --login %s\n", args[0], addedLoginsAgent, shellquote.Quote(args[0]))
 		}
 		return nil
 	})

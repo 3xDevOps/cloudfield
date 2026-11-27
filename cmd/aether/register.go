@@ -17,6 +17,8 @@ type command struct {
 	// shows only the forms that start with its words.
 	usage   string
 	example string
+	// guides maps a help path to the docs section its help ends with.
+	guides map[string]string
 	// flags is set when run parses a flag set named name before it does
 	// anything else, so dispatch hands it -h and the help lists each flag.
 	flags bool

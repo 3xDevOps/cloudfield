@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -204,6 +205,31 @@ func TestFollowSignInShowsAFailedStartOnce(t *testing.T) {
 	}
 }
 
+func TestSignInEndedSaysHowToTurnOffAnAddedLoginsSwitches(t *testing.T) {
+	for _, tc := range []struct {
+		login protocol.AgentLogin
+		want  string
+	}{
+		{protocol.AgentLogin{Name: "work", Kind: "subscription", Plan: "max", Email: "ada@work.example.test", Automatic: true, Shared: true},
+			"added login work: subscription, plan max, ada@work.example.test\n" +
+				"Automatic is on: Cloudfield may start or move your sessions onto it; turn it off with: cloudfield agent logins auto work off\n" +
+				"Use for shares is on: teammates you share your account with can be served by it; turn it off with: cloudfield agent logins share work off\n"},
+		{protocol.AgentLogin{Name: "my-console", Kind: "console", Email: "ada@org.example.test", PerUse: true, Automatic: true, Shared: true},
+			"added login my-console: console, ada@org.example.test, billed per use\n" +
+				"Automatic is on: Cloudfield may start or move your sessions onto it, and those sessions are charged per use to it; turn it off with: cloudfield agent logins auto my-console off\n" +
+				"Use for shares is on: teammates you share your account with can be served by it, and those sessions are charged per use to it; turn it off with: cloudfield agent logins share my-console off\n"},
+		{protocol.AgentLogin{Name: "quiet", Kind: "subscription"}, "added login quiet: subscription\n"},
+	} {
+		var out bytes.Buffer
+		if err := signInEnded(&out, "claude", "lgn-test1", &tc.login, nil); err != nil {
+			t.Fatal(err)
+		}
+		if out.String() != tc.want {
+			t.Errorf("signInEnded(%+v) printed\n%s\nwant\n%s", tc.login, out.String(), tc.want)
+		}
+	}
+}
+
 // silentControl is a control channel that never answers, as a server whose
 // sign-in has not ended does not answer agent.login.result.
 func silentControl(t *testing.T) *protocol.Client {
@@ -303,7 +329,7 @@ func TestAddedLoginSignInNeedsAServerThatKeepsLogins(t *testing.T) {
 }
 
 func TestAddRefusedNamesTheRunningSignInsAttachLine(t *testing.T) {
-	const ends = "that sign-in ends by itself 15 minutes after its terminal opened, or 10 minutes after it started if none did; "
+	const ends = "that sign-in ends by itself about 15 minutes after its terminal opened, or 10 minutes after it was started if none did; "
 	for _, tc := range []struct{ message, want string }{
 		{`the sign-in of login "work" (lgn-test1) is still running; finish it first`,
 			"rpc error -32003: the sign-in of login \"work\" (lgn-test1) is still running; finish it first\n" + ends +
@@ -569,5 +595,60 @@ func TestAgentLoginOfAnAddedLoginOpensNoTerminalOnAServerWithoutLogins(t *testin
 	}
 	if got := asked(); !reflect.DeepEqual(got, []string{protocol.SubsystemControl, protocol.SubsystemControl}) {
 		t.Errorf("subsystems opened = %q; want the control channel only", got)
+	}
+}
+
+func TestRemoveLoginAsksBeforeRemoving(t *testing.T) {
+	logins := []protocol.AgentLogin{{ID: "default", Name: "default"}, {ID: "lgn-test1", Name: "work", Kind: "subscription", Plan: "max", Email: "ada@work.example.test"}}
+	const asked = "login work: subscription, plan max, ada@work.example.test\n" +
+		"Removing it deletes its files from Cloudfield and does not sign it out at Anthropic; Cloudfield refuses while a session is on it. Remove? [y/N]: "
+	const removed = "removed login work and its files from Cloudfield; this does not sign it out at Anthropic\n"
+	for _, tc := range []struct {
+		answer  string
+		yes     bool
+		out     string
+		err     string
+		removes bool
+	}{
+		{answer: "\n", out: asked, err: "cloudfield agent logins remove: nothing was removed"},
+		{answer: "y\n", out: asked + removed, removes: true},
+		{yes: true, out: removed, removes: true},
+	} {
+		remove := &fakeReply{}
+		c := fakeControlMethods(t, map[string]*fakeReply{protocol.MethodAgentLoginRemove: remove})
+		var out bytes.Buffer
+		err := removeLoginOf(c, logins, "work", tc.yes, strings.NewReader(tc.answer), &out)
+		if (err == nil) != (tc.err == "") || (err != nil && err.Error() != tc.err) {
+			t.Errorf("answer %q, --yes %v: err = %v, want %q", tc.answer, tc.yes, err, tc.err)
+		}
+		if out.String() != tc.out {
+			t.Errorf("answer %q, --yes %v: printed %q, want %q", tc.answer, tc.yes, out.String(), tc.out)
+		}
+		if got := remove.params() != nil; got != tc.removes {
+			t.Errorf("answer %q, --yes %v: removed %v, want %v", tc.answer, tc.yes, got, tc.removes)
+		}
+	}
+}
+
+func TestRemoveLoginWithoutATerminalNeedsYes(t *testing.T) {
+	null, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdin := os.Stdin
+	os.Stdin = null
+	t.Cleanup(func() { os.Stdin = stdin; _ = null.Close() })
+	err = removeLogin([]string{"work"})
+	if err == nil || err.Error() != "--yes is required because cloudfield agent logins remove deletes the login's files from Cloudfield: cloudfield agent logins remove work --yes" {
+		t.Fatalf("removeLogin without a terminal = %v; want --yes asked for before connecting", err)
+	}
+}
+
+func TestLoginsHelpEndsWithTheGuide(t *testing.T) {
+	for _, path := range []string{"agent login", "agent logins"} {
+		out, err := captureStdout(t, func() error { return dispatch(append(strings.Fields(path), "--help")) })
+		if err != nil || !strings.HasSuffix(out, "\nGuide: docs/agents.md#several-logins\n") {
+			t.Errorf("cloudfield %s --help = %q, %v; want it to end with the guide", path, out, err)
+		}
 	}
 }
