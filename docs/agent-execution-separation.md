@@ -14,6 +14,15 @@ proof of the private architecture of Claude Code on the web, Codex cloud or
 v0. The proposed architecture and acceptance checks below are not shipped
 features or completed isolation tests.
 
+Since 2026-11-27 Cloudfield protects the agent inside the one session VM
+instead, which this record did not consider: a killed Enhanced agent is
+restarted with its conversation
+([enhanced-sessions.md](enhanced-sessions.md#restarts-and-failures)), and
+the kernel kills a command of an Enhanced Claude Code agent before the agent
+when the session runs out of memory
+([vm-guest.md](vm-guest.md#limits-stats-and-the-clock)). Neither keeps the
+agent's process alive through a guest kernel panic or a killed VM.
+
 ## What “brain” and “hands” mean
 
 The **brain** is the agent process: its conversation, model requests, planning,

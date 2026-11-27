@@ -35,8 +35,11 @@ const keeperUser = "0"
 // startKeeper starts command, which serves the ACP server name, under a keeper
 // and returns the keeper's exec once it listens. The keeper starts command as
 // the container's user, as an exec without a user would run. The run records
-// the exec and how to reattach before the adapter can do anything.
-func (d *acpDriver) startKeeper(ctx context.Context, entry *supervised, managed runtime.ManagedExecRuntime, cid runtime.ID, name string, command []string) (runtime.ManagedExec, error) {
+// the exec and how to reattach before the adapter can do anything. protect is
+// the environment that has the keeper, and its bridge, rank the agent behind
+// its commands when memory runs out; empty for an agent with no way to tell
+// its commands apart.
+func (d *acpDriver) startKeeper(ctx context.Context, entry *supervised, managed runtime.ManagedExecRuntime, cid runtime.ID, name string, command, protect []string) (runtime.ManagedExec, error) {
 	info, err := d.s.cfg.Runtime.Inspect(ctx, cid)
 	if err != nil {
 		return nil, fmt.Errorf("inspect the container's user: %w", err)
@@ -48,7 +51,7 @@ func (d *acpDriver) startKeeper(ctx context.Context, entry *supervised, managed 
 		WorkingDir:  d.s.cfg.WorktreeMount,
 		CreationKey: "acp-" + rand.Text(),
 		// A container started for a Standard run lacks both.
-		Env: []string{coordtransport.EnhancedEnv + "=1", "NO_BROWSER=1"},
+		Env: append([]string{coordtransport.EnhancedEnv + "=1", "NO_BROWSER=1"}, protect...),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start %s: %w", name, err)
@@ -125,12 +128,12 @@ type keeperOutputError struct{ line string }
 func (e *keeperOutputError) Error() string { return fmt.Sprintf("unexpected keeper output %q", e.line) }
 
 // startKept starts command under a new keeper and attaches to it.
-func (d *acpDriver) startKept(ctx context.Context, entry *supervised, managed runtime.ManagedExecRuntime, cid runtime.ID, name string, command []string) (runtime.ManagedExec, *acpkeeper.Client, runtime.ManagedExec, error) {
-	exec, err := d.startKeeper(ctx, entry, managed, cid, name, command)
+func (d *acpDriver) startKept(ctx context.Context, entry *supervised, managed runtime.ManagedExecRuntime, cid runtime.ID, name string, command, protect []string) (runtime.ManagedExec, *acpkeeper.Client, runtime.ManagedExec, error) {
+	exec, err := d.startKeeper(ctx, entry, managed, cid, name, command, protect)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	keeper, bridge, err := d.attachKeeper(ctx, entry, managed, cid)
+	keeper, bridge, err := d.attachKeeper(ctx, entry, managed, cid, protect)
 	if err != nil {
 		err = fmt.Errorf("attach to %s's keeper: %w", name, err)
 		if stopErr := d.stopExec(exec); stopErr != nil {
@@ -185,7 +188,7 @@ func (r *acpRun) exit() *acpkeeper.Exit {
 
 // attachKeeper connects to the run's keeper through a bridge exec as the
 // next generation. The bridge ends with the attachment.
-func (d *acpDriver) attachKeeper(ctx context.Context, entry *supervised, managed runtime.ManagedExecRuntime, cid runtime.ID) (*acpkeeper.Client, runtime.ManagedExec, error) {
+func (d *acpDriver) attachKeeper(ctx context.Context, entry *supervised, managed runtime.ManagedExecRuntime, cid runtime.ID, protect []string) (*acpkeeper.Client, runtime.ManagedExec, error) {
 	d.s.mu.Lock()
 	record := entry.agentKeeper
 	d.s.mu.Unlock()
@@ -202,6 +205,7 @@ func (d *acpDriver) attachKeeper(ctx context.Context, entry *supervised, managed
 		Argv:        acpkeeper.AttachArgv(coordtransport.CLIPath, next.Socket),
 		User:        keeperUser,
 		CreationKey: "acp-attach-" + rand.Text(),
+		Env:         protect,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("start the keeper bridge: %w", err)
@@ -218,7 +222,7 @@ func (d *acpDriver) attachKeeper(ctx context.Context, entry *supervised, managed
 }
 
 // reattach takes over the keeper an earlier server process left running.
-func (d *acpDriver) reattach(ctx context.Context, entry *supervised, managed runtime.ManagedExecRuntime, cid runtime.ID) (runtime.ManagedExec, *acpkeeper.Client, runtime.ManagedExec, error) {
+func (d *acpDriver) reattach(ctx context.Context, entry *supervised, managed runtime.ManagedExecRuntime, cid runtime.ID, protect []string) (runtime.ManagedExec, *acpkeeper.Client, runtime.ManagedExec, error) {
 	d.s.mu.Lock()
 	identity := entry.agentExec
 	d.s.mu.Unlock()
@@ -229,7 +233,7 @@ func (d *acpDriver) reattach(ctx context.Context, entry *supervised, managed run
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("recover the keeper exec: %w", err)
 	}
-	client, bridge, err := d.attachKeeper(ctx, entry, managed, cid)
+	client, bridge, err := d.attachKeeper(ctx, entry, managed, cid, protect)
 	if err != nil {
 		return nil, nil, nil, err
 	}

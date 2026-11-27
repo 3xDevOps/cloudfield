@@ -15,6 +15,8 @@ func Serve(string, string, []string) int {
 
 func undumpable() error { return nil }
 
+func lowerOOMScore() error { return nil }
+
 // ServeTerm runs only inside a Linux run container.
 func ServeTerm(string, string, string, uint16, uint16, []string) int {
 	fmt.Fprintln(os.Stderr, "acp-keeper: runs only on Linux")

@@ -40,6 +40,13 @@ const (
 	// SocketRoot holds each keeper's socket directory. Only root may enter
 	// it: the agent's user must not reach the socket.
 	SocketRoot = "/run/aether-acp"
+	// CommandPrefixEnv, in the environment of a keeper or its bridge, names
+	// the variable through which the agent takes a program to run each of
+	// its commands through, as Claude Code's CLAUDE_CODE_SHELL_PREFIX. A
+	// keeper that can lowers the agent's OOM score and sets that variable to
+	// a program that gives each command the default score back; its bridge
+	// lowers its own.
+	CommandPrefixEnv = "AETHER_ACP_COMMAND_PREFIX_ENV"
 
 	// maxLine bounds one frame. The SDK reads agent messages of up to 10
 	// MiB; a prompt with several images can be larger.
