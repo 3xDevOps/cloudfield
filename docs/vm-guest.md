@@ -497,21 +497,37 @@ the score. The keeper also sets `CLAUDE_CODE_SHELL_PREFIX` to
 `/run/aether-acp-command`, a three-line script it writes, through which
 Claude Code runs every Bash tool call, shell-form hook, status line command
 and stdio MCP server: the script writes `0` to its own `oom_score_adj` and
-runs the command with `bash -c`. So the kernel kills one of the agent's
-commands before the agent, unless the agent holds half the session's memory
-and swap more than that command. It adds about 0.2 ms to a command. What
+runs the command with `bash -c`. So the kernel kills any process in the
+session at the default score before the agent, unless the agent holds half
+the session's memory and swap more than that process: a command of the
+agent, a process started from a terminal, a nested container. It picks the
+largest of them, so a database started from a terminal can die before a
+smaller command of the agent, and nothing restarts it. Without this the
+agent, where it was the largest, died first and was restarted with its
+conversation
+([enhanced-sessions.md](enhanced-sessions.md#restarts-and-failures)). The
+script adds about 0.2 ms to a command. What
 Claude Code starts without its prefix keeps the agent's score: exec-form
 hooks, the language servers of its plugins, and the `rg` and `git` it runs
 for itself. A language server that grows large is then killed after the
 agent's commands. A command can lower its own score back to `-500`, so this
-orders accidents, not a hostile command. The keeper leaves everything as it
-was when the session's environment already sets `CLAUDE_CODE_SHELL_PREFIX`,
-when `bash` is not on the `PATH` or `zsh` is, since Claude Code may then
-build its commands for zsh, or when it may not lower its score, as in a
-Docker session. A prefix set in Claude Code's own `settings.json` replaces
-the keeper's inside Claude Code: the agent's commands then keep the agent's
-score, and the kernel kills other session processes, such as a terminal's,
-before them. No other agent has a way to tell its commands apart, so no
+orders accidents, not a hostile command. The keeper leaves the agent at the
+default score and sets no prefix when the session's environment already sets
+`CLAUDE_CODE_SHELL_PREFIX`, when `bash` is not on the `PATH` or `zsh` is,
+since Claude Code may then build its commands for zsh, or when it may not
+lower its score, as in a Docker session. The bridge, which only relays,
+lowers its own score where it may all the same. Except for a prefix the
+session already sets, the keeper logs the reason to `keeper.log` beside its
+socket, in a directory of `/run/aether-acp` that only root can read and that
+goes when the agent stops:
+`sudo sh -c 'grep OOM /run/aether-acp/*/keeper.log'`. A prefix set in Claude
+Code's own `settings.json` replaces the keeper's inside Claude Code: the
+agent's commands then keep the agent's score, and the kernel kills other
+session processes, such as a terminal's, before them. The same holds when
+an administrator's `--agent-definitions` entry for `claude` runs a program
+that does not honour `CLAUDE_CODE_SHELL_PREFIX`: the keeper protects every
+agent launched under that name. No other agent has a way to tell its
+commands apart, so no
 other agent's score changes: its commands would inherit the lower score with
 it. A Standard session has no keeper and is unchanged.
 

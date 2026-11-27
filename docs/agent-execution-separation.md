@@ -18,8 +18,8 @@ Since 2026-11-27 Cloudfield protects the agent inside the one session VM
 instead, which this record did not consider: a killed Enhanced agent is
 restarted with its conversation
 ([enhanced-sessions.md](enhanced-sessions.md#restarts-and-failures)), and
-the kernel kills a command of an Enhanced Claude Code agent before the agent
-when the session runs out of memory
+the kernel kills the session's other processes before an Enhanced Claude
+Code agent when the session runs out of memory
 ([vm-guest.md](vm-guest.md#limits-stats-and-the-clock)). Neither keeps the
 agent's process alive through a guest kernel panic or a killed VM.
 
