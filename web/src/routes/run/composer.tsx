@@ -452,12 +452,16 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
   const lastLive = useRef<{ canAct: boolean; waiting: boolean }>(undefined)
   if (stream === 'live') lastLive.current = { canAct: control.canAct, waiting: backgroundWait(run, session) !== null }
   const shape = lastLive.current
+  // A sleeping session's ack says its agent is gone, and a wake's event can reach this client before its stream resubscribes.
+  const sleepAck = useRef(false)
+  if (run.asleep_since) sleepAck.current = true
+  else if (stream !== 'live') sleepAck.current = false
   const gate = enhancedBlock({
     run,
     maySteer,
     canReopen: maySteer && cap.hasMethod('run.relaunch') && canReopenRun(run),
     refused: stream === 'refused' ? session?.streamError ?? 'The agent stream was refused.' : undefined,
-    sessionLive: shape ? session?.live ?? false : true,
+    sessionLive: shape && stream === 'live' && !sleepAck.current ? session?.live ?? false : true,
     pending: session?.pending.length ?? 0,
     hasLease: shape?.canAct ?? true,
   })

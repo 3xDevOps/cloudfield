@@ -910,6 +910,25 @@ describe('the Enhanced composer draft', () => {
     return view
   }
 
+  it('keeps the box through a wake, whether the wake\'s event or its stream\'s reconnect comes first', async () => {
+    const ack = (live: boolean) => act(() => useStore.getState().acpAck('run_1', { ok: true, seq: 0, replay: 0, epoch: 0, live, has_control: true, state: live ? state() : undefined }))
+    const shown = () => screen.queryByRole('combobox', { name: 'Message the agent' })
+    open({ asleep_since: '2026-11-11T09:00:00Z' })
+    acpSocket().open(lease)
+    ack(false)
+    const field = await box()
+    act(() => useStore.getState().patchRun('run_1', { asleep_since: undefined }))
+    expect(shown()).toBe(field)
+    drop('reconnecting')
+    expect(shown()).toBe(field)
+    ack(true)
+    drop('live')
+    expect(shown()).toBe(field)
+    ack(false)
+    expect(shown()).toBeNull()
+    expect(screen.getByText('The agent is not running.')).toBeDefined()
+  })
+
   it('keeps each run\'s unsent prompt and images while another run or page is shown, until the prompt is sent', async () => {
     let uploaded = (_: { path: string }) => {}
     vi.mocked(api.uploadTerminalImage).mockReturnValueOnce(new Promise((resolve) => { uploaded = resolve }))
