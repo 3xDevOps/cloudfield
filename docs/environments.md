@@ -392,18 +392,22 @@ What changes:
   wrote reads as written from the next open, shows in listings and `stat`
   within a second, and read-only mounts stay read-only.
 - `/tmp` is on the session's data disk. `/aether-cache` is a copy-on-write
-  layer over the member's newest caches, made when the session is created,
-  so sessions share those caches' blocks and each holds only what it wrote.
-  A session's caches become the member's newest when its VM stops for good:
-  it is stopped, or deleted while stopped or saved. A VM that holds its
-  session's checkout stays up for up to 10 minutes after a stop, so its
-  caches go back when it powers off, and a reopen before then keeps them on
-  the session. The server writes the member's new caches in the background,
-  and a VM that starts again before that is done first copies its own cache
-  disk. An idle sleep does not promote them. Caches over 20 GiB are dropped,
-  and so are a member's newest caches once no VM has used them for 7 days;
-  the next session then starts empty. An Isolated session's caches never go
-  back.
+  layer over the member's newest caches, made when the session is created
+  and at each start after a stop, so sessions share those caches' blocks and
+  each holds only what it wrote. A session's caches become the member's
+  newest when its VM stops for good: it is stopped, or deleted while stopped
+  or saved. A VM that holds its session's checkout stays up for up to 10
+  minutes after a stop, so its caches go back when it powers off, and a
+  reopen before then keeps them on the session. The server writes the
+  member's new caches in the background. A stopped VM keeps no cache disk,
+  so a session that starts again finds the member's newest caches, not
+  always its own: they did not go back if the stop had to kill the VM, if
+  another session's went back later, or if the start came before the write
+  finished. Its tools then download and build again. A sleeping session
+  keeps its cache disk and does not promote it. Caches over 20 GiB are
+  dropped, and so are a member's newest caches once no VM has used them for
+  7 days; the next session then starts empty. An Isolated session's caches
+  never go back.
 - The agent's program loads from a read-only disk the server builds for
   each version the home holds ([vm-guest.md](vm-guest.md#agent-programs)).
   omp (296 MB), Claude Code (377 MB) and its ACP adapter (299 MB) take

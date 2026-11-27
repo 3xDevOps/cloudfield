@@ -105,11 +105,13 @@ func sessionSpec(key string) runtime.Spec {
 type fakeImages struct {
 	mu        sync.Mutex
 	rootDisks int
-	promoted  chan string
-	tags      map[string]vmimage.Base
-	saves     []fakeSave
-	saveErr   error
-	programs  map[string]bool
+	// cacheDisks counts the cache disks made.
+	cacheDisks int
+	promoted   chan string
+	tags       map[string]vmimage.Base
+	saves      []fakeSave
+	saveErr    error
+	programs   map[string]bool
 }
 
 type fakeSave struct {
@@ -210,7 +212,11 @@ func (f *fakeImages) NewDataDisk(_ context.Context, path string, _ int64) (vmima
 }
 
 func (f *fakeImages) NewCacheDisk(_ context.Context, _, path string) (vmimage.Disk, error) {
-	return vmimage.Disk{Path: path, Format: "qcow2", Backing: path + ".base"}, os.WriteFile(path, nil, 0o600)
+	f.mu.Lock()
+	f.cacheDisks++
+	f.mu.Unlock()
+	disk := vmimage.Disk{Path: path, Format: "qcow2", Backing: path + ".base"}
+	return disk, errors.Join(os.WriteFile(path, nil, 0o600), os.WriteFile(disk.Backing, nil, 0o600))
 }
 
 func (f *fakeImages) SnapshotCache(disk vmimage.Disk) (string, error) {

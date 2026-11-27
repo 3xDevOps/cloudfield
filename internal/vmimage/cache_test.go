@@ -169,15 +169,17 @@ func TestCachePoolLayersCachesOverRawBases(t *testing.T) {
 		t.Errorf("a cache no disk reads through any more outlived the sweep: %v", err)
 	}
 
-	// A VM deleted before its promotion runs leaves only the snapshot on
-	// the base it read through, which the promotion's own sweep deletes.
-	deleted, err := s.NewCacheDisk(t.Context(), "pool1", filepath.Join(dir, "deleted.img"))
+	// A stopped VM's cache disk, dropped before its promotion runs, leaves
+	// only the snapshot on the base it read through, which the promotion's
+	// own sweep deletes.
+	stopped, err := s.NewCacheDisk(t.Context(), "pool1", filepath.Join(dir, "stopped.img"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	last, err := s.SnapshotCache(deleted)
+	qemuWrite(t, stopped.Path, 0xef)
+	last, err := s.SnapshotCache(stopped)
 	if err == nil {
-		err = errors.Join(os.Remove(deleted.Path), os.Remove(deleted.Backing))
+		err = DropCacheDisk(stopped.Path)
 	}
 	if err == nil {
 		err = s.PromoteCache("pool1", last)
@@ -186,23 +188,31 @@ func TestCachePoolLayersCachesOverRawBases(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err = os.Stat(flat.Path); !os.IsNotExist(err) {
-		t.Errorf("the promotion of a deleted VM's cache kept the base it read through: %v", err)
+		t.Errorf("the promotion of a stopped VM's cache kept the base it read through: %v", err)
 	}
 	if flat, err = s.readNewest(filepath.Join(s.cachesDir(), "pool1")); err != nil {
 		t.Fatal(err)
 	}
+	if left, _ := filepath.Glob(stopped.Path + "*"); len(left) != 0 {
+		t.Errorf("a dropped cache disk left %v", left)
+	}
 
+	// The VM starts again, on a disk over the cache its own became.
 	idle := time.Now().Add(-cacheIdleAge - time.Hour)
-	started := filepath.Join(dir, "started.img")
-	if _, err = s.NewCacheDisk(t.Context(), "pool1", started); err != nil {
+	started := stopped.Path
+	again, err := s.NewCacheDisk(t.Context(), "pool1", started)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if got := head(t, flat.Path, 512); !sameFile(again.Backing, flat.Path) || !bytes.Equal(got, bytes.Repeat([]byte{0xef}, 512)) {
+		t.Errorf("a VM started again has cache disk %+v over a cache that starts %x; want one over the newest cache %s, which holds what the VM wrote", again, got[:16], flat.Path)
 	}
 	// The session outlives cacheIdleAge, and ends without promoting.
 	if err = os.Chtimes(flat.Path, idle, idle); err == nil {
 		err = s.Sweep()
 	}
 	if err == nil {
-		err = errors.Join(os.Remove(started), prunePins(started, ""))
+		err = DropCacheDisk(started)
 	}
 	if err == nil {
 		err = s.Sweep()

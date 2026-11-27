@@ -405,10 +405,13 @@ func (e *engine) startLocked(ctx context.Context, key string) (err error) {
 			return fmt.Errorf("vm runtime: root disk: %w", err)
 		}
 	}
-	if rec.Cache.Path != "" {
-		if err = e.cfg.Images.UnshareCache(ctx, rec.Cache); err != nil {
-			return fmt.Errorf("vm runtime: cache disk: %w", err)
-		}
+	if m, ok := cacheMount(rec.Mounts); ok && rec.Cache.Path == "" {
+		rec.Cache, err = e.cfg.Images.NewCacheDisk(ctx, cachePool(m), e.path(key, cacheDisk))
+	} else if ok {
+		err = e.cfg.Images.UnshareCache(ctx, rec.Cache)
+	}
+	if err != nil {
+		return fmt.Errorf("vm runtime: cache disk: %w", err)
 	}
 	// A cold start ends any companion and takes the current browser image's
 	// disk, which a server update or the first build may have brought.

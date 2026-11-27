@@ -71,6 +71,12 @@ func (s *Store) NewCacheDisk(ctx context.Context, pool, path string) (Disk, erro
 	return Disk{Path: path, Format: FormatRaw}, nil
 }
 
+// DropCacheDisk removes the cache disk at path and the link to the cache it
+// was made over. A snapshot SnapshotCache took of it stays whole.
+func DropCacheDisk(path string) error {
+	return errors.Join(removeIfExists(path), prunePins(path, ""))
+}
+
 func validPool(pool string) bool {
 	return pool != "" && filepath.Base(pool) == pool && !strings.HasPrefix(pool, ".")
 }
@@ -118,8 +124,9 @@ func linkNewest(dir, name string) error {
 }
 
 // SnapshotCache links a stopped VM's cache disk, and a qcow2 one's base,
-// into the store for PromoteCache, so the VM may be deleted meanwhile. A VM
-// that starts again first takes a disk of its own with UnshareCache.
+// into the store for PromoteCache, so the disk may be deleted meanwhile. A
+// VM that starts again on that disk first takes one of its own with
+// UnshareCache.
 func (s *Store) SnapshotCache(disk Disk) (string, error) {
 	work, err := os.MkdirTemp(s.tmpDir(), fmt.Sprintf("snapshot-%d-", time.Now().UnixNano()))
 	if err != nil {
