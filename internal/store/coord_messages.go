@@ -46,7 +46,7 @@ func (d *DB) ListRunMessages(ctx context.Context, f RunMessageFilter) (*RunMessa
 	limit := normalizeCollaborationLimit(f.Limit)
 	query := `SELECT m.rowid, m.id, m.workspace_id, m.from_run, m.to_run, m.body, m.kind,
 			m.correlation_id, m.idempotency_key, m.delivery_token, m.created_at, m.delivered_at,
-			m.acked_at, m.retired_at, report.outcome, report.summary, report.next_action
+			m.acked_at, m.retired_at, report.outcome, report.summary, report.next_action, report.body
 		FROM run_messages m
 		LEFT JOIN coord_reports report ON m.kind = 'message'
 			AND report.id = m.correlation_id AND report.run_id = m.from_run
@@ -135,11 +135,12 @@ func scanListedRunMessage(row interface{ Scan(...any) error }) (*ListedRunMessag
 		createdAt                       int64
 		deliveredAt, ackedAt, retiredAt *int64
 		outcome, summary, nextAction    sql.NullString
+		reportBody                      sql.NullString
 	)
 	if err := row.Scan(&m.ID, &m.WorkspaceID, &m.FromRun, &m.ToRun, &m.Body,
 		&m.Kind, &m.CorrelationID, &m.IdempotencyKey, &m.DeliveryToken,
 		&createdAt, &deliveredAt, &ackedAt, &retiredAt,
-		&outcome, &summary, &nextAction); err != nil {
+		&outcome, &summary, &nextAction, &reportBody); err != nil {
 		return nil, err
 	}
 	m.CreatedAt = decodeTime(createdAt)
@@ -149,7 +150,7 @@ func scanListedRunMessage(row interface{ Scan(...any) error }) (*ListedRunMessag
 	if outcome.Valid {
 		m.Report = &CoordReport{
 			ID: m.CorrelationID, RunID: m.FromRun, Outcome: CoordOutcome(outcome.String),
-			Summary: summary.String, NextAction: nextAction.String,
+			Summary: summary.String, NextAction: nextAction.String, Body: reportBody.String,
 		}
 	}
 	return &m, nil

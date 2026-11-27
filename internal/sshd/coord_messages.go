@@ -111,7 +111,7 @@ func (s *Server) coordMessagesList(ctx context.Context, member domain.MemberID, 
 	if err := s.redactWaitWakes(ctx, member, page.Items); err != nil {
 		return nil, rpcError(err)
 	}
-	return protocol.CoordMessagesPageFromStore(page), nil
+	return protocol.CoordMessagesPageFromStore(page, p.ReportBodies), nil
 }
 
 // waitWake reports whether m is a wait's wake: a session's message to
