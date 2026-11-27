@@ -51,7 +51,7 @@ const (
 	HooksNone Hooks = iota
 	// HooksByHand: Aether ships the hooks, and the member installs them.
 	HooksByHand
-	// HooksManaged: a coordinated Standard launch with a task loads them.
+	// HooksManaged: a coordinated Standard launch loads them.
 	HooksManaged
 )
 
@@ -64,7 +64,7 @@ func WakeRefusal(agent string, mode domain.LaunchMode) error {
 		return nil
 	}
 	if p.EnhancedSupport() == EnhancedNone {
-		return fmt.Errorf("%s in Standard mode has no idle wake, and it has no Enhanced mode; start it as a Background session", agent)
+		return fmt.Errorf("%s in Standard mode has no idle wake, and it has no Enhanced mode; as a subsession it runs only in Background, and a session that waits for mail needs another agent", agent)
 	}
 	return fmt.Errorf("%s in Standard mode has no idle wake; start it in Enhanced", agent)
 }
