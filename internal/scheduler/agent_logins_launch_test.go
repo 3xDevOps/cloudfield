@@ -582,9 +582,50 @@ func TestADefaultLoginWithNoSignInIsPassedOver(t *testing.T) {
 	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI, ""); err != nil || got != work.Login {
 		t.Fatalf("Ada's start with a default login that never signed in = %q, %v; want work", got, err)
 	}
+	// Claude Code signs in through ~/.claude/settings.json too, in ways
+	// Cloudfield does not read: such a default login is not passed over.
+	for _, settings := range []string{`{"apiKeyHelper":"/usr/local/bin/key-helper"}`, `{"env":{"CLAUDE_CODE_USE_BEDROCK":"1"}}`, `{"env":{"ANTHROPIC_API_KEY":"test-not-a-key"}}`} {
+		writeHomeFile(t, e.adaHome, ".claude/settings.json", settings)
+		if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI, ""); err != nil || got != "" {
+			t.Fatalf("Ada's start with settings %s = %q, %v; want the default login, her first", settings, got, err)
+		}
+	}
+	writeHomeFile(t, e.adaHome, ".claude/settings.json", `{"env":{"CLAUDE_CODE_USE_BEDROCK":"0"}}`)
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI, ""); err != nil || got != work.Login {
+		t.Fatalf("Ada's start with Bedrock off in her settings = %q, %v; want work", got, err)
+	}
 	writeHomeFile(t, e.adaHome, ".claude/.credentials.json", workLogin)
 	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI, ""); err != nil || got != "" {
 		t.Fatalf("Ada's start once her default login signed in = %q, %v; want the default login, her first", got, err)
+	}
+}
+
+// A default login that holds no sign-in is no fallback once anyone the
+// launch involves keeps an added login, though its owner keeps none: its
+// usage reads as unknown, which is no sign of a login. Where nobody keeps
+// one it is judged as before logins existed.
+func TestADefaultLoginWithNoSignInIsNoFallback(t *testing.T) {
+	e := newLoginShareEnv(t)
+	ctx := t.Context()
+	if err := os.Remove(filepath.Join(e.adaHome, ".claude.json")); err != nil {
+		t.Fatal(err)
+	}
+	installClaude(t, e.adaHome)
+	writeHomeFile(t, e.ownerHome, ".claude/.credentials.json", workLogin)
+	if _, err := e.db.ShareAccount(ctx, e.owner.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	ada := domain.AccountOf(e.member.ID)
+	if ok, err := e.sched.FallbackLaunchable(ctx, e.member.ID, e.owner.ID, ada, "claude", domain.LaunchTUI, ""); err != nil || !ok {
+		t.Fatalf("Ada's signed-out default as a fallback where nobody added a login = %v, %v; want it, as before", ok, err)
+	}
+	e.addLogin(t, e.owner.ID, "lgn-work000000", "work", workLogin)
+	if ok, err := e.sched.FallbackLaunchable(ctx, e.member.ID, e.owner.ID, ada, "claude", domain.LaunchTUI, ""); err != nil || ok {
+		t.Fatalf("Ada's signed-out default as a fallback from Grace's account, which keeps an added login = %v, %v; want refused", ok, err)
+	}
+	writeHomeFile(t, e.adaHome, ".claude/.credentials.json", workLogin)
+	if ok, err := e.sched.FallbackLaunchable(ctx, e.member.ID, e.owner.ID, ada, "claude", domain.LaunchTUI, ""); err != nil || !ok {
+		t.Fatalf("Ada's signed-in default as a fallback = %v, %v; want it", ok, err)
 	}
 }
 

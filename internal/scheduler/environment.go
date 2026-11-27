@@ -932,13 +932,25 @@ func (s *Scheduler) DefaultMode(ctx context.Context, member, account domain.Memb
 // its installation on requested's other logins too. It never moves a launch
 // that relied on requested's installation to an account where the agent is
 // missing, nor onto a login a live container holds under another uid:gid. An added login is judged by
-// its own file, never its owner's default login. It reads member homes,
+// its own file, never its owner's default login. Once member, requested or
+// the login's owner keeps an added login, a default login that holds no
+// sign-in at all is never a fallback: its usage reads as unknown, which is
+// no sign of a login. It reads member homes,
 // login directories and the scheduler's own state only, never the runtime or
 // the vendor.
 func (s *Scheduler) FallbackLaunchable(ctx context.Context, member, requested domain.MemberID, login domain.Account, harnessName string, mode domain.LaunchMode, permission domain.Permission) (bool, error) {
 	account := login.Member
 	if refusal, err := s.loginRefusal(ctx, member, login, harnessName, permission == domain.PermissionIsolated); err != nil || refusal != "" || s.cfg.Homes == nil {
 		return err == nil && refusal == "", err
+	}
+	if !login.Login.Added() {
+		added, err := s.keepsAddedLogin(ctx, harnessName, member, requested)
+		if err != nil {
+			return false, err
+		}
+		if added && s.defaultSignInMissing(account, harnessName) {
+			return false, nil
+		}
 	}
 	profile, argvs, err := s.launchProfile(ctx, member, account, harnessName)
 	if err != nil {

@@ -220,15 +220,41 @@ func (s *Scheduler) loginRefusal(ctx context.Context, member domain.MemberID, lo
 	}
 	// Beside added logins, a default login that holds no sign-in at all
 	// would start the agent signed out while another login could serve.
-	logins, err := s.cfg.Store.ListAgentLogins(ctx, login.Member, harnessName)
-	if err != nil || !slices.ContainsFunc(logins, func(l domain.AgentLogin) bool { return l.ID.Added() }) {
+	if added, err := s.keepsAddedLogin(ctx, harnessName, login.Member); err != nil || !added {
 		return "", err
 	}
-	// One whose files cannot be read is left to the checks above, as before.
-	if identity, idErr := s.cfg.Homes.DefaultIdentity(login.Member, harnessName); idErr == nil && identity.Kind == "" {
+	if s.defaultSignInMissing(login.Member, harnessName) {
 		return "it holds no sign-in", nil
 	}
 	return "", nil
+}
+
+// keepsAddedLogin reports whether any of members keeps an added login of
+// agent.
+func (s *Scheduler) keepsAddedLogin(ctx context.Context, agent string, members ...domain.MemberID) (bool, error) {
+	for _, member := range members {
+		logins, err := s.cfg.Store.ListAgentLogins(ctx, member, agent)
+		if err != nil {
+			return false, err
+		}
+		if slices.ContainsFunc(logins, func(l domain.AgentLogin) bool { return l.ID.Added() }) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// defaultSignInMissing reports whether member's default login of agent
+// holds no sign-in at all: no login file Cloudfield reads, and no
+// apiKeyHelper or variable that signs agent in set in
+// ~/.claude/settings.json. One whose files cannot be read is not reported.
+func (s *Scheduler) defaultSignInMissing(member domain.MemberID, agent string) bool {
+	identity, err := s.cfg.Homes.DefaultIdentity(member, agent)
+	if err != nil || identity.Kind != "" {
+		return false
+	}
+	settings, err := s.cfg.Homes.ClaudeSettings(member)
+	return err == nil && !settings.APIKeyHelper && !signsIn(settings.Env, agent, "")
 }
 
 // addedLoginRefusal is loginRefusal for an added login: it must still
