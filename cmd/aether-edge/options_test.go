@@ -676,6 +676,15 @@ func TestOlderImageServes(t *testing.T) {
 	if err := os.Symlink(data, alias); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(dir, "x", "y"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "x", "data"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "x", "y"), filepath.Join(dir, "up")); err != nil {
+		t.Fatal(err)
+	}
 	newer := map[string]string{
 		"CLOUDFIELD_EDGE_SIGNIN_ORIGIN": "https://auth2.example.net", "CLOUDFIELD_EDGE_RELAY_ORIGIN": "https://edge2.example.net",
 		"AETHER_EDGE_RETIRED_PAIRS":    "https://auth.example.test https://edge.example.test https://edge2.example.net",
@@ -705,6 +714,8 @@ func TestOlderImageServes(t *testing.T) {
 		{"data directory aligned", map[string]string{"CLOUDFIELD_EDGE_DATA": "/srv/edge", "AETHER_EDGE_DATA": "/srv/edge/"}, nil, ""},
 		{"data directory flag", map[string]string{"CLOUDFIELD_EDGE_DATA": "/srv/edge"}, []string{"--data", "/srv/edge"}, ""},
 		{"data directory under another path", map[string]string{"CLOUDFIELD_EDGE_DATA": data, "AETHER_EDGE_DATA": alias}, nil, ""},
+		{"data directory behind a symlink and ..", map[string]string{"CLOUDFIELD_EDGE_DATA": filepath.Join(dir, "x", "data"), "AETHER_EDGE_DATA": dir + "/up/../data"}, nil,
+			"this edge uses the data directory " + filepath.Join(dir, "x", "data") + " from CLOUDFIELD_EDGE_DATA"},
 		{"flag wins in both images", map[string]string{"AETHER_EDGE_SIGNIN_ORIGIN": "https://auth.example.test"},
 			[]string{"--signin-origin", "https://auth2.example.net"}, ""},
 	} {

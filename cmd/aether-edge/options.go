@@ -510,9 +510,11 @@ func readSecretFile(path string) (string, error) {
 }
 
 // sameDir reports whether a and b name one directory: the same path, or
-// two paths of one existing directory.
+// two paths of one existing directory. Both are cleaned first, as
+// filepath.Join cleans the database path the edge opens.
 func sameDir(a, b string) bool {
-	if filepath.Clean(a) == filepath.Clean(b) {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if a == b {
 		return true
 	}
 	ai, errA := os.Stat(a)
