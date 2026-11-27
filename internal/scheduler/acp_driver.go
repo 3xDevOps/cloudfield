@@ -767,8 +767,10 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 	case oneShot && effortErr != nil:
 		d.endOneShot(entry, false, agentstatus.Report{State: agentstatus.Idle, Reason: "effort not set: " + effortErr.Error()})
 	case how == openContinue:
+	case oneShot && how == openSent && sess.State().TurnInFlight:
+		// The continuation's turn runs on; its end ends the run.
 	case oneShot && how == openSent:
-		// Its turn's end, or a member's prompt, decides how it ends.
+		d.endSent(ctx, entry, sess, run)
 	case oneShot && adopt != nil && sess.State().TurnInFlight:
 		// The adopted turn runs on; its end ends the run.
 	case oneShot:

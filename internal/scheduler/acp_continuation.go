@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 
 	"github.com/3xDevOps/cloudfield/internal/acphost"
 	"github.com/3xDevOps/cloudfield/internal/agentstatus"
@@ -133,5 +134,46 @@ func (d *acpDriver) continuationSkipped(sess *acphost.Session, entry *supervised
 	}
 	if err := sess.Notice("info", "Continuation prompt not sent", "The session moved to "+to+"; the continuation prompt was not sent because the conversation went on without it."); err != nil {
 		slog.Warn("scheduler: record the skipped continuation", "run", entry.runID, "error", err)
+	}
+}
+
+// endSent ends a Background run that a previous server process found
+// sending its continuation and whose agent is in no turn, as its log shows:
+// a continuation's turn that ended ends the run as a restart reads any
+// turn's end, one cut short is resumed, and with no trace of it the run
+// ends saying the continuation may not have arrived.
+func (d *acpDriver) endSent(ctx context.Context, entry *supervised, sess *acphost.Session, run *domain.Run) {
+	d.s.mu.Lock()
+	swap := entry.accountSwap
+	d.s.mu.Unlock()
+	if swap == nil {
+		return
+	}
+	sent := promptSeq(sess.Log(), swap.Continuation)
+	switch {
+	case sent == 0:
+		reason := "the session moved to " + d.s.accountLabel(ctx, swap.to(), run.Harness) + "; the continuation prompt may not have been delivered"
+		d.endOneShot(entry, false, agentstatus.Report{State: agentstatus.Idle, Reason: reason})
+	case acphost.LastItem(sess.Log(), acphost.KindTurnEnd).Seq < sent:
+		d.startOneShot(ctx, entry, sess, true, oneShotResume)
+	default:
+		d.startOneShot(ctx, entry, sess, false, oneShotResume)
+	}
+}
+
+// promptSeq is the Seq of the latest prompt log records with text, 0 for
+// none.
+func promptSeq(log *acphost.Log, text string) int64 {
+	for before := int64(math.MaxInt64); ; {
+		items, err := log.ReadBefore(before, 512)
+		if err != nil || len(items) == 0 {
+			return 0
+		}
+		for i := len(items) - 1; i >= 0; i-- {
+			if it := items[i]; it.Kind == acphost.KindMessage && it.Message.Role == "user" && it.Message.Text == text {
+				return it.Seq
+			}
+		}
+		before = items[0].Seq
 	}
 }
