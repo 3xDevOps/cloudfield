@@ -77,7 +77,8 @@ async function readBack(workspaceID: string, floor: number): Promise<void> {
 export function useLaneHistory(workspaceIDs: string[], floor: number, budget: number) {
   useEffect(() => useStore.getState().holdLanes(), [])
   const held = useStore((s) => s.laneBudget)
-  useEffect(() => useStore.getState().raiseLaneBudget(budget), [budget])
+  // A reset drops the budget with the history; the mounted view asks for its own again.
+  useEffect(() => useStore.getState().raiseLaneBudget(budget), [budget, held])
   const key = workspaceIDs.join('\n')
   // A server reset or a dropped hold clears history under a mounted view; read it back.
   const missing = useStore((s) => workspaceIDs.some((id) => !s.laneHistory[id]))
@@ -99,11 +100,12 @@ export function useLaneHistory(workspaceIDs: string[], floor: number, budget: nu
       events: histories.flatMap((h) => h.events),
       loading: histories.some((h) => h.loading),
       error: histories.find((h) => h.error)?.error ?? null,
-      capped: histories.some((h) => h.capped),
+      // Only history this window still lacks: a narrower window the held events cover has nothing to load.
+      capped: histories.some((h) => h.capped && h.floor > floor),
       more: () => useStore.getState().raiseLaneBudget(useStore.getState().laneBudget + historyStep),
       retry,
     }
-  }, [key, histories, retry])
+  }, [key, histories, retry, floor])
 }
 
 /** `resident` reads the session's live index; a session's store entry outlives its stream, so only an open stream counts. */

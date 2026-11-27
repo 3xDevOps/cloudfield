@@ -1005,6 +1005,7 @@ describe('lanes view', () => {
     expect(await screen.findByText('Older history not loaded')).toBeDefined()
     expect(api.workspaceTimeline).toHaveBeenCalledTimes(1)
     await userEvent.click(screen.getByRole('button', { name: 'Load more' }))
+    expect(useStore.getState().laneBudget).toBe(historyBudget + 10_000)
     // While the read runs the control stays, says so, and cannot start a second read.
     expect((await screen.findByRole('button', { name: 'Loading…' }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByText('Older history not loaded')).toBeDefined()

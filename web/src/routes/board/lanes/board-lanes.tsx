@@ -134,7 +134,7 @@ export function BoardLanes({ agentNames }: { agentNames: Record<string, string> 
   const history = useLaneHistory(workspaces, Math.floor(timeWindow.start / minute) * minute, historyBudgetFor(span))
   // Load more was pressed and its read has not ended.
   const [more, setMore] = useState(false)
-  useEffect(() => { if (!history.loading || history.error) setMore(false) }, [history.loading, history.error])
+  useEffect(() => { if (!history.loading) setMore(false) }, [history.loading])
   const loadingMore = more && history.loading
   const { agents, toggle: toggleAgents, retry: retryAgents } = useLaneAgents()
   const [open, setOpen] = useState<ReadonlyMap<string, boolean>>(() => new Map())
@@ -142,7 +142,8 @@ export function BoardLanes({ agentNames }: { agentNames: Record<string, string> 
   const changes = useMemo(() => statusChanges(history.events), [history.events])
   const floor = useCallback((id: string) => {
     const h = history.byWorkspace.get(id)
-    return !h || h.error ? -Infinity : h.floor
+    // A read that failed before any history arrived says nothing; one that failed part-way keeps the boundary it reached.
+    return !h || (h.error && h.floor === Infinity) ? -Infinity : h.floor
   }, [history.byWorkspace])
   const previousModel = useRef<LanesModel | null>(null)
   const model = useMemo(() => {

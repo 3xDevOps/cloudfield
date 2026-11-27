@@ -110,7 +110,7 @@ export const createLanesSlice: SliceCreator<LanesSlice> = (set, get) => ({
     const events = merged(history.events, [event])
     const drop = events.length - s.laneBudget
     // Dropping the oldest moves the boundary up to the oldest kept, so bars before it read History not loaded.
-    const next = drop > 0 ? { events: events.slice(drop), floor: Date.parse(events[drop].time), olderSeq: events[drop].seq } : { events }
+    const next = drop > 0 ? { events: events.slice(drop), floor: Date.parse(events[drop].time), olderSeq: events[drop].seq, capped: true } : { events }
     const id = event.type === 'coord.message' ? (event.payload as { message_id?: string }).message_id : undefined
     set((state) => ({
       laneHistory: { ...state.laneHistory, [event.workspace_id]: { ...history, ...next } },
