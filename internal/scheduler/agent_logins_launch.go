@@ -134,8 +134,9 @@ func (s *Scheduler) addedLoginMounts(run *domain.Run, launcher domain.MemberID, 
 	env[profile.AccountConfig.Env] = path.Join(home, profile.AccountConfig.Dir)
 	env["ANTHROPIC_CONFIG_DIR"] = path.Join(home, memberhome.AnthropicProfileDir)
 	// The login's own profile is its directory's active one; a workspace
-	// variable naming another would sign Claude Code in with none.
-	delete(env, "ANTHROPIC_PROFILE")
+	// variable or image ENV naming another would sign Claude Code in with
+	// none. Claude Code reads an empty one as unset.
+	env["ANTHROPIC_PROFILE"] = ""
 	return append(mounts, config...), nil
 }
 

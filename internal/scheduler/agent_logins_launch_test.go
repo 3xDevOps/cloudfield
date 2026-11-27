@@ -502,7 +502,7 @@ func TestAnAddedLoginSessionLeavesNoVariableToPay(t *testing.T) {
 	}
 	waitFor(t, "the session's container", func() bool { return e.rt.byName(string(run.ID)) != nil })
 	spec := e.rt.byName(string(run.ID)).spec
-	for _, key := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"} {
+	for _, key := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_PROFILE"} {
 		if v, ok := spec.Env[key]; !ok || v != "" {
 			t.Errorf("%s = %q, set %v; want set empty", key, v, ok)
 		}
