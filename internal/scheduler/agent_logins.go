@@ -80,7 +80,7 @@ func (s *Scheduler) addedLoginProfile(ctx context.Context, member, account domai
 // configuration to copy and no sign-in command.
 func carriesAddedLogin(profile harness.Profile) error {
 	if profile.AccountConfig == nil || profile.LoginCommand == "" {
-		return fmt.Errorf("%w: this server runs %s from an agent definition that names its own executable, which has no place for an added login; use the default login", ErrNoAddedLogins, profile.Name)
+		return fmt.Errorf("%w: this server runs %s from its --agent-definitions entry, whose executable leaves no place for an added login; use the default login, or the server's operator removes executable from that entry, or the entry, to use added logins", ErrNoAddedLogins, profile.Name)
 	}
 	return nil
 }

@@ -431,7 +431,7 @@ func TestAnAgentDefinitionWithItsOwnExecutableCarriesNoAddedLogin(t *testing.T) 
 	e := newLoginShareEnv(t)
 	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
 	e.sched.harnesses["claude"] = HarnessSpec{Executable: "claude", TUIArgs: []string{"claude", "{task}"}, CredentialPaths: []string{".claude/.credentials.json"}}
-	const reason = "no place for an added login"
+	const reason = "from its --agent-definitions entry, whose executable leaves no place for an added login; use the default login, or the server's operator removes executable from that entry"
 	if _, err := e.sched.BeginLoginSignIn(t.Context(), e.member.ID, "claude", "spare"); err == nil || !strings.Contains(err.Error(), reason) {
 		t.Fatalf("a sign-in under the definition: %v; want refused", err)
 	}
