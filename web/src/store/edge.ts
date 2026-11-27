@@ -31,11 +31,12 @@ const generations = new WeakMap<RootStore, number>()
 
 const servesEdge = (state: ReturnType<RootStore['getState']>) => capability(state.capabilities).hasMethod('server.edge')
 
-/** A change of viewer, or of whether the server serves server.edge, clears
- * the slice and keeps every read started before it from landing. */
+/** A change of viewer, of the viewer's role, whose answer differs for a
+ * super admin, or of whether the server serves server.edge, clears the
+ * slice and keeps every read started before it from landing. */
 export function watchEdge(store: RootStore) {
   store.subscribe((state, previous) => {
-    if (state.identityKey === previous.identityKey &&
+    if (state.identityKey === previous.identityKey && state.info?.member.role === previous.info?.member.role &&
       (state.capabilities === previous.capabilities || servesEdge(state) === servesEdge(previous))) return
     generations.set(store, (generations.get(store) ?? 0) + 1)
     if (state.edge !== null || state.edgeError !== null || state.edgeFor !== state.identityKey) state.setEdge(null, state.identityKey)

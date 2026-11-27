@@ -1,7 +1,7 @@
 import type { ServerEdge } from '@/lib/types'
 import { createRootStore } from '@/store'
 import { loadEdge } from '@/store/edge'
-import { fakeApi } from '@/test/fixtures'
+import { fakeApi, serverInfo } from '@/test/fixtures'
 
 const edge: ServerEdge = {
   edge_url: 'https://edge-old.example.test', server_id: 'wqc4lsjvzdzrwq3k5dabdtajwj', access_policy: 'approved-devices',
@@ -132,5 +132,19 @@ it('clears the answer and the error when the method goes away, and lands no read
   store.setState({ capabilities: { gateway: 'local', methods: ['*'], ws: ['events'], local: [] } })
   older.resolve(edge)
   await third
+  expect(store.getState().edge).toBeNull()
+})
+
+it.each([['collaborator', 'super_admin'], ['super_admin', 'collaborator']] as const)('drops the answer and any read from before when the viewer goes from %s to %s', async (from, to) => {
+  const store = seeded()
+  store.setState({ info: { ...serverInfo, member: { ...serverInfo.member, role: from } } })
+  const older = deferred<ServerEdge>()
+  const client = fakeApi({ serverEdge: vi.fn<() => Promise<ServerEdge>>().mockResolvedValueOnce(edge).mockReturnValueOnce(older.promise) })
+  await loadEdge(store, client)
+  const second = loadEdge(store, client)
+  store.setState({ info: { ...serverInfo, member: { ...serverInfo.member, role: to } } })
+  expect(store.getState().edge).toBeNull()
+  older.resolve(edge)
+  await second
   expect(store.getState().edge).toBeNull()
 })

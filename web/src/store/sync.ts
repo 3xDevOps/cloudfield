@@ -1026,6 +1026,11 @@ export function connect(store: RootStore, client: Api = api): () => void {
     void load()
   })
 
+  // server.edge answers a super admin with more than a member; watchEdge drops the answer when the role changes.
+  const stopRole = store.subscribe((state, previous) => {
+    if (!signal.aborted && state.info?.member.role !== previous.info?.member.role) coalesce(store, 'edge', () => loadEdge(store, client).catch(ignore))
+  })
+
   // Proposing and cancelling a merge publish no event, so while a code or proposal is open it is polled.
   const mergeTimer = setInterval(() => {
     const s = store.getState()
@@ -1076,6 +1081,7 @@ export function connect(store: RootStore, client: Api = api): () => void {
   return () => {
     lifecycle.abort()
     stopWake()
+    stopRole()
     document.removeEventListener('visibilitychange', onHide)
     window.removeEventListener('pagehide', saveNow)
     if (saveTimer) clearTimeout(saveTimer)
