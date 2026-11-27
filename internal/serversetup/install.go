@@ -38,20 +38,20 @@ func Install(unitPath, configPath string, values map[string]string, force bool) 
 	if err := os.WriteFile(res.SlicePath, []byte(DefaultSlice()), 0o644); err != nil {
 		return res, fmt.Errorf("serversetup: write %s: %w", res.SlicePath, err)
 	}
-	if _, err := os.Stat(configPath); err == nil {
-		if !force {
-			res.ConfigSkipped = true
-			return res, nil
+	err := WithConfigLock(configPath, func(resolved string, write func(map[string]string) error) error {
+		if _, err := os.Stat(resolved); err == nil {
+			if !force {
+				res.ConfigSkipped = true
+				return nil
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("serversetup: stat %s: %w", configPath, err)
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return res, fmt.Errorf("serversetup: stat %s: %w", configPath, err)
-	}
-	config := ServiceDefaults()
-	maps.Copy(config, values)
-	if err := WriteConfig(configPath, config); err != nil {
-		return res, err
-	}
-	return res, nil
+		config := ServiceDefaults()
+		maps.Copy(config, values)
+		return write(config)
+	})
+	return res, err
 }
 
 // writeConfig renders values into the config file at path, creating its

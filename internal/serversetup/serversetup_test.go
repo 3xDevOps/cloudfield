@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
@@ -455,5 +456,40 @@ func TestSliceOutdated(t *testing.T) {
 				t.Errorf("SliceOutdated = %v, %v; want %v, nil", got, err, tc.want)
 			}
 		})
+	}
+}
+
+// A config written while install waits for the config lock counts as
+// existing: install keeps it without --force.
+func TestInstallKeepsAConfigWrittenWhileItWaits(t *testing.T) {
+	dir := t.TempDir()
+	unitPath := filepath.Join(dir, "aether-server.service")
+	configPath := filepath.Join(dir, "server.conf")
+	inside, release, wrote := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		wrote <- WithConfigLock(configPath, func(_ string, write func(map[string]string) error) error {
+			close(inside)
+			<-release
+			return write(map[string]string{"addr": ":2300"})
+		})
+	}()
+	<-inside
+	installed := make(chan error, 1)
+	var res InstallResult
+	go func() {
+		var err error
+		res, err = Install(unitPath, configPath, map[string]string{"addr": ":9999"}, false)
+		installed <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	if err := <-wrote; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-installed; err != nil {
+		t.Fatal(err)
+	}
+	if values, err := Load(configPath); err != nil || values["addr"] != ":2300" || !res.ConfigSkipped {
+		t.Fatalf("config %v, %v, skipped %v: want the config written meanwhile kept", values, err, res.ConfigSkipped)
 	}
 }
