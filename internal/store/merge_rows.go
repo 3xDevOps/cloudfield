@@ -23,7 +23,7 @@ func mergeRows(ctx context.Context, tx *sql.Tx, survivor, absorbed domain.Member
 		{"account shares", `DELETE FROM account_shares WHERE grantee_member_id = ?1`},
 		{"run steerers", `UPDATE OR IGNORE run_steerers SET member_id = ?2 WHERE member_id = ?1`},
 		{"run steerers", `DELETE FROM run_steerers WHERE member_id = ?1
-			OR (member_id = ?2 AND run_id IN (SELECT id FROM runs WHERE member_id IN (?1, ?2)))`},
+			OR (member_id = ?2 AND run_id IN (SELECT id FROM visible_runs WHERE member_id IN (?1, ?2)))`},
 		{"account links", `DELETE FROM identity_invitations WHERE consumed_at IS NULL AND member_id IN (?1, ?2)`},
 		{"identities", `UPDATE member_identities SET member_id = ?2 WHERE member_id = ?1`},
 		{"devices", `UPDATE member_devices SET member_id = ?2 WHERE member_id = ?1`},

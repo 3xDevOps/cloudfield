@@ -136,6 +136,12 @@ func (s *Scheduler) reserveCapacity(ctx context.Context) (func(), error) {
 	return s.reserve(ctx, &memoryClaim{bytes: startupMemoryBytes})
 }
 
+// reserveSpare admits a spare session only into memory nothing else asks
+// for: it frees none, and leaves room for the launch that does not claim it.
+func (s *Scheduler) reserveSpare(ctx context.Context) (func(), error) {
+	return s.tryReserveCapacity(ctx, &memoryClaim{bytes: spareMemoryBytes})
+}
+
 // reserveWake admits the wake of a sleeping container: a saved VM must fit
 // the memory its restore loads back.
 func (s *Scheduler) reserveWake(ctx context.Context, cid runtime.ID) (func(), error) {
@@ -204,6 +210,10 @@ func (s *Scheduler) reserve(ctx context.Context, claim *memoryClaim) (func(), er
 	case errors.Is(err, ErrDiskFull):
 		s.reclaimDisk(ctx, "")
 		return s.tryReserveCapacity(ctx, claim)
+	case errors.As(err, &short) && s.dropSpares(ctx, true):
+		if release, err = s.tryReserveCapacity(ctx, claim); errors.As(err, &short) && s.saveIdleVMs(ctx, short.need+short.claimed) {
+			return s.tryReserveCapacity(ctx, claim)
+		}
 	case errors.As(err, &short) && s.saveIdleVMs(ctx, short.need+short.claimed):
 		return s.tryReserveCapacity(ctx, claim)
 	}

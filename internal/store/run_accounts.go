@@ -50,7 +50,7 @@ func (d *DB) SetRunAccount(ctx context.Context, id domain.RunID, account domain.
 	)
 	err = tx.QueryRowContext(ctx,
 		`SELECT account_member_id, member_id, COALESCE(requested_account_member_id, ''), COALESCE(started_at, created_at)
-		 FROM runs WHERE id = ?`, id).Scan(&current, &owner, &requested, &launched)
+		 FROM visible_runs WHERE id = ?`, id).Scan(&current, &owner, &requested, &launched)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, ErrNotFound
 	}

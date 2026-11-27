@@ -244,6 +244,9 @@ type Scheduler struct {
 	// memoryClaims is guarded by capacityGate.
 	memoryClaims []*memoryClaim
 
+	// members is what the spare sessions follow of each member, guarded by mu.
+	members map[domain.MemberID]*memberSpare
+
 	// vmDiskMu serializes the disk guard's checks. vmDiskBase is each VM's
 	// disk use when the filesystem first fell below the reserve, held while
 	// vmDiskLow until it recovers.
@@ -484,6 +487,8 @@ type supervised struct {
 	// restart need not reconstruct an old image/profile choice.
 	home            string
 	userReservation *credentialUserReservation
+	// spare is set while the run is a spare session no launch has claimed.
+	spare *spare
 	// exitObserved / exitCode are the durable Wait result, persisted
 	// before finalize so a crash can resume the original exit.
 	exitObserved bool
@@ -870,6 +875,10 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	if err != nil {
 		return recoveryError(fmt.Errorf("scheduler: subscribe to usage limits: %w", err))
 	}
+	if err := s.removeLeftoverSpares(ctx); err != nil {
+		_ = limits.Close()
+		return recoveryError(err)
+	}
 	if err := s.recoverRuns(ctx); err != nil {
 		_ = limits.Close()
 		return recoveryError(err)
@@ -928,6 +937,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 		case <-sweep.C:
 			s.checkStalls(ctx)
 			s.sleepIdle(ctx)
+			s.sweepSpares(ctx)
 			s.refreshActivities(ctx)
 			s.finishOverdueReports()
 			s.sweepRetained(ctx)

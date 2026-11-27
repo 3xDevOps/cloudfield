@@ -266,6 +266,15 @@ func (s *Scheduler) Launch(ctx context.Context, workspace domain.WorkspaceID, me
 // LaunchWithOptions captures the base before the run row is created, so a
 // failed capture leaves no durable or in-memory run state.
 func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode, opts domain.LaunchOptions) (*domain.Run, error) {
+	launched := s.launchBegan(member)
+	run, err := s.launch(ctx, workspace, member, account, task, harness, mode, opts, nil)
+	launched(run, err == nil && spareable(run, opts))
+	return run, err
+}
+
+// launch makes a member's session, or with sp the spare session a later
+// launch of theirs may claim.
+func (s *Scheduler) launch(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode, opts domain.LaunchOptions, sp *spare) (*domain.Run, error) {
 	for _, id := range append([]domain.WorkspaceID{workspace}, opts.ExtraWorkspaces...) {
 		lock := s.workspaceLock(id)
 		lock.RLock()
@@ -316,7 +325,11 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	if err = s.checkLogin(ctx, workspace, member, account, harness, profile, mode); err != nil {
 		return nil, err
 	}
-	release, err := s.reserveCapacity(ctx)
+	reserve := s.reserveCapacity
+	if sp != nil {
+		reserve = s.reserveSpare
+	}
+	release, err := reserve(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -392,9 +405,15 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 		Fallback:        opts.Fallback,
 		Extras:          extras.repos,
 		LinearIssueURL:  opts.LinearIssueURL,
+		Spare:           sp != nil,
 	}
 	if opts.RequestedAccount != account {
 		run.RequestedAccountMemberID = opts.RequestedAccount
+	}
+	if sp == nil && spareable(run, opts) {
+		if claimed, claimErr := s.claimSpare(ctx, run, ws, actor, profile, opts); claimed != nil || claimErr != nil {
+			return claimed, claimErr
+		}
 	}
 	if err := createRun(ctx, s.cfg.Store, run, reservedID); err != nil {
 		if reservedID != "" {
@@ -408,6 +427,9 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	for i := range run.Extras {
 		run.Extras[i].Key = domain.RepoKey(run.ID, i+1)
 	}
+	if sp != nil {
+		s.hideSpare(sp, run.ID)
+	}
 	if opts.Created != nil {
 		opts.Created(run.ID)
 	}
@@ -416,7 +438,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	if opts.Admitted != nil {
 		opts.Admitted()
 	}
-	if err := s.provision(ctx, run, ws, actor, argv, profile); err != nil {
+	if err := s.provision(ctx, run, ws, actor, argv, profile, sp); err != nil {
 		return nil, err
 	}
 	return s.freshen(ctx, run), nil
@@ -425,8 +447,9 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 // provision registers the run in s.runs before any provisioning I/O so a
 // concurrent Kill takes the supervised path instead of transitioning the row
 // underneath the in-flight launch.
-func (s *Scheduler) provision(ctx context.Context, run *domain.Run, ws *domain.Workspace, actor *domain.Member, argv []string, profile harness.Profile) error {
+func (s *Scheduler) provision(ctx context.Context, run *domain.Run, ws *domain.Workspace, actor *domain.Member, argv []string, profile harness.Profile, sp *spare) error {
 	entry := &supervised{
+		spare:       sp,
 		runID:       run.ID,
 		workspaceID: run.WorkspaceID,
 		task:        run.Task,
@@ -506,7 +529,14 @@ func (s *Scheduler) provisionSteps(ctx context.Context, entry *supervised, run *
 			return fmt.Errorf("check the account share: %w", err)
 		}
 	}
-	s.updateHarness(run, plan, profile)
+	if entry.spare != nil {
+		// Before the start adds what is the run's own to the plan.
+		if entry.spare.spec, err = s.specDigest(ctx, run, actor, plan); err != nil {
+			return err
+		}
+	} else {
+		s.updateHarness(run, plan, profile)
+	}
 	// Recorded before coordination is provisioned, because the co-author
 	// list written there already leaves this address out: the agent's own
 	// commits carry it, so telling the agent to credit it would make it

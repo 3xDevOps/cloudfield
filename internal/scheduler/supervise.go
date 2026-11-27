@@ -580,7 +580,7 @@ func (s *Scheduler) checkStalls(ctx context.Context) {
 	now := time.Now().UTC()
 	for _, e := range entries {
 		s.mu.Lock()
-		live := s.runs[e.runID] == e && !e.finalizing && !e.sleeping && e.asleepSince.IsZero()
+		live := s.runs[e.runID] == e && !e.finalizing && !e.sleeping && e.asleepSince.IsZero() && e.spare == nil
 		paused, status, started, acp := e.paused, e.status, e.startedAt, e.acp
 		if e.quietFrom.After(started) {
 			started = e.quietFrom

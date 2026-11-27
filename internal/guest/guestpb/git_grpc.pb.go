@@ -23,19 +23,20 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Git_Setup_FullMethodName     = "/aether.guest.v1.Git/Setup"
-	Git_Watch_FullMethodName     = "/aether.guest.v1.Git/Watch"
-	Git_Flush_FullMethodName     = "/aether.guest.v1.Git/Flush"
-	Git_Objects_FullMethodName   = "/aether.guest.v1.Git/Objects"
-	Git_Patch_FullMethodName     = "/aether.guest.v1.Git/Patch"
-	Git_Head_FullMethodName      = "/aether.guest.v1.Git/Head"
-	Git_Stage_FullMethodName     = "/aether.guest.v1.Git/Stage"
-	Git_Install_FullMethodName   = "/aether.guest.v1.Git/Install"
-	Git_Tree_FullMethodName      = "/aether.guest.v1.Git/Tree"
-	Git_ReadFile_FullMethodName  = "/aether.guest.v1.Git/ReadFile"
-	Git_WriteFile_FullMethodName = "/aether.guest.v1.Git/WriteFile"
-	Git_FileDiff_FullMethodName  = "/aether.guest.v1.Git/FileDiff"
-	Git_Sync_FullMethodName      = "/aether.guest.v1.Git/Sync"
+	Git_Setup_FullMethodName        = "/aether.guest.v1.Git/Setup"
+	Git_Watch_FullMethodName        = "/aether.guest.v1.Git/Watch"
+	Git_Flush_FullMethodName        = "/aether.guest.v1.Git/Flush"
+	Git_Objects_FullMethodName      = "/aether.guest.v1.Git/Objects"
+	Git_Patch_FullMethodName        = "/aether.guest.v1.Git/Patch"
+	Git_Head_FullMethodName         = "/aether.guest.v1.Git/Head"
+	Git_Stage_FullMethodName        = "/aether.guest.v1.Git/Stage"
+	Git_Install_FullMethodName      = "/aether.guest.v1.Git/Install"
+	Git_Tree_FullMethodName         = "/aether.guest.v1.Git/Tree"
+	Git_ReadFile_FullMethodName     = "/aether.guest.v1.Git/ReadFile"
+	Git_WriteFile_FullMethodName    = "/aether.guest.v1.Git/WriteFile"
+	Git_FileDiff_FullMethodName     = "/aether.guest.v1.Git/FileDiff"
+	Git_Sync_FullMethodName         = "/aether.guest.v1.Git/Sync"
+	Git_RenameBranch_FullMethodName = "/aether.guest.v1.Git/RenameBranch"
 )
 
 // GitClient is the client API for Git service.
@@ -84,6 +85,10 @@ type GitClient interface {
 	// Sync serves a live overlay's endpoint at the checkout; the first chunk
 	// names the checkout and every chunk carries the overlay's stream.
 	Sync(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SyncChunk, SyncChunk], error)
+	// RenameBranch renames the checkout's branch from one name to another,
+	// which HEAD follows, and sets aether.branch to the new one, as the
+	// checkout's owner. A failed call leaves both as they were.
+	RenameBranch(ctx context.Context, in *RenameBranchRequest, opts ...grpc.CallOption) (*RenameBranchReply, error)
 }
 
 type gitClient struct {
@@ -254,6 +259,16 @@ func (c *gitClient) Sync(ctx context.Context, opts ...grpc.CallOption) (grpc.Bid
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Git_SyncClient = grpc.BidiStreamingClient[SyncChunk, SyncChunk]
 
+func (c *gitClient) RenameBranch(ctx context.Context, in *RenameBranchRequest, opts ...grpc.CallOption) (*RenameBranchReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RenameBranchReply)
+	err := c.cc.Invoke(ctx, Git_RenameBranch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GitServer is the server API for Git service.
 // All implementations must embed UnimplementedGitServer
 // for forward compatibility.
@@ -300,6 +315,10 @@ type GitServer interface {
 	// Sync serves a live overlay's endpoint at the checkout; the first chunk
 	// names the checkout and every chunk carries the overlay's stream.
 	Sync(grpc.BidiStreamingServer[SyncChunk, SyncChunk]) error
+	// RenameBranch renames the checkout's branch from one name to another,
+	// which HEAD follows, and sets aether.branch to the new one, as the
+	// checkout's owner. A failed call leaves both as they were.
+	RenameBranch(context.Context, *RenameBranchRequest) (*RenameBranchReply, error)
 	mustEmbedUnimplementedGitServer()
 }
 
@@ -348,6 +367,9 @@ func (UnimplementedGitServer) FileDiff(context.Context, *FileDiffRequest) (*Patc
 }
 func (UnimplementedGitServer) Sync(grpc.BidiStreamingServer[SyncChunk, SyncChunk]) error {
 	return status.Error(codes.Unimplemented, "method Sync not implemented")
+}
+func (UnimplementedGitServer) RenameBranch(context.Context, *RenameBranchRequest) (*RenameBranchReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method RenameBranch not implemented")
 }
 func (UnimplementedGitServer) mustEmbedUnimplementedGitServer() {}
 func (UnimplementedGitServer) testEmbeddedByValue()             {}
@@ -546,6 +568,24 @@ func _Git_Sync_Handler(srv interface{}, stream grpc.ServerStream) error {
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Git_SyncServer = grpc.BidiStreamingServer[SyncChunk, SyncChunk]
 
+func _Git_RenameBranch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenameBranchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GitServer).RenameBranch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Git_RenameBranch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GitServer).RenameBranch(ctx, req.(*RenameBranchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Git_ServiceDesc is the grpc.ServiceDesc for Git service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -580,6 +620,10 @@ var Git_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "FileDiff",
 			Handler:    _Git_FileDiff_Handler,
+		},
+		{
+			MethodName: "RenameBranch",
+			Handler:    _Git_RenameBranch_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

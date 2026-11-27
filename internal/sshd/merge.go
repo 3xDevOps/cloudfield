@@ -300,6 +300,7 @@ func (s *Server) memberMergeAccept(ctx context.Context, member domain.MemberID, 
 	if err != nil {
 		return nil, rpcError(err)
 	}
+	s.cfg.Runs.ForgetSpare(absorbed)
 	var activeRuns []*domain.Run
 	if s.cfg.Control != nil {
 		if activeRuns, err = s.cfg.Store.ListActiveRuns(ctx); err != nil {

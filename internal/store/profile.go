@@ -231,6 +231,7 @@ func (d *DB) PruneProfileSnapshots(ctx context.Context, member domain.MemberID, 
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	// runs, not visible_runs: a spare's pinned snapshot is in use.
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM profile_snapshots
 		WHERE member_id = ? AND harness = ?

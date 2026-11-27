@@ -118,14 +118,14 @@ func (d *DB) createRun(ctx context.Context, r *domain.Run, reserved bool) error 
 		                   reason, branch, worktree, protected, created_at, started_at,
 		                   finished_at, profile_snapshot_id, title, last_commit, last_commit_at,
 		                   harness_session_id, base_commit, base_branch, base_source, base_checked_at, acp,
-		                   status_changed_at, requested_account_member_id, fallback_disabled, fallback_order, model, effort, permission, via, cpu_limit, memory_limit_bytes, pids_limit, linear_issue_url)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                   status_changed_at, requested_account_member_id, fallback_disabled, fallback_order, model, effort, permission, via, cpu_limit, memory_limit_bytes, pids_limit, linear_issue_url, spare)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, r.WorkspaceID, r.MemberID, r.AccountMemberID, r.HomeMemberID, r.Task, r.Harness, r.Mode, r.Status,
 		r.Reason, r.Branch, r.Worktree, r.Protected, createdAt, startedAt, finishedAt,
 		r.ProfileSnapshotID, r.Title, r.LastCommit, lastCommitAt, r.HarnessSessionID,
 		r.BaseCommit, r.BaseBranch, r.BaseSource, baseCheckedAt, r.ACP, createdAt,
 		r.RequestedAccountMemberID, r.Fallback.Disabled, fallbackOrder, r.Model, r.Effort, r.Permission, r.Via,
-		r.Limits.CPUs, r.Limits.MemoryBytes, r.Limits.Pids, r.LinearIssueURL,
+		r.Limits.CPUs, r.Limits.MemoryBytes, r.Limits.Pids, r.LinearIssueURL, r.Spare,
 	); err != nil {
 		return fmt.Errorf("store: create session: %w", mapConstraint(err, ErrNotFound))
 	}
@@ -137,6 +137,58 @@ func (d *DB) createRun(ctx context.Context, r *domain.Run, reserved bool) error 
 		return fmt.Errorf("store: create session: commit: %w", err)
 	}
 	r.ID, r.CreatedAt, r.StatusChangedAt = domain.RunID(id), ts, &ts
+	return nil
+}
+
+// ClaimSpareRun turns spare run r.ID into the queued run a launch with r's
+// fields would have created now, and unhides it. What the spare already
+// made stays: its owner, account, home, agent, mode, permission, limits,
+// base commit and branch, worktree, profile snapshot, agent session and
+// title. Its state history starts at the claim.
+func (d *DB) ClaimSpareRun(ctx context.Context, r *domain.Run) error {
+	if err := validateRun(r, "claim spare"); err != nil {
+		return err
+	}
+	ts := time.Now().UTC()
+	now, err := encodeTime(ts)
+	if err != nil {
+		return fmt.Errorf("store: claim spare session: %w", err)
+	}
+	baseCheckedAt, err := encodeOptionalTime(r.BaseCheckedAt)
+	if err != nil {
+		return fmt.Errorf("store: claim spare session: %w", err)
+	}
+	fallbackOrder, err := jsonText(r.Fallback.Order, "[]")
+	if err != nil {
+		return fmt.Errorf("store: claim spare session: fallback order: %w", err)
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: claim spare session: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	err = notFoundOnZeroRows(tx.ExecContext(ctx,
+		`UPDATE runs SET task = ?, branch = ?, model = ?, refused_model = '', model_error = '', effort = ?, via = ?,
+		     linear_issue_url = ?, requested_account_member_id = NULLIF(?, ''), fallback_disabled = ?, fallback_order = ?,
+		     base_source = ?, base_checked_at = ?, status = ?, reason = '', activity = '', status_seq = 1,
+		     created_at = ?, status_changed_at = ?, started_at = NULL, finished_at = NULL,
+		     outcome_unseen = 0, finish_unopened = 0, review = '', review_changed_at = NULL, spare = 0
+		 WHERE id = ? AND spare = 1`,
+		r.Task, r.Branch, r.Model, r.Effort, r.Via, r.LinearIssueURL, r.RequestedAccountMemberID,
+		r.Fallback.Disabled, fallbackOrder, r.BaseSource, baseCheckedAt, domain.RunQueued, now, now, r.ID))
+	if err != nil {
+		if !errors.Is(err, ErrNotFound) {
+			err = fmt.Errorf("store: claim spare session: %w", mapConstraint(err, ErrNotFound))
+		}
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM run_state_transitions WHERE run_id = ?`, r.ID); err != nil {
+		return fmt.Errorf("store: claim spare session: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("store: claim spare session: commit: %w", err)
+	}
+	r.Status, r.CreatedAt, r.StatusChangedAt = domain.RunQueued, ts, &ts
 	return nil
 }
 
@@ -160,7 +212,7 @@ func scanRun(row interface{ Scan(...any) error }) (*domain.Run, error) {
 		&r.BaseSource, &baseCheckedAt, &archivedAt, &r.OutcomeUnseen, &r.FinishUnopened, &statusChangedAt,
 		&r.Review, &reviewChangedAt, &r.ACP,
 		&r.RequestedAccountMemberID, &r.Fallback.Disabled, &fallbackOrder, &r.Model, &r.RefusedModel, &r.ModelError, &r.Effort, &r.Permission, &r.Via,
-		&r.Children, &r.ChildrenSetBy, &r.Limits.CPUs, &r.Limits.MemoryBytes, &r.Limits.Pids, &r.LinearIssueURL, &r.UnansweredQuestions,
+		&r.Children, &r.ChildrenSetBy, &r.Limits.CPUs, &r.Limits.MemoryBytes, &r.Limits.Pids, &r.LinearIssueURL, &r.Spare, &r.UnansweredQuestions,
 		&r.UnackedMessages, &oldestUnacked,
 		&r.ParentRunID, &r.RootRunID, &r.ChildPurpose, &r.Detached); err != nil {
 		return nil, err
@@ -190,20 +242,20 @@ const runCols = `runs.id, runs.workspace_id, runs.member_id, runs.account_member
 	runs.base_checked_at, runs.archived_at, runs.outcome_unseen, runs.finish_unopened, runs.status_changed_at,
 	runs.review, runs.review_changed_at, runs.acp, COALESCE(runs.requested_account_member_id, ''), runs.fallback_disabled, runs.fallback_order, runs.model, runs.refused_model, runs.model_error, runs.effort, runs.permission, runs.via,
 	runs.children, runs.children_set_by,
-	runs.cpu_limit, runs.memory_limit_bytes, runs.pids_limit, runs.linear_issue_url`
+	runs.cpu_limit, runs.memory_limit_bytes, runs.pids_limit, runs.linear_issue_url, runs.spare`
 
-// runSnapshotQuery returns one grouped query for a run snapshot. Questions
-// with a denied/cancelled state are not actionable, and a correlated reply
-// removes its question from the count. Keeping this in the run read means
-// list and single-run snapshots cannot disagree, without walking room history
-// once per run.
-func runSnapshotQuery(where string) string {
+// runSnapshotQuery returns one grouped query for a snapshot of the runs in
+// table, visible_runs or runs. Questions with a denied/cancelled state are
+// not actionable, and a correlated reply removes its question from the count.
+// Keeping this in the run read means list and single-run snapshots cannot
+// disagree, without walking room history once per run.
+func runSnapshotQuery(table, where string) string {
 	return `SELECT ` + runCols + `, COUNT(question.id),
 		(SELECT COUNT(*) FROM run_messages WHERE run_messages.to_run = runs.id AND ` + unreadMessage + `),
 		(SELECT MIN(created_at) FROM run_messages WHERE run_messages.to_run = runs.id AND ` + unreadMessage + `),
 		COALESCE(child.parent_run_id, ''), COALESCE(child.root_run_id, ''),
 		COALESCE(child.purpose, ''), COALESCE(child.detached, 0)
-		FROM runs
+		FROM ` + table + ` AS runs
 		LEFT JOIN run_children child ON child.run_id = runs.id
 		LEFT JOIN room_messages question
 			ON question.run_id = runs.id
@@ -220,9 +272,17 @@ func runSnapshotQuery(where string) string {
 		GROUP BY runs.id`
 }
 
+// runTable is the table d's run snapshot reads select from.
+func (d *DB) runTable() string {
+	if d.spares {
+		return "runs"
+	}
+	return "visible_runs"
+}
+
 func (d *DB) GetRun(ctx context.Context, id domain.RunID) (*domain.Run, error) {
 	r, err := scanRun(d.db.QueryRowContext(ctx,
-		runSnapshotQuery(`runs.id = ?`), id))
+		runSnapshotQuery(d.runTable(), `runs.id = ?`), id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -237,12 +297,12 @@ func (d *DB) GetRun(ctx context.Context, id domain.RunID) (*domain.Run, error) {
 
 func (d *DB) ListRunsByWorkspace(ctx context.Context, id domain.WorkspaceID) ([]*domain.Run, error) {
 	return d.listRuns(ctx, "list sessions by workspace",
-		runSnapshotQuery(`runs.workspace_id = ?`)+` ORDER BY runs.created_at, runs.rowid`, id)
+		runSnapshotQuery(d.runTable(), `runs.workspace_id = ?`)+` ORDER BY runs.created_at, runs.rowid`, id)
 }
 
 func (d *DB) ListRunsByMember(ctx context.Context, id domain.MemberID) ([]*domain.Run, error) {
 	return d.listRuns(ctx, "list sessions by member",
-		runSnapshotQuery(`runs.member_id = ?`)+` ORDER BY runs.created_at, runs.rowid`, id)
+		runSnapshotQuery(d.runTable(), `runs.member_id = ?`)+` ORDER BY runs.created_at, runs.rowid`, id)
 }
 
 // ListActiveRuns returns runs whose status is non-terminal. The status set
@@ -250,7 +310,13 @@ func (d *DB) ListRunsByMember(ctx context.Context, id domain.MemberID) ([]*domai
 func (d *DB) ListActiveRuns(ctx context.Context) ([]*domain.Run, error) {
 	placeholders, args := liveStatusArgs()
 	return d.listRuns(ctx, "list active sessions",
-		runSnapshotQuery(`runs.status IN (`+placeholders+`)`)+` ORDER BY runs.created_at, runs.rowid`, args...)
+		runSnapshotQuery(d.runTable(), `runs.status IN (`+placeholders+`)`)+` ORDER BY runs.created_at, runs.rowid`, args...)
+}
+
+// ListSpareRuns returns every spare run, whatever its status.
+func (d *DB) ListSpareRuns(ctx context.Context) ([]*domain.Run, error) {
+	return d.listRuns(ctx, "list spare sessions",
+		runSnapshotQuery("runs", `runs.spare = 1`)+` ORDER BY runs.created_at, runs.rowid`)
 }
 
 // liveStatusArgs returns the SQL placeholders and arguments for every
@@ -290,7 +356,7 @@ func (d *DB) ListLiveRunSummaries(ctx context.Context, workspace domain.Workspac
 		`SELECT id, member_id, status, activity, reason, protected,
 		     COALESCE(CAST(substr(CAST(CASE WHEN task = '' THEN title ELSE task END AS BLOB), 1, ?) AS TEXT), ''),
 		     length(CAST(CASE WHEN task = '' THEN title ELSE task END AS BLOB))
-		 FROM runs WHERE workspace_id = ? AND status IN (`+placeholders+`)
+		 FROM visible_runs WHERE workspace_id = ? AND status IN (`+placeholders+`)
 		 ORDER BY max(COALESCE(status_changed_at, created_at), created_at) DESC, rowid DESC`,
 		append([]any{taskBytes, workspace}, statuses...)...)
 	if err != nil {
@@ -443,7 +509,7 @@ func recordTransition(ctx context.Context, tx *sql.Tx, id domain.RunID, status d
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO run_state_transitions (run_id, workspace_id, from_status, to_status, reason, activity, at)
 		 SELECT id, workspace_id, status, ?, ?, ?, CASE WHEN status = ? AND reason = ? THEN ? ELSE ? END
-		 FROM runs WHERE id = ? AND (status <> ? OR reason <> ? OR activity <> ?)`,
+		 FROM visible_runs WHERE id = ? AND (status <> ? OR reason <> ? OR activity <> ?)`,
 		status, reason, activity, status, reason, now, changed, id, status, reason, activity); err != nil {
 		return fmt.Errorf("record transition: %w", err)
 	}

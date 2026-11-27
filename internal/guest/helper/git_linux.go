@@ -326,6 +326,20 @@ func prepareBranch(dir string, id guest.Checkout) error {
 	return nil
 }
 
+func (s *gitService) RenameBranch(ctx context.Context, req *guestpb.RenameBranchRequest) (*guestpb.RenameBranchReply, error) {
+	if _, err := s.workspace(req.GetKey()); err != nil {
+		return nil, err
+	}
+	dir := s.target(req.GetKey())
+	if err := ownerGit(ctx, dir, nil, "config", "aether.branch", req.GetTo()); err != nil {
+		return nil, gitStatus(err)
+	}
+	if err := ownerGit(ctx, dir, nil, "branch", "-m", req.GetFrom(), req.GetTo()); err != nil {
+		return nil, gitStatus(errors.Join(err, ownerGit(context.WithoutCancel(ctx), dir, nil, "config", "aether.branch", req.GetFrom())))
+	}
+	return &guestpb.RenameBranchReply{}, nil
+}
+
 func (s *gitService) workspace(key string) (domain.WorkspaceID, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

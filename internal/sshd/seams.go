@@ -188,6 +188,11 @@ type RunController interface {
 	// ForgetOMPAccount stops the omp auth broker of a member who was removed
 	// or merged into another.
 	ForgetOMPAccount(ctx context.Context, member domain.MemberID)
+	// MemberStream records an event stream member holds open until the
+	// returned func runs, and ForgetSpare removes the spare session kept
+	// for a member whose sessions move to another.
+	MemberStream(member domain.MemberID) func()
+	ForgetSpare(member domain.MemberID)
 	TerminalStatus(ctx context.Context, member domain.MemberID) (domain.TerminalStatus, error)
 	ExecTerminal(ctx context.Context, member domain.MemberID, command string) (int, string, string, error)
 	SaveEnvironment(ctx context.Context, member domain.MemberID) (string, error)

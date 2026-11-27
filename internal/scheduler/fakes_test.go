@@ -676,6 +676,9 @@ type fakeGit struct {
 	bases         map[domain.RunID]string
 	origins       map[domain.RunID]string
 	createErr     error
+	renameErr     error
+	branches      map[domain.RunID]string
+	released      []string
 	publishErr    error
 	removeErr     error
 	createHook    func(run domain.RunID)
@@ -698,6 +701,7 @@ func newFakeGit(root string) *fakeGit {
 		origins:     make(map[domain.RunID]string),
 		authors:     make(map[domain.RunID][]domain.GitIdentity),
 		signed:      make(map[domain.RunID][]bool),
+		branches:    make(map[domain.RunID]string),
 	}
 }
 func (g *fakeGit) checkoutPath(run domain.RunID) string {
@@ -708,7 +712,32 @@ func (g *fakeGit) CreateRunCheckout(ctx context.Context, ws domain.WorkspaceID, 
 	return g.CreateRunCheckoutAt(ctx, ws, run, baseBranch, baseBranch, task, origin)
 }
 
-func (g *fakeGit) CreateRunCheckoutAt(_ context.Context, ws domain.WorkspaceID, run domain.RunID, baseCommit, baseBranch, _, origin string) (string, string, error) {
+// fakeBranch names a run's branch after its task, as the git engine does.
+func fakeBranch(run domain.RunID, task string) string {
+	if task == "" {
+		return "aether/run-" + string(run)
+	}
+	return "aether/run-" + strings.Join(strings.Fields(task), "-") + "-" + string(run)
+}
+
+func (g *fakeGit) RenameRunBranch(_ context.Context, run domain.RunID, task string) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.renameErr != nil {
+		return "", g.renameErr
+	}
+	g.branches[run] = fakeBranch(run, task)
+	return g.branches[run], nil
+}
+
+func (g *fakeGit) ReleaseRunBranch(_ context.Context, _ domain.WorkspaceID, branch, _ string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.released = append(g.released, branch)
+	return nil
+}
+
+func (g *fakeGit) CreateRunCheckoutAt(_ context.Context, ws domain.WorkspaceID, run domain.RunID, baseCommit, baseBranch, task, origin string) (string, string, error) {
 	hook := g.createHook
 	if hook != nil {
 		hook(run)
@@ -722,7 +751,8 @@ func (g *fakeGit) CreateRunCheckoutAt(_ context.Context, ws domain.WorkspaceID, 
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		return "", "", err
 	}
-	branch := "aether/run-" + string(run)
+	branch := fakeBranch(run, task)
+	g.branches[run] = branch
 	g.baseCommits[run] = baseCommit
 	g.bases[run] = baseBranch
 	g.origins[run] = origin

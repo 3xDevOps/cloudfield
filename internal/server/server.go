@@ -462,7 +462,7 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 		waitConditions = cfg.WaitConditions
 	}
 	if s.sched, err = scheduler.New(scheduler.Config{
-		Store:          s.db,
+		Store:          s.db.WithSpares(),
 		Runtime:        s.rt,
 		Bus:            s.bus,
 		WaitConditions: waitConditions,

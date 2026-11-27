@@ -22,6 +22,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/coordtransport"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
+	"github.com/3xDevOps/cloudfield/internal/harness"
 	"github.com/3xDevOps/cloudfield/internal/ptyhost"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
@@ -431,6 +432,11 @@ func (d *acpDriver) connect(ctx context.Context, entry *supervised, how acpOpen)
 	defer d.lockOp(entry.runID)()
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), acpConnectTimeout)
 	defer cancel()
+	d.connectLocked(ctx, entry, how)
+}
+
+// connectLocked is connect for a caller that holds the run's op lock.
+func (d *acpDriver) connectLocked(ctx context.Context, entry *supervised, how acpOpen) {
 	if err := d.open(ctx, entry, how); err != nil {
 		if acphost.AuthRequired(err) {
 			err = fmt.Errorf("%w; %s", err, d.s.loginRefusedAdvice(d.s.runLogin(ctx, entry.runID), err, refusedUnrestarted))
@@ -516,6 +522,7 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 	if err != nil {
 		return err
 	}
+	spareInputs := d.s.spareInputs(entry, run, profile)
 	var exec, bridge runtime.ManagedExec
 	var keeper *acpkeeper.Client
 	var adopt *acphost.Adoption
@@ -701,8 +708,63 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 			}
 		}
 	}
-	var modelErr error
-	if run.Model != "" && adopt == nil {
+	var modelErr, effortErr error
+	if adopt == nil {
+		modelErr, effortErr = d.setModelAndEffort(ctx, sess, run, profile, oneShot)
+	}
+	r.session = sess
+	d.s.spareOpened(entry, systemPrompt, spareInputs)
+	// A session that started anew, here or after a failed restore, or
+	// refused its prompts so far has not had them yet.
+	if task == "" && systemPrompt == "" && (fresh || !acphost.Answered(sess.Log())) {
+		r.instructions = instructions
+	}
+	if !oneShot {
+		// Before the watch starts, so its first turn state is not
+		// overwritten.
+		d.reconnected(entry)
+	}
+	d.setRun(runID, r)
+	close(published)
+	go d.watch(entry, r)
+	c := d.s.coordinationSeam()
+	if c != nil && c.enabled && !oneShot {
+		c.svc.EnhancedSessionOpened(runID)
+	}
+	if coordDir != "" && fresh {
+		d.noteInstructions(ctx, run, systemPrompt != "")
+	}
+	switch {
+	case oneShot && marked:
+		// The move a persisted usage limit owes after a restart decides
+		// how the failed turn ends.
+	case oneShot && modelErr != nil:
+		// Unattended, the task would otherwise run on the agent's default model.
+		d.endOneShot(entry, false, agentstatus.Report{State: agentstatus.Idle, Reason: "model not set: " + modelErr.Error()})
+	case oneShot && effortErr != nil:
+		d.endOneShot(entry, false, agentstatus.Report{State: agentstatus.Idle, Reason: "effort not set: " + effortErr.Error()})
+	case how == openContinue:
+	case oneShot && adopt != nil && sess.State().TurnInFlight:
+		// The adopted turn runs on; its end ends the run.
+	case oneShot:
+		d.startOneShot(ctx, entry, sess, fresh, prompt)
+	case fresh && task != "":
+		if _, err := sess.Prompt(ctx, []acp.ContentBlock{acp.TextBlock(prompt)}, false, nil); err != nil {
+			slog.Warn("scheduler: send the task to the agent", "run", runID, "error", err)
+		}
+	case !fresh:
+		// The restore's idle report can run before setRun, when the run
+		// does not look idle yet.
+		d.wakeIdle(runID)
+	}
+	return nil
+}
+
+// setModelAndEffort gives a new session the run's model and effort, and
+// records what the agent refused.
+func (d *acpDriver) setModelAndEffort(ctx context.Context, sess *acphost.Session, run *domain.Run, profile harness.Profile, oneShot bool) (modelErr, effortErr error) {
+	runID := run.ID
+	if run.Model != "" {
 		if modelErr = sess.SetModel(ctx, run.Model); modelErr != nil {
 			reason := modelErr.Error()
 			// A one-shot run ends on the error below; a refused live
@@ -733,63 +795,14 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 		}
 	}
 	// After the model: the levels an agent offers can depend on it.
-	var effortErr error
-	if run.Effort != "" && !profile.ACPEffortArgs && adopt == nil {
+	if run.Effort != "" && !profile.ACPEffortArgs {
 		if effortErr = sess.SetEffort(ctx, run.Effort); effortErr != nil {
 			if err := sess.Notice("error", "Effort not set", effortErr.Error()); err != nil {
 				slog.Warn("scheduler: record the effort notice", "run", runID, "error", err)
 			}
 		}
 	}
-	r.session = sess
-	// A session that started anew, here or after a failed restore, or
-	// refused its prompts so far has not had them yet.
-	if task == "" && systemPrompt == "" && (fresh || !acphost.Answered(sess.Log())) {
-		r.instructions = instructions
-	}
-	if !oneShot {
-		// Before the watch starts, so its first turn state is not
-		// overwritten.
-		d.reconnected(entry)
-	}
-	d.setRun(runID, r)
-	close(published)
-	go d.watch(entry, r)
-	c := d.s.coordinationSeam()
-	if c != nil && c.enabled && !oneShot {
-		c.svc.EnhancedSessionOpened(runID)
-	}
-	if c != nil && c.enabled && coordDir != "" && fresh {
-		channel := "first message"
-		if systemPrompt != "" {
-			channel = "system prompt"
-		}
-		d.s.publishTimeline(ctx, run.WorkspaceID, runID, "", events.TimelineNote, "session instructions: "+channel)
-	}
-	switch {
-	case oneShot && marked:
-		// The move a persisted usage limit owes after a restart decides
-		// how the failed turn ends.
-	case oneShot && modelErr != nil:
-		// Unattended, the task would otherwise run on the agent's default model.
-		d.endOneShot(entry, false, agentstatus.Report{State: agentstatus.Idle, Reason: "model not set: " + modelErr.Error()})
-	case oneShot && effortErr != nil:
-		d.endOneShot(entry, false, agentstatus.Report{State: agentstatus.Idle, Reason: "effort not set: " + effortErr.Error()})
-	case how == openContinue:
-	case oneShot && adopt != nil && sess.State().TurnInFlight:
-		// The adopted turn runs on; its end ends the run.
-	case oneShot:
-		d.startOneShot(ctx, entry, sess, fresh, prompt)
-	case fresh && task != "":
-		if _, err := sess.Prompt(ctx, []acp.ContentBlock{acp.TextBlock(prompt)}, false, nil); err != nil {
-			slog.Warn("scheduler: send the task to the agent", "run", runID, "error", err)
-		}
-	case !fresh:
-		// The restore's idle report can run before setRun, when the run
-		// does not look idle yet.
-		d.wakeIdle(runID)
-	}
-	return nil
+	return modelErr, effortErr
 }
 
 func (d *acpDriver) stopping(r *acpRun) bool {

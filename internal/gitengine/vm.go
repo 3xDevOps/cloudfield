@@ -156,7 +156,7 @@ func ChownCheckout(dir string, uid, gid int) error {
 }
 
 // publishVM publishes the run branch at the HEAD of the checkout in the VM.
-func (e *Engine) publishVM(ctx context.Context, run domain.RunID, meta runMeta) (string, error) {
+func (e *Engine) publishVM(ctx context.Context, run domain.RunID) (string, error) {
 	g, err := e.vmGit(ctx, run)
 	if err != nil {
 		return "", err
@@ -165,7 +165,7 @@ func (e *Engine) publishVM(ctx context.Context, run domain.RunID, meta runMeta) 
 	if err != nil {
 		return "", vmErr(err)
 	}
-	return head, e.publishVMHead(ctx, run, meta, head)
+	return head, e.publishVMHead(ctx, run, head)
 }
 
 // removeVMCheckout deletes the checkout's disk and identity. Its snapshot

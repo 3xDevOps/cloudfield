@@ -135,7 +135,7 @@ func (d *DB) TransferRunWithHandoff(ctx context.Context, h *HandoffOutbox) error
 	}
 	if affected == 0 {
 		var owner domain.MemberID
-		if queryErr := tx.QueryRowContext(ctx, `SELECT member_id FROM runs WHERE id = ?`, h.RunID).Scan(&owner); queryErr == nil && owner == h.ToMemberID {
+		if queryErr := tx.QueryRowContext(ctx, `SELECT member_id FROM visible_runs WHERE id = ?`, h.RunID).Scan(&owner); queryErr == nil && owner == h.ToMemberID {
 			var existing HandoffOutbox
 			var existingCreated, existingUpdated int64
 			queryErr = tx.QueryRowContext(ctx, `SELECT `+handoffOutboxCols+` FROM handoff_outbox WHERE id = ?`, h.ID).Scan(

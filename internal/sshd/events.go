@@ -68,6 +68,7 @@ func (s *Server) serveEvents(ctx context.Context, member domain.MemberID, ch sub
 	if writeJSONLine(ch, protocol.SubscribeResponse{OK: true}) != nil {
 		return
 	}
+	defer s.cfg.Runs.MemberStream(member)()
 	s.spawn(func() { s.revokeOnPolicyChange(streamCtx, revoke, member, "", true) })
 
 	// Drain (and discard) anything else the client writes; only a real

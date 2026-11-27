@@ -1636,6 +1636,102 @@ func (x *PatchReply) GetForkTree() string {
 	return ""
 }
 
+type RenameBranchRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	From          string                 `protobuf:"bytes,2,opt,name=from,proto3" json:"from,omitempty"`
+	To            string                 `protobuf:"bytes,3,opt,name=to,proto3" json:"to,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RenameBranchRequest) Reset() {
+	*x = RenameBranchRequest{}
+	mi := &file_git_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenameBranchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenameBranchRequest) ProtoMessage() {}
+
+func (x *RenameBranchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_git_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenameBranchRequest.ProtoReflect.Descriptor instead.
+func (*RenameBranchRequest) Descriptor() ([]byte, []int) {
+	return file_git_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *RenameBranchRequest) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *RenameBranchRequest) GetFrom() string {
+	if x != nil {
+		return x.From
+	}
+	return ""
+}
+
+func (x *RenameBranchRequest) GetTo() string {
+	if x != nil {
+		return x.To
+	}
+	return ""
+}
+
+type RenameBranchReply struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RenameBranchReply) Reset() {
+	*x = RenameBranchReply{}
+	mi := &file_git_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenameBranchReply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenameBranchReply) ProtoMessage() {}
+
+func (x *RenameBranchReply) ProtoReflect() protoreflect.Message {
+	mi := &file_git_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenameBranchReply.ProtoReflect.Descriptor instead.
+func (*RenameBranchReply) Descriptor() ([]byte, []int) {
+	return file_git_proto_rawDescGZIP(), []int{29}
+}
+
 var File_git_proto protoreflect.FileDescriptor
 
 const file_git_proto_rawDesc = "" +
@@ -1742,7 +1838,12 @@ const file_git_proto_rawDesc = "" +
 	"\x04base\x18\x01 \x01(\tR\x04base\x12\x12\n" +
 	"\x04text\x18\x02 \x01(\tR\x04text\x12\x1c\n" +
 	"\ttruncated\x18\x03 \x01(\bR\ttruncated\x12\x1b\n" +
-	"\tfork_tree\x18\x04 \x01(\tR\bforkTree2\x9f\a\n" +
+	"\tfork_tree\x18\x04 \x01(\tR\bforkTree\"K\n" +
+	"\x13RenameBranchRequest\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x12\n" +
+	"\x04from\x18\x02 \x01(\tR\x04from\x12\x0e\n" +
+	"\x02to\x18\x03 \x01(\tR\x02to\"\x13\n" +
+	"\x11RenameBranchReply2\xf9\a\n" +
 	"\x03Git\x12C\n" +
 	"\x05Setup\x12\x1d.aether.guest.v1.SetupRequest\x1a\x1b.aether.guest.v1.SetupReply\x12C\n" +
 	"\x05Watch\x12\x19.aether.guest.v1.WatchAck\x1a\x1b.aether.guest.v1.WatchEvent(\x010\x01\x12C\n" +
@@ -1756,7 +1857,8 @@ const file_git_proto_rawDesc = "" +
 	"\bReadFile\x12 .aether.guest.v1.ReadFileRequest\x1a\x1a.aether.guest.v1.FileChunk0\x01\x12O\n" +
 	"\tWriteFile\x12\x1f.aether.guest.v1.WriteFileChunk\x1a\x1f.aether.guest.v1.WriteFileReply(\x01\x12I\n" +
 	"\bFileDiff\x12 .aether.guest.v1.FileDiffRequest\x1a\x1b.aether.guest.v1.PatchReply\x12B\n" +
-	"\x04Sync\x12\x1a.aether.guest.v1.SyncChunk\x1a\x1a.aether.guest.v1.SyncChunk(\x010\x01B7Z5github.com/3xDevOps/cloudfield/internal/guest/guestpbb\x06proto3"
+	"\x04Sync\x12\x1a.aether.guest.v1.SyncChunk\x1a\x1a.aether.guest.v1.SyncChunk(\x010\x01\x12X\n" +
+	"\fRenameBranch\x12$.aether.guest.v1.RenameBranchRequest\x1a\".aether.guest.v1.RenameBranchReplyB7Z5github.com/3xDevOps/cloudfield/internal/guest/guestpbb\x06proto3"
 
 var (
 	file_git_proto_rawDescOnce sync.Once
@@ -1771,37 +1873,39 @@ func file_git_proto_rawDescGZIP() []byte {
 }
 
 var file_git_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_git_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
+var file_git_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_git_proto_goTypes = []any{
-	(StageRequest_Purpose)(0), // 0: aether.guest.v1.StageRequest.Purpose
-	(*GitFailure)(nil),        // 1: aether.guest.v1.GitFailure
-	(*SetupRequest)(nil),      // 2: aether.guest.v1.SetupRequest
-	(*Checkout)(nil),          // 3: aether.guest.v1.Checkout
-	(*SetupReply)(nil),        // 4: aether.guest.v1.SetupReply
-	(*WatchAck)(nil),          // 5: aether.guest.v1.WatchAck
-	(*WatchEvent)(nil),        // 6: aether.guest.v1.WatchEvent
-	(*FlushRequest)(nil),      // 7: aether.guest.v1.FlushRequest
-	(*FlushReply)(nil),        // 8: aether.guest.v1.FlushReply
-	(*ObjectsRequest)(nil),    // 9: aether.guest.v1.ObjectsRequest
-	(*Chunk)(nil),             // 10: aether.guest.v1.Chunk
-	(*HeadRequest)(nil),       // 11: aether.guest.v1.HeadRequest
-	(*HeadReply)(nil),         // 12: aether.guest.v1.HeadReply
-	(*StageRequest)(nil),      // 13: aether.guest.v1.StageRequest
-	(*StageReply)(nil),        // 14: aether.guest.v1.StageReply
-	(*RefUpdate)(nil),         // 15: aether.guest.v1.RefUpdate
-	(*InstallChunk)(nil),      // 16: aether.guest.v1.InstallChunk
-	(*InstallReply)(nil),      // 17: aether.guest.v1.InstallReply
-	(*TreeRequest)(nil),       // 18: aether.guest.v1.TreeRequest
-	(*TreeEntry)(nil),         // 19: aether.guest.v1.TreeEntry
-	(*TreeReply)(nil),         // 20: aether.guest.v1.TreeReply
-	(*ReadFileRequest)(nil),   // 21: aether.guest.v1.ReadFileRequest
-	(*FileChunk)(nil),         // 22: aether.guest.v1.FileChunk
-	(*WriteFileChunk)(nil),    // 23: aether.guest.v1.WriteFileChunk
-	(*WriteFileReply)(nil),    // 24: aether.guest.v1.WriteFileReply
-	(*FileDiffRequest)(nil),   // 25: aether.guest.v1.FileDiffRequest
-	(*SyncChunk)(nil),         // 26: aether.guest.v1.SyncChunk
-	(*PatchRequest)(nil),      // 27: aether.guest.v1.PatchRequest
-	(*PatchReply)(nil),        // 28: aether.guest.v1.PatchReply
+	(StageRequest_Purpose)(0),   // 0: aether.guest.v1.StageRequest.Purpose
+	(*GitFailure)(nil),          // 1: aether.guest.v1.GitFailure
+	(*SetupRequest)(nil),        // 2: aether.guest.v1.SetupRequest
+	(*Checkout)(nil),            // 3: aether.guest.v1.Checkout
+	(*SetupReply)(nil),          // 4: aether.guest.v1.SetupReply
+	(*WatchAck)(nil),            // 5: aether.guest.v1.WatchAck
+	(*WatchEvent)(nil),          // 6: aether.guest.v1.WatchEvent
+	(*FlushRequest)(nil),        // 7: aether.guest.v1.FlushRequest
+	(*FlushReply)(nil),          // 8: aether.guest.v1.FlushReply
+	(*ObjectsRequest)(nil),      // 9: aether.guest.v1.ObjectsRequest
+	(*Chunk)(nil),               // 10: aether.guest.v1.Chunk
+	(*HeadRequest)(nil),         // 11: aether.guest.v1.HeadRequest
+	(*HeadReply)(nil),           // 12: aether.guest.v1.HeadReply
+	(*StageRequest)(nil),        // 13: aether.guest.v1.StageRequest
+	(*StageReply)(nil),          // 14: aether.guest.v1.StageReply
+	(*RefUpdate)(nil),           // 15: aether.guest.v1.RefUpdate
+	(*InstallChunk)(nil),        // 16: aether.guest.v1.InstallChunk
+	(*InstallReply)(nil),        // 17: aether.guest.v1.InstallReply
+	(*TreeRequest)(nil),         // 18: aether.guest.v1.TreeRequest
+	(*TreeEntry)(nil),           // 19: aether.guest.v1.TreeEntry
+	(*TreeReply)(nil),           // 20: aether.guest.v1.TreeReply
+	(*ReadFileRequest)(nil),     // 21: aether.guest.v1.ReadFileRequest
+	(*FileChunk)(nil),           // 22: aether.guest.v1.FileChunk
+	(*WriteFileChunk)(nil),      // 23: aether.guest.v1.WriteFileChunk
+	(*WriteFileReply)(nil),      // 24: aether.guest.v1.WriteFileReply
+	(*FileDiffRequest)(nil),     // 25: aether.guest.v1.FileDiffRequest
+	(*SyncChunk)(nil),           // 26: aether.guest.v1.SyncChunk
+	(*PatchRequest)(nil),        // 27: aether.guest.v1.PatchRequest
+	(*PatchReply)(nil),          // 28: aether.guest.v1.PatchReply
+	(*RenameBranchRequest)(nil), // 29: aether.guest.v1.RenameBranchRequest
+	(*RenameBranchReply)(nil),   // 30: aether.guest.v1.RenameBranchReply
 }
 var file_git_proto_depIdxs = []int32{
 	3,  // 0: aether.guest.v1.SetupRequest.checkouts:type_name -> aether.guest.v1.Checkout
@@ -1821,21 +1925,23 @@ var file_git_proto_depIdxs = []int32{
 	23, // 14: aether.guest.v1.Git.WriteFile:input_type -> aether.guest.v1.WriteFileChunk
 	25, // 15: aether.guest.v1.Git.FileDiff:input_type -> aether.guest.v1.FileDiffRequest
 	26, // 16: aether.guest.v1.Git.Sync:input_type -> aether.guest.v1.SyncChunk
-	4,  // 17: aether.guest.v1.Git.Setup:output_type -> aether.guest.v1.SetupReply
-	6,  // 18: aether.guest.v1.Git.Watch:output_type -> aether.guest.v1.WatchEvent
-	8,  // 19: aether.guest.v1.Git.Flush:output_type -> aether.guest.v1.FlushReply
-	10, // 20: aether.guest.v1.Git.Objects:output_type -> aether.guest.v1.Chunk
-	28, // 21: aether.guest.v1.Git.Patch:output_type -> aether.guest.v1.PatchReply
-	12, // 22: aether.guest.v1.Git.Head:output_type -> aether.guest.v1.HeadReply
-	14, // 23: aether.guest.v1.Git.Stage:output_type -> aether.guest.v1.StageReply
-	17, // 24: aether.guest.v1.Git.Install:output_type -> aether.guest.v1.InstallReply
-	20, // 25: aether.guest.v1.Git.Tree:output_type -> aether.guest.v1.TreeReply
-	22, // 26: aether.guest.v1.Git.ReadFile:output_type -> aether.guest.v1.FileChunk
-	24, // 27: aether.guest.v1.Git.WriteFile:output_type -> aether.guest.v1.WriteFileReply
-	28, // 28: aether.guest.v1.Git.FileDiff:output_type -> aether.guest.v1.PatchReply
-	26, // 29: aether.guest.v1.Git.Sync:output_type -> aether.guest.v1.SyncChunk
-	17, // [17:30] is the sub-list for method output_type
-	4,  // [4:17] is the sub-list for method input_type
+	29, // 17: aether.guest.v1.Git.RenameBranch:input_type -> aether.guest.v1.RenameBranchRequest
+	4,  // 18: aether.guest.v1.Git.Setup:output_type -> aether.guest.v1.SetupReply
+	6,  // 19: aether.guest.v1.Git.Watch:output_type -> aether.guest.v1.WatchEvent
+	8,  // 20: aether.guest.v1.Git.Flush:output_type -> aether.guest.v1.FlushReply
+	10, // 21: aether.guest.v1.Git.Objects:output_type -> aether.guest.v1.Chunk
+	28, // 22: aether.guest.v1.Git.Patch:output_type -> aether.guest.v1.PatchReply
+	12, // 23: aether.guest.v1.Git.Head:output_type -> aether.guest.v1.HeadReply
+	14, // 24: aether.guest.v1.Git.Stage:output_type -> aether.guest.v1.StageReply
+	17, // 25: aether.guest.v1.Git.Install:output_type -> aether.guest.v1.InstallReply
+	20, // 26: aether.guest.v1.Git.Tree:output_type -> aether.guest.v1.TreeReply
+	22, // 27: aether.guest.v1.Git.ReadFile:output_type -> aether.guest.v1.FileChunk
+	24, // 28: aether.guest.v1.Git.WriteFile:output_type -> aether.guest.v1.WriteFileReply
+	28, // 29: aether.guest.v1.Git.FileDiff:output_type -> aether.guest.v1.PatchReply
+	26, // 30: aether.guest.v1.Git.Sync:output_type -> aether.guest.v1.SyncChunk
+	30, // 31: aether.guest.v1.Git.RenameBranch:output_type -> aether.guest.v1.RenameBranchReply
+	18, // [18:32] is the sub-list for method output_type
+	4,  // [4:18] is the sub-list for method input_type
 	4,  // [4:4] is the sub-list for extension type_name
 	4,  // [4:4] is the sub-list for extension extendee
 	0,  // [0:4] is the sub-list for field type_name
@@ -1857,7 +1963,7 @@ func file_git_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_git_proto_rawDesc), len(file_git_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   28,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -876,6 +876,8 @@ type Run struct {
 	// is not archived. Only an Archivable run can be archived. Archiving does
 	// not schedule deletion.
 	ArchivedAt *time.Time
+	// Spare is a session made ahead of a launch, hidden from every member until a launch claims it.
+	Spare bool
 	// OutcomeUnseen is true while a run an agent's report finished
 	// (completed or failed) has not been opened by its owner. Any later
 	// status change clears it.

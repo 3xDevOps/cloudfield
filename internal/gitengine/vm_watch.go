@@ -201,7 +201,7 @@ func (w *vmWatch) follow() (bool, error) {
 		case ev.Diff != nil:
 			failure = w.record(ev.Diff)
 		default:
-			failure = w.e.publishVMHead(w.ctx, w.run, w.meta, ev.Head)
+			failure = w.e.publishVMHead(w.ctx, w.run, ev.Head)
 		}
 		if failure != nil {
 			if now := time.Now(); now.Sub(w.lastWarn) >= diffWarnInterval {
@@ -379,12 +379,17 @@ func decodeVMDiff(data []byte) (events.RunDiffPayload, error) {
 // publishVMHead publishes the run branch at head, a commit the VM reports
 // its checkout's HEAD moved to: the server copies the commit's objects from
 // the VM and fetches the branch from them, as publishRunBranch fetches it
-// from a checkout on its own disk.
-func (e *Engine) publishVMHead(ctx context.Context, run domain.RunID, meta runMeta, head string) error {
+// from a checkout on its own disk. It reads the run's identity itself, as
+// RenameRunBranch can move the branch under a running watch.
+func (e *Engine) publishVMHead(ctx context.Context, run domain.RunID, head string) error {
 	if !validObjectID(head) {
 		return fmt.Errorf("%w: %q", ErrInvalidObjectID, head)
 	}
-	if err := e.checkBranchName(ctx, meta.Branch); err != nil {
+	meta, err := e.readRunMeta(run)
+	if err != nil {
+		return err
+	}
+	if err = e.checkBranchName(ctx, meta.Branch); err != nil {
 		return err
 	}
 	repo, err := e.existingRepoPath(meta.Workspace)

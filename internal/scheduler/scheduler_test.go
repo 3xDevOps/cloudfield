@@ -171,7 +171,7 @@ func newTestEnv(t *testing.T, mutate func(*Config)) *testEnv {
 		t.Fatalf("memberhome.New: %v", err)
 	}
 	e.cfg = Config{
-		Store:         storetest.Unscoped{DB: db},
+		Store:         storetest.Unscoped{DB: db.WithSpares()},
 		Runtime:       e.rt,
 		Bus:           bus,
 		Git:           e.git,

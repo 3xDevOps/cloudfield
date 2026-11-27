@@ -288,6 +288,10 @@ type Profile struct {
 	// session/resume and session/load _meta.systemPrompt.append to the
 	// agent's system prompt, so run instructions need no prompt of their own.
 	ACPSystemPrompt bool
+	// SessionInputs digests what a new session in project reads from the
+	// member's home at host path home. Nil for an agent whose reads are not
+	// known, whose session made ahead is therefore always made again.
+	SessionInputs func(home, project string) (string, error)
 	// ACPTitleLookup marks an agent that titles a session at its first
 	// prompt, sends session_info_update only when that turn ends, and reports
 	// the title in session/list meanwhile.
@@ -449,6 +453,7 @@ var profiles = map[string]Profile{
 		ACPMode:         "bypassPermissions",
 		ACPTitleLookup:  true,
 		ACPSystemPrompt: true,
+		SessionInputs:   claudeSessionInputs,
 		ModelArgs:       []string{"--model", ModelPlaceholder},
 		ResumeArgs:      []string{"claude", "--dangerously-skip-permissions", "--resume", SessionPlaceholder},
 		EffortArgs:      []string{"--effort", EffortPlaceholder},

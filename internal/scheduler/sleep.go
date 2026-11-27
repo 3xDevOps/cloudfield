@@ -491,6 +491,8 @@ func (s *Scheduler) liveFactsLocked(e *supervised) idleFacts {
 // holds s.mu.
 func heldAwakeLocked(e *supervised) string {
 	switch {
+	case e.spare != nil:
+		return "a spare session"
 	case e.status != domain.RunRunning && e.status != domain.RunNeedsAttention:
 		return "not running"
 	case e.paused || e.retained || e.destroyPending || e.finalizing || e.killRequested || e.exitObserved:

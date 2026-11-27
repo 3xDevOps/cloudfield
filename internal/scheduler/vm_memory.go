@@ -92,6 +92,9 @@ func (s *Scheduler) checkVMMemory(ctx context.Context) (uint64, bool) {
 		s.vmMemoryLow = false
 	}
 	if s.vmMemoryLow {
+		if s.dropSpares(ctx, false) {
+			return 0, false
+		}
 		// A save restarts the stall's clock: its average takes seconds to
 		// fall, so only a stall that lasts again calls for another. A stall
 		// with twice the floor free may come from outside the VMs, so it

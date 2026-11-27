@@ -64,6 +64,7 @@ func (s *Scheduler) Busy(ctx context.Context) domain.ServerBusy {
 	out.Shells = s.shells
 	for _, r := range active {
 		switch {
+		case r.Spare:
 		case s.runs[r.ID] != nil && s.runs[r.ID].paused:
 			out.Paused++
 		default:

@@ -21,10 +21,16 @@ import (
 
 // DB is the SQLite-backed Store implementation.
 type DB struct {
-	db *sql.DB
+	db     *sql.DB
+	spares bool
 }
 
 var _ Store = (*DB)(nil)
+
+// WithSpares returns a handle on the same database whose run snapshot reads,
+// GetRun and the run lists, include spare runs. Only the scheduler, which
+// owns spares, takes this handle.
+func (d *DB) WithSpares() *DB { return &DB{db: d.db, spares: true} }
 
 // Open opens (creating if necessary) the SQLite database at path, enables
 // foreign keys and WAL, and applies any pending migrations. The file is

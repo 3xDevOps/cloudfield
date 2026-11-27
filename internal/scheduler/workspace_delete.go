@@ -34,6 +34,7 @@ func (s *Scheduler) WithInactiveWorkspace(ctx context.Context, id domain.Workspa
 	if _, err := s.cfg.Store.GetWorkspace(ctx, id); err != nil {
 		return err
 	}
+	s.removeWorkspaceSpares(id)
 	runs, err := s.cfg.Store.ListRunsByWorkspace(ctx, id)
 	if err != nil {
 		return err
