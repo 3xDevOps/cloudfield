@@ -165,6 +165,34 @@ describe('a local link through an edge', () => {
       expect(store.getState().hydrationError).toContain('server is not connected to the edge')
       stop()
     })
+
+    it('keeps the edge text of a retired address the subscribe refusal carries', async () => {
+      const text = 'https://edge.example.test is retired; this edge is at https://new.example.test'
+      const store = createRootStore()
+      const stop = connect(
+        store,
+        fakeApi({
+          capabilities: vi.fn(async () => ({ gateway: 'local', methods: ['*'], ws: ['events'], local: ['link.status'] })),
+          localLinkStatus: vi.fn(async () => edgeLink),
+        }),
+      )
+
+      await vi.waitFor(() => expect(StubSocket.opened.length).toBeGreaterThan(0))
+      const socket = StubSocket.last()
+      socket.onopen?.()
+      socket.onmessage?.({
+        data: JSON.stringify({
+          ok: false,
+          code: -32004,
+          error: `server unreachable: connect to server ${serverID}: edge.example.test refused: ${text} (HTTP 410)`,
+          data: { refusal: { kind: 'edge-refused', refusal: text }, retired: { replacement: 'https://new.example.test' } },
+        }),
+      })
+
+      expect(store.getState().unreachable).toBe('edge-refused')
+      expect(store.getState().retiredText).toBe(text)
+      stop()
+    })
   })
 })
 
