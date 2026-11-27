@@ -748,9 +748,8 @@ counters it prints the share of the memory in use at memory refusals that
 sessions idle for over an hour held, and the mean and longest wait of the
 waits that ended in a start.
 
-The dashboard shows the same under **Settings → Machines**, and
-`server.capacity` ([local gateway](local-gateway.md)) returns it to any
-member; the session a refusal names is returned to a super admin only.
+`server.capacity` ([local gateway](local-gateway.md)) returns the same to
+any member; the session a refusal names is returned to a super admin only.
 
 The server counts each time it was short of memory or disk and what it did
 about it, and logs each one:
