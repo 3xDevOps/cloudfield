@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -310,5 +312,50 @@ func TestAddRefusedNamesTheRunningSignInsAttachLine(t *testing.T) {
 		if err == nil || err.Error() != tc.want {
 			t.Errorf("addRefused(%q) =\n%v\nwant\n%s", tc.message, err, tc.want)
 		}
+	}
+}
+
+// lateResult answers agent.login.result with login once release closes, as
+// a server does when a sign-in that is ending saves its login.
+func lateResult(t *testing.T, release <-chan struct{}, login protocol.AgentLogin) *protocol.Client {
+	server, client := net.Pipe()
+	go func() {
+		defer server.Close() //nolint:errcheck
+		line, err := protocol.ReadLine(bufio.NewReader(server))
+		if err != nil {
+			return
+		}
+		var req protocol.Request
+		if json.Unmarshal(line, &req) != nil {
+			return
+		}
+		<-release
+		resp := protocol.Response{JSONRPC: "2.0", ID: req.ID}
+		resp.Result, _ = json.Marshal(login)
+		out, _ := json.Marshal(resp)
+		_, _ = server.Write(append(out, '\n'))
+		_, _ = io.Copy(io.Discard, server)
+	}()
+	c := protocol.NewClient(client)
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
+
+func TestFollowSignInWaitsForASignInThatIsEnding(t *testing.T) {
+	retryTimes(t, time.Millisecond, time.Minute)
+	release := make(chan struct{})
+	c := lateResult(t, release, protocol.AgentLogin{ID: "lgn-test1", Name: "work", Kind: "subscription", Plan: "max"})
+	time.AfterFunc(100*time.Millisecond, func() { close(release) })
+	var out, errOut bytes.Buffer
+	opened := 0
+	ending := refusedTerminal(&opened, protocol.CodeUnavailable, "ptyhost: terminal ended")
+	if err := followSignIn(&out, &errOut, c, "claude", "lgn-test1", ending); err != nil {
+		t.Fatalf("followSignIn = %v; want it to wait for the result", err)
+	}
+	if got, want := errOut.String(), "cli: terminal: ptyhost: terminal ended\nwaiting for the sign-in of login lgn-test1 to end; Ctrl-C stops waiting and leaves it running\n"; got != want {
+		t.Errorf("stderr = %q, want %q", got, want)
+	}
+	if out.String() != "added login work: subscription, plan max\n" || opened != 1 {
+		t.Errorf("opened %d times, stdout %q; want the added login after one open", opened, out.String())
 	}
 }

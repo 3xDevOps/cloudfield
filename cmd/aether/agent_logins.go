@@ -103,7 +103,9 @@ var (
 
 // followSignIn waits for the sign-in's result while it opens the terminal:
 // the server refuses a sign-in that ended and one still starting with the
-// same code, and only one that ended has a result.
+// same code, and only one that ended has a result. A terminal refused as
+// unavailable belongs to a sign-in that is ending, which has a result
+// soon.
 func followSignIn(out, errOut io.Writer, c *protocol.Client, agent, id string, open func() (*cli.TerminalStream, protocol.TerminalResponse, error)) error {
 	var login protocol.AgentLogin
 	result := make(chan error, 1)
@@ -151,7 +153,7 @@ func followSignIn(out, errOut io.Writer, c *protocol.Client, agent, id string, o
 			err = describeTerminalEnd(copyRaw(stream, 0))
 		case ack.Code == protocol.CodeNotFound:
 			return err
-		case ack.Code != 0:
+		case ack.Code != 0 && ack.Code != protocol.CodeUnavailable:
 			starting := ack.Code == protocol.CodeConflict
 			first := starting && deadline.IsZero()
 			if first {
