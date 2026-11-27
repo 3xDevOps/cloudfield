@@ -31,8 +31,8 @@ const adapterFailed = ['Enhanced agent failed', 'Enhanced agent exited']
 const authError = /authentication required|authrequired|not logged in|not signed in/i
 
 type SessionFailure =
-  | { kind: 'adapter'; title: string; detail?: string; seq?: number }
-  | { kind: 'auth'; detail?: string; seq?: number; stopped: boolean }
+  | { kind: 'adapter'; title: string; seq?: number }
+  | { kind: 'auth'; seq?: number; stopped: boolean }
 
 function sessionFailure(session: AcpSession | undefined): SessionFailure | null {
   if (!session) return null
@@ -51,8 +51,8 @@ function sessionFailure(session: AcpSession | undefined): SessionFailure | null 
   const authNone = session.state?.auth?.authStatus?.kind === 'none'
   const detail = notice?.notice?.description
   const stopped = !!notice && !session.live && adapterFailed.includes(notice.notice!.title)
-  if ((detail && authError.test(detail)) || authNone) return { kind: 'auth', detail, seq: notice?.seq, stopped }
-  if (stopped) return { kind: 'adapter', title: notice!.notice!.title, detail, seq: notice!.seq }
+  if ((detail && authError.test(detail)) || authNone) return { kind: 'auth', seq: notice?.seq, stopped }
+  if (stopped) return { kind: 'adapter', title: notice!.notice!.title, seq: notice!.seq }
   return null
 }
 
@@ -216,7 +216,6 @@ export function SessionFailureCallout({ run, session, switchable, shells, nav }:
             {methods.map((method) => <li key={method.id}>{method.name}{method.description ? `: ${method.description}` : ''}</li>)}
           </ul>
         )}
-        {failure.detail && <pre className="mt-1 font-code text-ui-sm break-words whitespace-pre-wrap text-muted">{failure.detail}</pre>}
       </Callout>
     )
   }
@@ -231,8 +230,6 @@ export function SessionFailureCallout({ run, session, switchable, shells, nav }:
           <AskAssistantButton size="sm" variant="secondary" ask={{ draft: 'Fix this', attachments: [target] }}>Fix this</AskAssistantButton>
         </>
       }
-    >
-      {failure.detail && <pre className="max-h-40 overflow-y-auto font-code text-ui-sm break-words whitespace-pre-wrap">{failure.detail}</pre>}
-    </Callout>
+    />
   )
 }

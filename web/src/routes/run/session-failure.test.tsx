@@ -98,17 +98,16 @@ describe('a launched session whose agent failed to start', () => {
     return useStore.getState().acpSessions.run_1!
   }
 
-  it('offers a retry and Standard under the real error', () => {
+  it('offers a retry and Standard, leaving the error to the notice above it', () => {
     renderCallout(failed('start the agent: exec: "claude-agent-acp": executable file not found in $PATH'))
     expect(screen.getByText('Enhanced agent failed')).toBeDefined()
-    expect(screen.getByText(/executable file not found in \$PATH/)).toBeDefined()
+    expect(screen.queryByText(/executable file not found in \$PATH/)).toBeNull()
     for (const name of ['Retry Enhanced', 'Open in Standard']) expect(screen.getByRole('button', { name })).toBeDefined()
   })
 
   it('offers the sign-in steps when the agent refused the login', () => {
     renderCallout(failed('the agent refused: Authentication required; sign in again on the Agents page'))
     expect(screen.getByText('The agent is not signed in')).toBeDefined()
-    expect(screen.getByText(/Authentication required; sign in again on the Agents page/)).toBeDefined()
     expect(screen.getByText(/then choose Retry Enhanced/)).toBeDefined()
     for (const name of ['Sign in on Agents', 'Open a terminal', 'Retry Enhanced']) expect(screen.getByRole('button', { name })).toBeDefined()
   })

@@ -4142,14 +4142,14 @@ dock glides to the next card or closes; there is no Escape binding, since
 Escape already closes sheets and an accidental reject cancels the tool call.
 The header's **Answer** focuses the docked card on every screen. While Session shows the dock, Details' **Needs
 you** shows one link, "1 request, shown below the timeline", that closes a
-Details sheet and focuses the card; on other views it lists the cards. `routes/run/session-failure.tsx` shows an adapter failure with
-**Retry Enhanced** and **Open in Standard**, and a sign-in failure with the
+Details sheet and focuses the card; on other views it lists the cards. `routes/run/session-failure.tsx` offers the actions for the failure notice that ends the timeline above it, and leaves the error to that notice: an adapter failure gets
+**Retry Enhanced** and **Open in Standard**, and a sign-in failure the
 agent's auth methods, plus **Retry Enhanced** when the agent failed to start,
 since signing in does not start it. On a run on the viewer's own account it adds **Sign in
 on Agents**, and when that agent's `agent.list` row has `login_problem` its
 title is the alert's ("Claude Code is signed out" or "Claude Code's sign-in
 was refused"); a login-file problem shows verbatim, while a refusal is
-already the failure quoted below. On a run on another member's account it
+already in the notice. On a run on another member's account it
 says that member signs in again on their Agents page or with
 `aether agent login <agent>`.
 
