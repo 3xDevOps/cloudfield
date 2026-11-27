@@ -340,9 +340,10 @@ otherwise the error ends `<n> available bytes; reserve <n> bytes plus ...`.
 Memory ceilings (`--run-memory`) are never counted, only what sessions hold
 now.
 
-- A launch takes 512 MiB while it runs. On a hosted test runner a 2 GiB
-  session VM held 159 MiB of the host once booted; what it grows to later is
-  memory the next check sees as used.
+- A launch takes 512 MiB while it runs, an Enhanced one until its agent has
+  started. On a hosted test runner a 2 GiB session VM held 159 MiB of the
+  host once booted; what it grows to later is memory the next check sees as
+  used.
 - The wake of a saved session VM takes the size of its saved memory on
   disk, which the restore loads back: 918 MiB on disk for a VM that held
   934 MiB, and 938 MiB held again after the wake. After the wake it keeps
@@ -410,7 +411,8 @@ timeline says `Paused: the server was running out of memory. It carries on
 by itself once memory is free again. If it has to be saved to disk for
 that, it wakes with every process where it was.`, at most once in 5
 minutes. A session the server is working on needs its guest to answer, so
-the brake leaves it running until that is done: one it is launching,
+the brake leaves it running until that is done: one it is launching, an
+Enhanced one until its agent has started and taken the messages held for it,
 waking once admission lets the wake go ahead, closing, killing, finishing,
 saving because it is idle, or taking up after a restart, an Enhanced
 session whose agent it restarts, and a Background session whose turn it
@@ -431,7 +433,10 @@ measured in a real frozen VM: 3 for the keeper to confirm a detach, 1 for
 the ack of the last output the server recorded, and 5 to close the input;
 Codex app-servers, 5 seconds to close their input. Frozen guests so add at
 most about 41 seconds to a stop, within the `TimeoutStopSec=90` of
-`aether-server.service`. The next server adopts each agent as after a kill
+`aether-server.service`. Before those steps the stop waits for the agent of
+an Enhanced session launched just before it to start, which takes seconds
+and gives up after 1 minute; a start that hangs that long while guests are
+frozen takes the stop past 90 seconds, and systemd kills the server. The next server adopts each agent as after a kill
 ([enhanced-sessions.md](enhanced-sessions.md#restarts-and-failures)). The
 server that starts, after a stop or a crash, never lets a frozen VM run to
 take its session up. It takes the session up asleep, marked to wake, and
@@ -749,13 +754,29 @@ launch retried on an older image, is on the line twice.
 | `guest_boot_ms` | VM: the guest kernel's boot and the helper's mounts, until the helper answers. |
 | `guest_setup_ms` | VM: the session user's account and the checkout's git setup in the guest. |
 | `helper_boot_ms` | VM: the helper's `Boot`: the setup script, then the main process. |
-| `agent_ms` | Attaching to the agent; for an Enhanced session, until its conversation is open. In a Docker container, also creating and starting the container. |
+| `agent_ms` | Attaching to the agent. In a Docker container, also creating and starting the container. An Enhanced session's agent starts after the launch returned, on a line of its own. |
 | `wait_for_save_ms` | Wake: waiting for a save still in progress when the wake was asked for. |
 | `restore_ms` | Wake: Cloud Hypervisor loading the saved memory. |
 | `resume_ms` | Wake: resuming the guest. |
 | `helper_ms` | Wake: until the guest's helper answers. |
 | `saved_state_ms` | Wake: setting the guest's clock, recording the wake and deleting the saved state. |
 | `reattach_ms` | Wake: taking up the agent, its terminal, the diff watch and the terminals again. In a Docker container, also starting the container. |
+
+An Enhanced session's launch returns before its agent has started. The start
+logs its own line when it ends, also when it failed, in which case
+`scheduler: enhanced session failed` with the error comes before it.
+The line repeats the launch's steps and adds `agent_start_ms`, how long the
+start took: from the launch attaching to the agent until the agent's
+conversation is open with its mode, model and effort set and the task sent.
+`total_ms` on this line runs from the launch request to that point:
+
+```sh
+sudo journalctl -u aether-server | grep 'scheduler: agent start'
+```
+
+```
+INFO scheduler: agent start run=<run id> total_ms=... admission_ms=... ... agent_ms=... agent_start_ms=...
+```
 
 ## Enhanced sessions
 
@@ -765,7 +786,7 @@ login shell stay up.
 
 | Failure | What you see | What you do |
 | --- | --- | --- |
-| The session cannot start, for example because the agent is not signed in | **Disconnected**, `enhanced session failed: <error>`. Messages are refused with `scheduler: the enhanced session is not running: <error>`. | Fix the cause, then press **Retry Enhanced** in the Chat view. |
+| The session cannot start, for example because the agent is not signed in | **Disconnected**, `enhanced session failed: <error>`. Messages are refused with `scheduler: the enhanced session is not running: <error>`. | Fix the cause, then press **Retry Enhanced** in the Chat view. A session whose first start failed then starts with the task it was launched with. |
 | The agent's process exits | The turn in flight shows **Turn interrupted**; **Disconnected**, `enhanced session ended: the agent's ACP server exited with code <n>`, with `; stderr: <tail>` when it printed any. | **Retry Enhanced**. |
 | The agent drops its conversation but keeps running, as Claude's adapter does when Claude Code dies | **Prompt failed** with `Session not found`, then **Agent conversation lost** while Cloudfield restores the conversation. Lost again within 5 minutes: **Disconnected**, `enhanced session failed: the agent lost its conversation again within 5 minutes: ...`. | Send the failed message again. After a second loss, **Retry Enhanced**. |
 | The agent refuses a turn with `Authentication required` | **Sign-in refused**, or **Agent signed out** when the login file cannot sign the agent in, while Cloudfield restarts the agent in its container, then `enhanced turn failed: ... Authentication required ...; <owner>'s <agent> login is signed out. Sign in, then send the message again: dashboard Agents page, or aether agent login <agent>`, or `...; Cloudfield restarted the agent to reread <owner>'s login: send the message again. Refused again? Sign in: ...` when the login file looks sound. The account owner's dashboard shows **\<agent\> is signed out** or **\<agent\>'s sign-in was refused** until the login works again. | Send the message again when the reason says so. Otherwise the account's owner signs in on the **Agents** page or with `cloudfield agent login <agent>`, then you send it again ([harnesses.md](harnesses.md#when-a-login-is-signed-out)). |
