@@ -59,6 +59,9 @@ const (
 	// A connector at a retiring address gets the notice on a tool result
 	// at most once every noticeEvery.
 	noticeEvery = 24 * time.Hour
+	// The edge's notices for one connector URL are read at most once every
+	// noticeReadEvery, so a change shows up to noticeReadEvery late.
+	noticeReadEvery = time.Minute
 )
 
 var b64 = base64.RawURLEncoding
@@ -121,7 +124,7 @@ type handler struct {
 	long            *ops.LongCalls
 
 	// mu guards codes, nonces, wrong, wrongAll, wrongSwept, writes,
-	// writesSwept, noticed and noticedSwept.
+	// writesSwept, noticed, noticeReads and noticedSwept.
 	mu    sync.Mutex
 	codes map[string]authCode
 	// nonces holds the nonces of the edge assertions consent pages were
@@ -137,8 +140,16 @@ type handler struct {
 	// noticed is when each connector's tool result last carried the
 	// notice that its address is retiring. It does not survive a restart,
 	// so the next result after one carries it again.
-	noticed      map[string]time.Time
+	noticed map[string]time.Time
+	// noticeReads is the last read of the edge's notices for each
+	// connector URL.
+	noticeReads  map[string]noticeRead
 	noticedSwept time.Time
+}
+
+type noticeRead struct {
+	at     time.Time
+	notice *protocol.ConnectorNotice
 }
 
 // New returns the handler for every path under the base URL's path, the
@@ -175,7 +186,7 @@ func New(cfg Config) (http.Handler, error) {
 			return http.ErrUseLastResponse
 		}},
 		mux: http.NewServeMux(), now: time.Now, started: cmp.Or(cfg.Started, time.Now()), codes: map[string]authCode{}, nonces: map[string]nonceUse{}, wrong: map[netip.Prefix]wrongCodes{},
-		writes: map[string]*rate.Limiter{}, noticed: map[string]time.Time{},
+		writes: map[string]*rate.Limiter{}, noticed: map[string]time.Time{}, noticeReads: map[string]noticeRead{},
 		long: &ops.LongCalls{After: edgeproto.HTTPShortCall, Max: edgeproto.MaxHTTPLongCallsPerServer}}
 
 	streamable := mcp.NewStreamableHTTPHandler(h.server, &mcp.StreamableHTTPOptions{
@@ -330,27 +341,51 @@ func jsonOnly(req mcp.Request) bool {
 	return ok && (call.Params.Name == "search" || call.Params.Name == "fetch")
 }
 
+// noticeAt is what the edge's notices say about the connector URL u,
+// read again only once the last read of them is noticeReadEvery old.
+func (h *handler) noticeAt(u string, now time.Time) *protocol.ConnectorNotice {
+	h.mu.Lock()
+	h.sweepNotices(now)
+	last, ok := h.noticeReads[u]
+	h.mu.Unlock()
+	if ok && now.Sub(last.at) < noticeReadEvery {
+		return last.notice
+	}
+	n := h.ssh.ConnectorNotice(u)
+	h.mu.Lock()
+	h.noticeReads[u] = noticeRead{at: now, notice: n}
+	h.mu.Unlock()
+	return n
+}
+
+// sweepNotices drops, at most once a minute as allowWrite sweeps its
+// buckets, the records noticed and noticeReads no longer use. h.mu is
+// held.
+func (h *handler) sweepNotices(now time.Time) {
+	if now.Sub(h.noticedSwept) < time.Minute {
+		return
+	}
+	maps.DeleteFunc(h.noticed, func(_ string, last time.Time) bool { return now.Sub(last) >= noticeEvery })
+	maps.DeleteFunc(h.noticeReads, func(_ string, last noticeRead) bool { return now.Sub(last.at) >= noticeReadEvery })
+	h.noticedSwept = now
+}
+
 // retiringNotice is the text a tool result of connector c adds when the
 // edge says the address c was added at is retiring, names where the
 // server takes it instead, and the notice was not added in the last
-// noticeEvery; empty otherwise. Records older than noticeEvery are swept
-// at most once a minute, as allowWrite sweeps its buckets.
+// noticeEvery; empty otherwise.
 func (h *handler) retiringNotice(c *store.Connector, now time.Time) string {
 	recent := func() bool {
 		last, ok := h.noticed[c.ID]
 		return ok && now.Sub(last) < noticeEvery
 	}
 	h.mu.Lock()
-	if now.Sub(h.noticedSwept) >= time.Minute {
-		maps.DeleteFunc(h.noticed, func(_ string, last time.Time) bool { return now.Sub(last) >= noticeEvery })
-		h.noticedSwept = now
-	}
 	skip := recent()
 	h.mu.Unlock()
 	if skip {
 		return ""
 	}
-	n := h.ssh.ConnectorNotice(c.Resource)
+	n := h.noticeAt(c.Resource, now)
 	if n == nil || n.State != edgeproto.NoticeRetiring || n.URL == "" {
 		return ""
 	}

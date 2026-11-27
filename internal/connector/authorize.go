@@ -189,7 +189,7 @@ func (h *handler) authorizePage(w http.ResponseWriter, r *http.Request, res reso
 		h.redirectError(w, r, req, "invalid_target", "resource must be "+res.base)
 		return
 	}
-	page := consentPage{Client: clientLabel(req), Write: true, Universal: res.universal(), Retiring: h.retiring(res)}
+	page := consentPage{Client: clientLabel(req), Write: true, Universal: res.universal(), Retiring: h.retiring(res, h.now())}
 	bound := h.ssh.EdgeBindsSignIn()
 	if bound && r.Method == http.MethodGet && q.Has(edgeproto.ParamAssertion) {
 		h.renderError(w, "The edge put its sign-in in the URL, where logs and browser history keep it, so it is refused. "+
@@ -326,7 +326,7 @@ func (h *handler) authorizeAllow(w http.ResponseWriter, r *http.Request, res res
 		return
 	}
 	scopes := grantedScopes(r.PostForm["scope"])
-	page := consentPage{Request: signed, Client: clientLabel(req), Universal: res.universal(), Retiring: h.retiring(res),
+	page := consentPage{Request: signed, Client: clientLabel(req), Universal: res.universal(), Retiring: h.retiring(res, h.now()),
 		Write: slices.Contains(scopes, string(ops.ScopeWrite)), Control: slices.Contains(scopes, string(ops.ScopeControl))}
 	now := h.now()
 	if req.Asserted != nil {
@@ -548,8 +548,8 @@ type consentPage struct {
 
 // retiring is the edge's notice that res's address is retiring, nil when
 // there is none.
-func (h *handler) retiring(res resource) *protocol.ConnectorNotice {
-	n := h.ssh.ConnectorNotice(res.base)
+func (h *handler) retiring(res resource, now time.Time) *protocol.ConnectorNotice {
+	n := h.noticeAt(res.base, now)
 	if n == nil || n.State != edgeproto.NoticeRetiring {
 		return nil
 	}

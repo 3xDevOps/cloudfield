@@ -59,6 +59,7 @@ func TestConsentPageAtRetiringAddress(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			e.edge.set(tt.relays, tt.notices)
+			e.skew.Add(int64(noticeReadEvery))
 			resp, err := http.Get(e.authorizeURL())
 			if err != nil {
 				t.Fatal(err)
@@ -94,6 +95,37 @@ func TestConsentPageAtRetiringAddress(t *testing.T) {
 				t.Fatalf("wrong code = %d, want 403 still warning %s:\n%s", resp.StatusCode, tt.want, page)
 			}
 		})
+	}
+}
+
+func TestConsentPageReadsNoticesOncePerMinute(t *testing.T) {
+	e := newEnv(t)
+	e.edge.version.Store(int64(edgeproto.VersionRelayOrigin))
+	page := func() string {
+		t.Helper()
+		resp, err := http.Get(e.authorizeURL())
+		if err != nil {
+			t.Fatal(err)
+		}
+		page, err := readBody(resp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return page
+	}
+	retiring := `<p class="retiring">This address is retiring.`
+	e.edge.set(nil, stored(false, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay}))
+	if !strings.Contains(page(), retiring) {
+		t.Fatal("consent page does not warn")
+	}
+	e.edge.set(nil, edgeagent.StoredNotices{})
+	e.skew.Add(int64(noticeReadEvery - time.Second))
+	if !strings.Contains(page(), retiring) {
+		t.Fatal("consent page read the notices again within a minute")
+	}
+	e.skew.Add(int64(time.Second))
+	if strings.Contains(page(), "retiring") {
+		t.Fatal("consent page still warns a minute after the notice went")
 	}
 }
 
@@ -202,47 +234,50 @@ func TestConnectorListAtRetiringAddress(t *testing.T) {
 
 func TestToolResultNoticeAtRetiringAddress(t *testing.T) {
 	e := newEnv(t)
-	c := e.connect(t)
+	c, other := e.connect(t), e.connect(t)
 	session, refresh := c.session, c.token.RefreshToken
-	// later moves the clock to at and connects again with a refreshed
+	// later moves the clock on by d and connects again with a refreshed
 	// token, since the access token lasts an hour.
-	later := func(at time.Duration) {
+	later := func(d time.Duration) {
 		t.Helper()
-		e.skew.Store(int64(at))
+		e.skew.Add(int64(d))
 		next := e.refresh(t, c, refresh, http.StatusOK)
 		session, refresh = e.session(t, next.AccessToken), next.RefreshToken
 	}
-	call := func() *mcp.CallToolResult {
+	// set gives the edge notices and moves the clock past the last read
+	// of them.
+	set := func(relays []string, n edgeagent.StoredNotices) {
+		e.edge.set(relays, n)
+		e.skew.Add(int64(noticeReadEvery))
+	}
+	callOn := func(s *mcp.ClientSession) *mcp.CallToolResult {
 		t.Helper()
-		res, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "aether_list_workspaces"})
+		res, err := s.CallTool(t.Context(), &mcp.CallToolParams{Name: "aether_list_workspaces"})
 		if err != nil || res.IsError {
 			t.Fatalf("aether_list_workspaces = %+v %v", res, err)
 		}
 		return res
 	}
-	plain := call()
+	plain := callOn(session)
 	if len(plain.Content) != 1 {
 		t.Fatalf("with no notice the result has %d content blocks, want 1", len(plain.Content))
 	}
 	first, _ := json.Marshal(plain.Content[0])
 	structured, _ := json.Marshal(plain.StructuredContent)
-	same := func(res *mcp.CallToolResult) {
+	blocksOn := func(s *mcp.ClientSession, want int) *mcp.CallToolResult {
 		t.Helper()
+		res := callOn(s)
+		if len(res.Content) != want {
+			t.Fatalf("result has %d content blocks, want %d: %+v", len(res.Content), want, res.Content)
+		}
 		gotFirst, _ := json.Marshal(res.Content[0])
 		gotStructured, _ := json.Marshal(res.StructuredContent)
 		if string(gotFirst) != string(first) || string(gotStructured) != string(structured) {
 			t.Fatalf("first block %s structured %s, want %s %s", gotFirst, gotStructured, first, structured)
 		}
-	}
-	blocks := func(want int) *mcp.CallToolResult {
-		t.Helper()
-		res := call()
-		if len(res.Content) != want {
-			t.Fatalf("result has %d content blocks, want %d: %+v", len(res.Content), want, res.Content)
-		}
-		same(res)
 		return res
 	}
+	blocks := func(want int) *mcp.CallToolResult { t.Helper(); return blocksOn(session, want) }
 	notice := func(res *mcp.CallToolResult) string {
 		t.Helper()
 		text, ok := res.Content[1].(*mcp.TextContent)
@@ -252,38 +287,49 @@ func TestToolResultNoticeAtRetiringAddress(t *testing.T) {
 		return text.Text
 	}
 
-	e.edge.set(nil, stored(false, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: oldRelay, Replacement: e.origin, Date: "2027-03-01"}))
+	set(nil, stored(false, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: oldRelay, Replacement: e.origin, Date: "2027-03-01"}))
 	blocks(1)
-	e.edge.set(nil, stored(false, edgeproto.Notice{State: edgeproto.NoticeRetired, Origin: e.origin, Replacement: newRelay}))
+	set(nil, stored(false, edgeproto.Notice{State: edgeproto.NoticeRetired, Origin: e.origin, Replacement: newRelay}))
 	blocks(1)
 
 	e.edge.version.Store(int64(edgeproto.VersionRelayOrigin))
 	retiring := stored(false, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay, Date: "2027-03-01"})
-	e.edge.set(nil, retiring)
+	set(nil, retiring)
+	blocks(1)
+	both := []string{e.origin, newRelay}
+	set(both, stored(true, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay}))
 	blocks(1)
 
-	both := []string{e.origin, newRelay}
-	e.edge.set(both, retiring)
-	for _, name := range []string{"search"} {
-		res, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: name, Arguments: map[string]any{"query": "x"}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if res.IsError || len(res.Content) != 1 {
-			t.Fatalf("%s result = error %v, %d content blocks %+v, want one", name, res.IsError, len(res.Content), res.Content)
+	set(both, retiring)
+	for _, name := range []string{"search", "fetch"} {
+		if !jsonOnly(&mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{Name: name}}) {
+			t.Fatalf("%s may carry the notice", name)
 		}
 	}
+	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "search", Arguments: map[string]any{"query": "x"}})
+	if err != nil || res.IsError || len(res.Content) != 1 {
+		t.Fatalf("search = %+v %v, want one content block", res, err)
+	}
+	res, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "aether_get_session", Arguments: map[string]any{"run_id": "run-none"}})
+	if err != nil || !res.IsError || len(res.Content) != 1 {
+		t.Fatalf("aether_get_session of no run = %+v %v, want one error block", res, err)
+	}
 	newURL := newRelay + strings.TrimPrefix(e.base, e.origin)
-	if got, want := notice(blocks(2)), "Notice for the user: this connector was added at "+e.base+
-		", an address that is retiring on 2027-03-01. It must be added again at "+newURL+"."; got != want {
+	want := "Notice for the user: this connector was added at " + e.base + ", an address that is retiring on 2027-03-01. It must be added again at " + newURL + "."
+	if got := notice(blocks(2)); got != want {
 		t.Fatalf("notice %q, want %q", got, want)
 	}
 	blocks(1)
-	later(24*time.Hour - time.Second)
+	if got := notice(blocksOn(other.session, 2)); got != want {
+		t.Fatalf("second connector's notice %q, want %q", got, want)
+	}
+	blocksOn(other.session, 1)
 	blocks(1)
 
-	e.edge.set(both, stored(false, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay}))
-	later(24 * time.Hour)
+	later(noticeEvery - noticeReadEvery - time.Second)
+	blocks(1)
+	set(both, stored(false, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay}))
+	later(time.Second)
 	if got, want := notice(blocks(2)), "Notice for the user: this connector was added at "+e.base+
 		", an address that is retiring. It must be added again at "+newURL+"."; got != want {
 		t.Fatalf("notice %q, want %q", got, want)
