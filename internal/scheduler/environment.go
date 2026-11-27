@@ -690,6 +690,10 @@ func (s *Scheduler) accountConfigMounts(dir string, launcher domain.MemberID, pr
 	}
 	if legacy || maskLegacy {
 		mask := filepath.Join(dir, "legacy-mask")
+		// An earlier plan of this run left it read-only.
+		if err := os.Remove(mask); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("scheduler: mask the session's ~/%s: %w", ac.Legacy, err)
+		}
 		if err := writeFileIn(dir, path.Base(mask), nil); err != nil {
 			return nil, fmt.Errorf("scheduler: mask the session's ~/%s: %w", ac.Legacy, err)
 		}

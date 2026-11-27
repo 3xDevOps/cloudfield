@@ -3,6 +3,8 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -578,4 +580,55 @@ func TestASleepingSessionWakesOnlyOnALoginStillShared(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A move's replacement container on an added login is set up as a launch
+// on it is: the variables that would sign Claude Code in are set empty, the
+// legacy configuration is masked, and the configuration copy's volume goes
+// when the session does. The move is from one added login to another, so
+// the replacement's plan writes over the first container's copy and mask.
+func TestAMoveToAnAddedLoginIsSetUpAsALaunchOnIt(t *testing.T) {
+	t.Parallel()
+	e, _, _, usage, second := newLoginMoveEnv(t, func(cfg *Config) { delete(cfg.Harnesses, "claude") })
+	third := e.addLogin(t, e.member.ID, "lgn-third00000", "third", workLogin)
+	usage.set(domain.AccountOf(e.member.ID), 100)
+	startScheduler(t, e.sched)
+	<-e.sched.RecoveryReady()
+	run, err := e.sched.LaunchWithOptions(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "fix it", "claude", domain.LaunchTUI, domain.LaunchOptions{AccountLogin: second.Login})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.waitStoreStatus(t, run.ID, domain.RunRunning)
+	e.report(t, run.ID, agentstatus.Report{State: agentstatus.Working, SessionID: "sess-1"})
+	e.report(t, run.ID, standardLimit(t))
+	waitFor(t, "the session on third", func() bool {
+		row, err := e.db.GetRun(t.Context(), run.ID)
+		if err == nil && row.Status.Terminal() {
+			t.Fatalf("run %s (%q); want it moved to third", row.Status, row.Reason)
+		}
+		c := e.rt.byName(string(run.ID))
+		return err == nil && row.Account() == third && c != nil && e.mountsLogin(t, c.spec, third)
+	})
+	spec := e.rt.byName(string(run.ID)).spec
+	for _, key := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"} {
+		if v, ok := spec.Env[key]; !ok || v != "" {
+			t.Errorf("the replacement's %s = %q, set %v; want set empty", key, v, ok)
+		}
+	}
+	if !slices.ContainsFunc(spec.Mounts, func(m runtime.Mount) bool {
+		return m.ContainerPath == path.Join(spec.Env["HOME"], ".claude/.config.json") && m.ReadOnly
+	}) {
+		t.Errorf("the replacement has no read-only mask over ~/.claude/.config.json; mounts %+v", spec.Mounts)
+	}
+	dir := filepath.Join(e.sched.accountConfigRoot(), string(run.ID))
+	if err := e.sched.Kill(t.Context(), run.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the configuration copy and its volume removed", func() bool {
+		e.rt.mu.Lock()
+		removed := slices.Contains(e.rt.removedVolumes, dir)
+		e.rt.mu.Unlock()
+		_, statErr := os.Lstat(dir)
+		return removed && errors.Is(statErr, fs.ErrNotExist)
+	})
 }
