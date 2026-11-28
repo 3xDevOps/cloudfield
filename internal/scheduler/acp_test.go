@@ -425,7 +425,16 @@ func (e *testEnv) launchACP(t *testing.T, task string) *domain.Run {
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
+	e.opened(t, run.ID)
 	return run
+}
+
+// opened waits for the open the run's launch left running.
+func (e *testEnv) opened(t *testing.T, run domain.RunID) {
+	t.Helper()
+	if err := e.sched.acp.awaitOpening(t.Context(), run); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func waitItems(t *testing.T, s *Scheduler, run domain.RunID, what string, cond func([]acphost.Item) bool) []acphost.Item {

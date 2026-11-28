@@ -141,23 +141,29 @@ func (s *Service) deliver(ctx context.Context, msg *store.RoomMessage, actor *do
 		if ClassifyReceipt(err) != ReceiptNotSent {
 			return ReceiptUncertain, "", nil, nil
 		}
-		code := "session_unavailable"
-		switch {
-		case errors.Is(err, acphost.ErrUnsupportedImage):
-			code = "unsupported_image"
-		case errors.Is(err, domain.ErrPromptNotSent):
-			code = "prompt_not_sent"
-		}
-		message := err.Error()
-		// Every workspace viewer reads the failure; an attached file's error
-		// names its host path.
-		var pathErr *fs.PathError
-		if errors.As(err, &pathErr) {
-			message = strings.ReplaceAll(message, pathErr.Path, path.Base(pathErr.Path))
-		}
-		return ReceiptNotSent, "", &store.RoomMessageFailure{Code: code, Message: message}, nil
+		return ReceiptNotSent, "", handoffFailure(err), nil
 	}
 	return ReceiptSent, outcome, nil, nil
+}
+
+// handoffFailure is the failure of a message the server could not hand to the
+// agent.
+func handoffFailure(err error) *store.RoomMessageFailure {
+	code := "session_unavailable"
+	switch {
+	case errors.Is(err, acphost.ErrUnsupportedImage):
+		code = "unsupported_image"
+	case errors.Is(err, domain.ErrPromptNotSent):
+		code = "prompt_not_sent"
+	}
+	message := err.Error()
+	// Every workspace viewer reads the failure; an attached file's error
+	// names its host path.
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		message = strings.ReplaceAll(message, pathErr.Path, path.Base(pathErr.Path))
+	}
+	return &store.RoomMessageFailure{Code: code, Message: message}
 }
 
 func (s *Service) inject(ctx context.Context, msg *store.RoomMessage, actor *domain.Member, run *domain.Run, steer bool) (string, error) {
@@ -182,6 +188,10 @@ func (s *Service) agentDelivered(ctx context.Context, id string, deliveryErr err
 		failure = notSent.failure
 	case errors.Is(deliveryErr, acphost.ErrClosed):
 		failure = &store.RoomMessageFailure{Code: "agent_disconnected", Message: deliveryErr.Error()}
+	// A message held while the agent started, which the server then could
+	// not hand over.
+	case deliveryErr != nil && ClassifyReceipt(deliveryErr) == ReceiptNotSent:
+		failure = handoffFailure(deliveryErr)
 	case deliveryErr != nil:
 		failure = &store.RoomMessageFailure{Code: "agent_refused", Message: deliveryErr.Error()}
 	}

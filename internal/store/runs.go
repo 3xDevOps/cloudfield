@@ -118,14 +118,14 @@ func (d *DB) createRun(ctx context.Context, r *domain.Run, reserved bool) error 
 		                   reason, branch, worktree, protected, created_at, started_at,
 		                   finished_at, profile_snapshot_id, title, last_commit, last_commit_at,
 		                   harness_session_id, base_commit, base_branch, base_source, base_checked_at, acp,
-		                   status_changed_at, requested_account_member_id, fallback_disabled, fallback_order, model, effort, permission, via, cpu_limit, memory_limit_bytes, pids_limit, linear_issue_url)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                   status_changed_at, requested_account_member_id, fallback_disabled, fallback_order, model, effort, permission, via, cpu_limit, memory_limit_bytes, pids_limit, linear_issue_url, account_login, account_login_per_use)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, r.WorkspaceID, r.MemberID, r.AccountMemberID, r.HomeMemberID, r.Task, r.Harness, r.Mode, r.Status,
 		r.Reason, r.Branch, r.Worktree, r.Protected, createdAt, startedAt, finishedAt,
 		r.ProfileSnapshotID, r.Title, r.LastCommit, lastCommitAt, r.HarnessSessionID,
 		r.BaseCommit, r.BaseBranch, r.BaseSource, baseCheckedAt, r.ACP, createdAt,
 		r.RequestedAccountMemberID, r.Fallback.Disabled, fallbackOrder, r.Model, r.Effort, r.Permission, r.Via,
-		r.Limits.CPUs, r.Limits.MemoryBytes, r.Limits.Pids, r.LinearIssueURL,
+		r.Limits.CPUs, r.Limits.MemoryBytes, r.Limits.Pids, r.LinearIssueURL, r.AccountLogin, r.AccountLoginPerUse,
 	); err != nil {
 		return fmt.Errorf("store: create session: %w", mapConstraint(err, ErrNotFound))
 	}
@@ -160,7 +160,7 @@ func scanRun(row interface{ Scan(...any) error }) (*domain.Run, error) {
 		&r.BaseSource, &baseCheckedAt, &archivedAt, &r.OutcomeUnseen, &r.FinishUnopened, &statusChangedAt,
 		&r.Review, &reviewChangedAt, &r.ACP,
 		&r.RequestedAccountMemberID, &r.Fallback.Disabled, &fallbackOrder, &r.Model, &r.RefusedModel, &r.ModelError, &r.Effort, &r.Permission, &r.Via,
-		&r.Children, &r.ChildrenSetBy, &r.Limits.CPUs, &r.Limits.MemoryBytes, &r.Limits.Pids, &r.LinearIssueURL, &r.UnansweredQuestions,
+		&r.Children, &r.ChildrenSetBy, &r.Limits.CPUs, &r.Limits.MemoryBytes, &r.Limits.Pids, &r.LinearIssueURL, &r.AccountLogin, &r.AccountLoginPerUse, &r.UnansweredQuestions,
 		&r.UnackedMessages, &oldestUnacked,
 		&r.ParentRunID, &r.RootRunID, &r.ChildPurpose, &r.Detached); err != nil {
 		return nil, err
@@ -190,7 +190,7 @@ const runCols = `runs.id, runs.workspace_id, runs.member_id, runs.account_member
 	runs.base_checked_at, runs.archived_at, runs.outcome_unseen, runs.finish_unopened, runs.status_changed_at,
 	runs.review, runs.review_changed_at, runs.acp, COALESCE(runs.requested_account_member_id, ''), runs.fallback_disabled, runs.fallback_order, runs.model, runs.refused_model, runs.model_error, runs.effort, runs.permission, runs.via,
 	runs.children, runs.children_set_by,
-	runs.cpu_limit, runs.memory_limit_bytes, runs.pids_limit, runs.linear_issue_url`
+	runs.cpu_limit, runs.memory_limit_bytes, runs.pids_limit, runs.linear_issue_url, runs.account_login, runs.account_login_per_use`
 
 // runSnapshotQuery returns one grouped query for a run snapshot. Questions
 // with a denied/cancelled state are not actionable, and a correlated reply

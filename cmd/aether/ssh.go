@@ -51,7 +51,7 @@ func runSSH(args []string) error {
 	code := systemSSH(argv, os.Stdin, os.Stdout, os.Stderr)
 	signal.Stop(interrupts)
 	if code != 0 {
-		os.Exit(code)
+		return exitCode(code)
 	}
 	return nil
 }

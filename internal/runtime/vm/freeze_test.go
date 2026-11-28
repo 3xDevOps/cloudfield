@@ -3,8 +3,10 @@ package vm
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -93,22 +95,148 @@ func TestAFailedSaveLeavesTheVMRunning(t *testing.T) {
 	}
 }
 
-// A save whose context ends while the guest still runs gives up there: it
-// neither pauses the guest nor syncs it again.
-func TestASaveGivenUpBeforeThePauseLeavesTheVMRunning(t *testing.T) {
+// The snapshot's page cache is charged to the unit: its memory limit is off
+// while the monitor writes, and back once a failed save's guest runs on.
+func TestASaveLiftsTheUnitsMemoryLimitForTheSnapshot(t *testing.T) {
 	h := newHarness(t)
 	h.createStarted("run-a", sessionSpec("run-a"))
-	h.engine.reportPoll = time.Hour
-	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
-	defer cancel()
-	if err := h.engine.save(ctx, "run-a"); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("save = %v, want its context's end", err)
+	hold := make(chan struct{})
+	vmm := h.units.vmm("run-a")
+	vmm.mu.Lock()
+	vmm.snapshotHold = hold
+	vmm.mu.Unlock()
+	saved := make(chan error, 1)
+	go func() { saved <- h.engine.save(t.Context(), "run-a") }()
+	<-hold
+	if got, _ := unitLimit(t, h, "run-a"); got != "max" {
+		t.Errorf("during the snapshot the unit's memory.max is %q, want max", got)
 	}
-	if calls := h.units.vmm("run-a").called(); slices.Contains(calls, "vm.pause") {
-		t.Errorf("a save given up before the pause called %v", calls)
+	hold <- struct{}{}
+	if err := <-saved; err != nil {
+		t.Fatal(err)
 	}
-	if g := h.guest("run-a"); g.syncs > 1 {
-		t.Errorf("the save synced the guest %d times after it was given up", g.syncs)
+
+	h.createStarted("run-b", sessionSpec("run-b"))
+	vmm = h.units.vmm("run-b")
+	vmm.mu.Lock()
+	vmm.snapshotFails = true
+	vmm.mu.Unlock()
+	if err := h.engine.save(t.Context(), "run-b"); err == nil {
+		t.Fatal("a save whose snapshot fails returned no error")
+	}
+	if got, want := unitLimit(t, h, "run-b"); got != want || h.engine.halted(t.Context(), "run-b") {
+		t.Errorf("after a failed save the unit's memory.max is %q, halted=%v; want %s and the guest running", got, h.engine.halted(t.Context(), "run-b"), want)
+	}
+}
+
+// A paused guest whose unit has no memory limit, as a server that stopped
+// during a snapshot leaves it, or a failed save of a VM its caller paused,
+// gets the limit as a resume or a capture runs it, and not while it
+// stays paused: its monitor may still be writing the snapshot.
+func TestAPausedGuestGetsItsUnitsMemoryLimitAsItRuns(t *testing.T) {
+	h := newHarness(t)
+	halt := func(key string) *fakeVMM {
+		t.Helper()
+		h.createStarted(key, sessionSpec(key))
+		if err := newCHAPI(h.engine.path(key, apiSocket)).pause(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		return h.units.vmm(key)
+	}
+	check := func(key, when string, limited bool) {
+		t.Helper()
+		got, want := unitLimit(t, h, key)
+		if !limited {
+			want = "max"
+		}
+		if got != want || h.engine.halted(t.Context(), key) == limited {
+			t.Errorf("%s the unit's memory.max is %q and halted=%v, want %s and halted=%v", when, got, !limited, want, !limited)
+		}
+	}
+
+	vmm := halt("run-a")
+	vmm.mu.Lock()
+	vmm.snapshotFails, vmm.refuseResumes = true, 1
+	vmm.mu.Unlock()
+	if err := h.engine.save(t.Context(), "run-a"); err == nil {
+		t.Fatal("a save whose snapshot fails returned no error")
+	}
+	check("run-a", "after a failed save of a paused VM", false)
+	if err := h.engine.resume(t.Context(), "run-a"); err == nil {
+		t.Fatal("a refused resume returned no error")
+	}
+	check("run-a", "after a refused resume", false)
+	if err := h.engine.resume(t.Context(), "run-a"); err != nil {
+		t.Fatal(err)
+	}
+	check("run-a", "after a resume", true)
+
+	halt("run-b")
+	cut := h.engine.path("run-b", snapshotDir)
+	if err := errors.Join(os.Mkdir(cut, 0o700), os.WriteFile(h.engine.memoryMaxFile("run-b"), []byte("max"), 0o644)); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Runtime{vms: h.engine}).BootForCapture(t.Context(), runtime.ID(idPrefix+"run-b")); err != nil {
+		t.Fatal(err)
+	}
+	check("run-b", "after a capture started its vCPUs", true)
+	if _, err := os.Stat(cut); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the snapshot a stopped server cut short is still there as its guest runs: %v", err)
+	}
+}
+
+// unitLimit returns what key's unit holds in memory.max, and the MemoryMax
+// its record gives it.
+func unitLimit(t *testing.T, h *harness, key string) (got, want string) {
+	t.Helper()
+	data, err := os.ReadFile(h.engine.memoryMaxFile(key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := h.engine.load(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data), strconv.FormatInt(unitMemoryMiB(rec)<<20, 10)
+}
+
+// A save or park whose context ends while the guest still runs gives up
+// there: it neither pauses the guest nor syncs it again.
+func TestASleepGivenUpBeforeThePauseLeavesTheVMRunning(t *testing.T) {
+	sleeps := map[string]func(*engine, context.Context, string) error{"save": (*engine).save, "park": (*engine).park}
+	for name, sleep := range sleeps {
+		t.Run(name+" during the wait for freed pages", func(t *testing.T) {
+			h := newHarness(t)
+			h.createStarted("run-a", sessionSpec("run-a"))
+			h.engine.reportPoll = time.Hour
+			ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+			defer cancel()
+			if err := sleep(h.engine, ctx, "run-a"); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("%s = %v, want its context's end", name, err)
+			}
+			if calls := h.units.vmm("run-a").called(); slices.Contains(calls, "vm.pause") {
+				t.Errorf("a %s given up before the pause called %v", name, calls)
+			}
+			if g := h.guest("run-a"); g.syncs > 1 {
+				t.Errorf("the %s synced the guest %d times after it was given up", name, g.syncs)
+			}
+		})
+		t.Run(name+" during the first sync", func(t *testing.T) {
+			h := newHarness(t)
+			h.createStarted("run-a", sessionSpec("run-a"))
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			g := h.guest("run-a")
+			g.mu.Lock()
+			g.onSync, g.syncErr = cancel, context.Canceled
+			g.mu.Unlock()
+			if err := sleep(h.engine, ctx, "run-a"); !errors.Is(err, context.Canceled) {
+				t.Fatalf("%s = %v, want its context's end", name, err)
+			}
+			if calls := h.units.vmm("run-a").called(); slices.Contains(calls, "vm.pause") {
+				t.Errorf("a %s given up during its sync called %v", name, calls)
+			}
+		})
 	}
 }
 

@@ -1095,7 +1095,9 @@ rather than after the room's moderation delay; its result's `outcome` is
 `sent`, `queued` or `injected` for an enhanced session. A `queued` message
 carries `agent_delivery: "queued"` until the agent takes it
 (`"delivered"`), or turns `not_sent` with `failure.code` `agent_refused` or
-`agent_disconnected`; each change publishes `workspace.room_message`
+`agent_disconnected`, or, when it was held while the agent started and the
+server then could not hand it over, `session_unavailable`, `prompt_not_sent`
+or `unsupported_image`; each change publishes `workspace.room_message`
 ([enhanced-sessions.md](enhanced-sessions.md#permissions-and-input)).
 A message the server could not hand to the agent at all is `not_sent` with
 `failure.message` the real error and `failure.code`: `session_unavailable`
@@ -2122,6 +2124,19 @@ does, with the same files in the config directory:
   dashboard turns a pasted or handed claim link into one.
 - `edge.logout` revokes the device token at the edge and forgets it, and
   drops a pending `edge.login` for that edge.
+- With `{"notices":true}`, an `edge.status` entry carries `retiring` when
+  its edge address says it is retiring, or refuses as retired:
+  `{"state":"retiring"|"retired","replacement":"https://...","date":"YYYY-MM-DD"}`.
+  It is the address's own, unauthenticated word, validated as a canonical
+  origin and a real date. The gateway asks every signed-in edge's
+  `GET /v1/edge` at once, with no token, waits 2 seconds at most in all, and
+  keeps nothing between calls; an edge that does not answer in time, or names
+  itself, has no `retiring`. The sign-in in `login` is read before the
+  entries, so a sign-in that ends meanwhile still shows as `pending`.
+- `edge.logout` at an address that answers `410` naming a replacement deletes
+  the token, though the edge did not revoke it. A refusal from such an
+  address carries `data.retired: {"replacement":"https://..."}` beside
+  `data.refusal`, whose `refusal` is the edge's text.
 - Errors carry the client's own message. Not signed in, or an edge refusal
   with a `4xx` status such as a revoked token or a claimed server, answers
   `-32002`. An edge that cannot be reached or answers `5xx` answers
@@ -3027,7 +3042,9 @@ does not run its agent over ACP`. Every frame is JSON text.
 
 2. Server answers one ack frame. `seq` is the high-water mark the client
    holds once the `replay` frames that follow are applied; `live` says
-   whether a session is running; `state` is its snapshot (turn in flight,
+   whether a session is running; `starting`, set with `live` false, says
+   the launched session's agent has not started yet, so a `run.inject`
+   sent now is held and delivered once it has; `state` is its snapshot (turn in flight,
    queued prompts, pending requests with their options, mode, config
    options, commands, the agent's `auth` status and `auth_methods`,
    `prompt_images`: whether the agent accepts ACP image content, and

@@ -438,6 +438,7 @@ From the CLI, on your computer:
   adds it to an Enhanced agent's running turn
   ([Messages and notes](terminal.md#messages-and-notes)).
 - `cloudfield logs <session-id>` prints what the agent did as plain text.
+  `--follow` keeps printing an Enhanced session's conversation as it is written.
 - `cloudfield attach <session-id>` attaches your terminal to a Standard session's agent.
   Every key, Ctrl-C included, goes to the agent; close the terminal to detach,
   and the session keeps going. `cloudfield attach --read-only <session-id>` only watches.

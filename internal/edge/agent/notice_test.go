@@ -190,6 +190,37 @@ func TestNoticesDoNotSurviveAPin(t *testing.T) {
 	}
 }
 
+// A reconnect that stores the list again under the same pin never lets a
+// read in between find no notices; a changed pin still rebinds them.
+func TestNoticesRefreshKeepsTheBinding(t *testing.T) {
+	s := OpenState(t.TempDir())
+	key, _, _ := ed25519.GenerateKey(rand.Reader)
+	n := testStored()
+	p := pinNow(t, s, key)
+	if err := s.writeNotices(p, n); err != nil {
+		t.Fatal(err)
+	}
+	var during []StoredNotices
+	s.beforeLink = func() {
+		got, err := s.Notices(noticeServerID)
+		if err != nil {
+			t.Error(err)
+		}
+		during = append(during, got)
+	}
+	if err := s.writeNotices(p, n); err != nil {
+		t.Fatal(err)
+	}
+	for _, got := range during {
+		if !slices.Equal(got.Notices, n.Notices) {
+			t.Errorf("a read during an identical refresh found %+v", got)
+		}
+	}
+	if got, err := s.Notices(noticeServerID); err != nil || !slices.Equal(got.Notices, n.Notices) {
+		t.Fatalf("stored notices after the refresh %+v, %v", got, err)
+	}
+}
+
 // TestNoticesOfAnEarlierPinAreNotWritten writes notices verified under a
 // pin after the state was pinned again: nothing is written, the first
 // key's file does not come back even once that key is pinned again, and

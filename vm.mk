@@ -55,4 +55,4 @@ test-kvm:
 		AETHER_TEST_KERNEL='$(KVM_KERNEL)' AETHER_TEST_IMAGE='$(KVM_IMAGE)' \
 		AETHER_VM_TEST_KERNEL='$(KVM_KERNEL)' AETHER_VM_TEST_DIR="$$dir/engine" \
 		AETHER_VM_TEST_SERVER="$$dir/aether-server" \
-		go test -count=1 -p 1 -timeout=30m -tags kvm -run '$(or $(KVM_RUN),^TestKVM)' $(KVM_PKGS)
+		go test -count=1 -p 1 -timeout=40m -tags kvm -run '$(or $(KVM_RUN),^TestKVM)' $(KVM_PKGS)

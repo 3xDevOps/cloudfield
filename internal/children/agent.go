@@ -158,7 +158,7 @@ func (s *Service) start(ctx context.Context, run domain.RunID, req protocol.Chil
 	}
 	c := &domain.ChildReservation{
 		ParentRunID: p.parent.ID, RootRunID: p.root, TreeKey: p.treeKey, WorkspaceID: p.parent.WorkspaceID,
-		OwnerID: p.owner, AccountID: spec.account, Harness: spec.harness, Mode: spec.mode, Model: spec.model,
+		OwnerID: p.owner, AccountID: spec.account, AccountLogin: spec.login, Harness: spec.harness, Mode: spec.mode, Model: spec.model,
 		Purpose: req.Purpose, Task: req.Task, BaseCommit: base, BaseBranch: p.parent.Branch,
 		Fallback: spec.fallback, IdempotencyKey: req.IdempotencyKey, RequestHash: requestHash(req),
 	}
@@ -217,7 +217,10 @@ func (s *Service) receipt(ctx context.Context, c *domain.ChildReservation, err e
 		return protocol.ChildReceipt{}, rpcErr(protocol.MethodChildStart, err)
 	}
 	next := startNext
-	if child.State == protocol.ChildQueued {
+	switch {
+	case child.State == protocol.ChildQueued && child.Error != "":
+		next = "Waiting to start, which it does by itself when the server has room. " + next + " The server's refusal: " + child.Error
+	case child.State == protocol.ChildQueued:
 		next = "Queued until one of this session's subsessions finishes (aether-internal subsession options shows the limits). " + next
 	}
 	return protocol.ChildReceipt{Child: child, Next: next}, nil
@@ -318,7 +321,7 @@ func (s *Service) attached(ctx context.Context, id domain.RunID) (*domain.ChildR
 		return nil, err
 	}
 	if c.Detached {
-		return nil, denied("%s: subsession %s is detached and runs on its own", protocol.MethodChildCancel, id)
+		return nil, denied("subsession %s is detached and runs on its own", id)
 	}
 	return c, nil
 }
@@ -329,6 +332,7 @@ func (s *Service) stop(ctx context.Context, c *domain.ChildReservation) error {
 	case domain.ChildQueued:
 		err := s.cfg.Store.SetChildState(ctx, c.RunID, domain.ChildCancelled, "cancelled before it started", domain.ChildQueued)
 		if err == nil {
+			s.countWaitEnd(ctx, c, "cancelled", s.cfg.Now())
 			s.publish(ctx, c.ParentRunID, "")
 		}
 		if !errors.Is(err, store.ErrConflict) {

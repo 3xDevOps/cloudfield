@@ -51,6 +51,7 @@ func (s *Server) coordMessagesList(ctx context.Context, member domain.MemberID, 
 		WorkspaceID:   domain.WorkspaceID(p.WorkspaceID),
 		RunID:         domain.RunID(p.RunID),
 		CorrelationID: p.CorrelationID,
+		ReportBodies:  p.ReportBodies,
 		Before:        p.Before,
 		Limit:         p.Limit,
 		Shows: func(m *store.ListedRunMessage) bool {

@@ -37,13 +37,13 @@ type Server struct {
 	threads  map[string]*thread
 	order    []string
 	requests []Request
+	// lateInterrupt ends a turn before its turn/interrupt arrives.
+	lateInterrupt bool
 	// failSteer makes turn/steer fail as it does when the turn ends first.
 	failSteer bool
 	// experimental is set by a client that opted into the experimental API,
 	// which Codex 0.131.0 needs to list a thread's turns.
 	experimental bool
-	// lateInterrupt ends a turn before its turn/interrupt arrives.
-	lateInterrupt bool
 }
 
 // unanswered is the result of a request the app-server never answers.

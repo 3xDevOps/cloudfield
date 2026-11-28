@@ -68,7 +68,9 @@ the view switch (`[` and `]` cycle the views). A Standard session opens on it. T
 it shows what the agent is doing with **Open terminal**.
 
 An [Enhanced session](enhanced-sessions.md) has no agent terminal. Its Terminal view
-says **No agent terminal** and offers run shells.
+says **No agent terminal** and offers run shells. In your own terminal,
+`cloudfield logs <session-id> --follow` prints its conversation as it is
+written ([Scrollback and history](#scrollback-and-history)).
 
 ```mermaid
 flowchart LR
@@ -467,9 +469,36 @@ layout, so some lines can appear on both sides of the boundary.
 The server keeps a session's terminal recording until you delete the session or
 terminal. Closing the container, reclaiming the checkout and archiving do not
 remove it. If earlier output has expired, history is marked truncated and
-cannot be recovered. `cloudfield logs <session-id> [--limit N]` prints the recorded
-terminal lines as plain text, and an Enhanced session's messages and tool calls,
-one line each. **Export session** in a session's **More** menu downloads
+cannot be recovered.
+
+`cloudfield logs <session-id> [--limit N]` prints the recorded terminal lines as
+plain text, and an Enhanced session's messages, thoughts, plans, tool calls,
+requests and notices, one line each. A tool call, plan or request is one line
+with its newest state:
+
+```text
+user: fix the flaky login test
+thought: The test waits on a fixed sleep.
+assistant: I will wait for the server instead of sleeping.
+plan: read the test (completed); replace the sleep (in_progress)
+request answered: Allow go test?
+tool completed: go test ./login/... (exit 0)
+notice error: Turn interrupted: The agent connection ended before the turn finished.
+```
+
+`cloudfield logs <session-id> --follow` prints the same lines, then keeps
+printing an Enhanced session's conversation as it is written: a message fills
+its line as it arrives, and a tool call, plan or request prints again each
+time its state changes. It only reads. It prints `[conversation reset]` when
+the agent's conversation starts over, and `[conversation skipped]` where it
+fell too far behind to print every line;
+`cloudfield logs <session-id> --limit N` with a large enough `N` prints the
+lines it left out. It exits when the session ends.
+`cloudfield sessions <session-id>` shows how to answer a pending request. A
+Standard session has no conversation to follow, so `--follow` is refused
+there; `cloudfield attach <session-id> --read-only` watches its terminal.
+
+**Export session** in a session's **More** menu downloads
 `<session-id>.md` for a live, finished or failed session: a header (title,
 session id, workspace, branch, agent, status and reason, pull requests, export
 time), then a Standard session's recorded terminal lines or an Enhanced

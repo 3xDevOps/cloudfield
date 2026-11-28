@@ -354,6 +354,19 @@ cloudfield workspace origin --workspace myproject --clear
 A `git@github.com:` address is stored as its HTTPS form, because sessions can
 authenticate over HTTPS only.
 
+Do not put a credential in the address (`https://user:token@host/...`);
+git credentials belong in your environment home
+([environment-home.md](environment-home.md)). The
+address is stored as given and every member who can read the workspace sees
+it: `workspace.list` returns it, the dashboard shows it, and it is the
+`origin` remote in every session's checkout, where its agent can read it.
+`cloudfield link` copies your clone's `origin` when the workspace has none, so
+check `git remote get-url origin` first. The timeline note for a change says
+"workspace origin set" without the address when the address holds an `@`,
+`?` or `#`; notes written before that change keep what they hold. If a token
+was ever set this way, rotate it: it reached every member who could read the
+workspace, the agents that ran in it, and anything that read its timeline.
+
 ### Source mirror
 
 A local-only workspace lets collaborators push the base branch directly. A
@@ -538,8 +551,15 @@ cloudfield schedule set nightly-triage "0 6 * * *"
 `--mode` defaults to `background`, and `--budget` is an advisory per-session cost
 hint in USD. Use `{{name}}` in the task for a parameter. The dashboard's
 Templates page fills parameters inline before **Launch** and edits their
-defaults; any session's composer can insert a filled-in template as a draft. Cron is five-field
-syntax or an `@descriptor`, in UTC. A schedule that was due while the server was
+defaults; any session's composer can insert a filled-in template as a draft.
+
+A schedule is a cron rule: five fields or an `@descriptor`, evaluated in UTC
+unless it starts with `CRON_TZ=<IANA zone> `, as in `cloudfield schedule set
+standup "CRON_TZ=Europe/Berlin 30 9 * * 1-5"`. A zoned rule keeps its wall-clock
+time across daylight saving changes: a time the clocks skip does not fire
+that day, and a time they repeat fires once. On the Templates page, **Schedule** picks daily, weekly or monthly at
+a time in a zone, your browser's by default, and shows the rule it saves;
+**Cron** takes any rule. A schedule that was due while the server was
 down waits for its next occurrence. `cloudfield template list|delete` and `cloudfield
 schedule list|delete` manage the rest. A `--model` the agent has no flag for
 fails with `scheduler: agent "<agent>" has no model flag; launch it without a

@@ -2424,6 +2424,47 @@ describe('connect', () => {
     stop()
   })
 
+  it('drops the lane history of a workspace whose event could not be applied, so Lanes reads it again', async () => {
+    const client = fakeApi({
+      runList: vi.fn().mockResolvedValueOnce([]).mockResolvedValue([run({ id: 'run_9', status: 'running' })]),
+      runGet: vi.fn().mockRejectedValueOnce(new ApiError(500, 'run.get: store busy')),
+    })
+    const store = createRootStore()
+    const stop = connect(store, client)
+    try {
+      const socket = await subscribe()
+      await vi.waitFor(() => expect(store.getState().hydrated).toBe(true))
+      // A Lanes view holds two workspaces' histories; live events keep them current.
+      store.getState().holdLanes()
+      store.getState().setLaneHistory(workspace.id, { floor: -Infinity })
+      store.getState().setLaneHistory('wsp_other', { floor: -Infinity })
+
+      // A brand new run's first status: the fetch of the run fails, so the event is not applied.
+      deliver(socket, statusEvent({ seq: 10, run_id: 'run_9', payload: { to: 'running' } }))
+      await vi.waitFor(() => expect(client.runList).toHaveBeenCalledTimes(2))
+      // The snapshot repairs the session list; the history that missed the event must not stay as if complete.
+      expect(store.getState().runs.run_9).toBeDefined()
+      expect(store.getState().laneHistory[workspace.id]).toBeUndefined()
+      expect(store.getState().laneHistory.wsp_other).toBeDefined()
+
+      // Nor does a reread, which Lanes leaves out of its history.
+      store.getState().setLaneHistory(workspace.id, { floor: -Infinity })
+      vi.mocked(client.runGet).mockRejectedValueOnce(new ApiError(500, 'run.get: store busy'))
+      deliver(socket, statusEvent({ seq: 12, run_id: 'run_11', payload: { to: 'running', reread: true } }))
+      await vi.waitFor(() => expect(client.runList).toHaveBeenCalledTimes(3))
+      expect(store.getState().laneHistory[workspace.id]).toBeDefined()
+
+      // An event Lanes does not hold costs its history nothing when it cannot be applied.
+      store.getState().setLaneHistory(workspace.id, { floor: -Infinity })
+      vi.mocked(client.runGet).mockRejectedValueOnce(new ApiError(500, 'run.get: store busy'))
+      deliver(socket, { ...statusEvent({ seq: 13, run_id: 'run_10' }), type: 'run.title', payload: { title: 'x' } })
+      await vi.waitFor(() => expect(client.runList).toHaveBeenCalledTimes(4))
+      expect(store.getState().laneHistory[workspace.id]).toBeDefined()
+    } finally {
+      stop()
+    }
+  })
+
   it('never advances the cursor past an event still waiting on a fetch', async () => {
     const pending: ((r: Run) => void)[] = []
     const client = fakeApi({

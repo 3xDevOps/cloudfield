@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -303,7 +304,12 @@ func prepareBranch(dir string, id guest.Checkout) error {
 		cmd.Env = []string{"PATH=" + defaultPath, "HOME=/", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "LC_ALL=C"}
 		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: st.Uid, Gid: st.Gid, NoSetGroups: true}}
 		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("git %v: %w: %s", args, err, out)
+			text := fmt.Sprintf("git %v: %v: %s", args, err, out)
+			// The origin may hold a credential, and this error becomes the session's failure reason.
+			if id.Origin != "" {
+				text = strings.ReplaceAll(text, id.Origin, "<origin>")
+			}
+			return errors.New(text)
 		}
 		return nil
 	}

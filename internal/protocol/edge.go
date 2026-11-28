@@ -6,7 +6,9 @@ const MethodServerEdge = "server.edge"
 // ServerEdgeResult describes the server's edge. EdgeURL is empty when the
 // server is not enrolled with an edge; ServerID is set either way. Owner
 // is nil while the server has no owner at its edge. Claimed is whether
-// the edge last reported the server as claimed.
+// the edge last reported the server as claimed. Notice, absent when there
+// is none, is what the edge said about EdgeURL in its latest verified
+// notices; Pending, what they say about the edge-url a restart applies.
 type ServerEdgeResult struct {
 	EdgeURL      string       `json:"edge_url"`
 	ServerID     string       `json:"server_id"`
@@ -14,6 +16,38 @@ type ServerEdgeResult struct {
 	Owner        *EdgeAccount `json:"owner"`
 	Connected    bool         `json:"connected"`
 	Claimed      bool         `json:"claimed"`
+	Notice       *EdgeNotice  `json:"notice,omitempty"`
+	Pending      *EdgePending `json:"pending,omitempty"`
+}
+
+// EdgePending says that the edge-url the server's options file names,
+// which a restart applies, is itself retiring or retired by the same
+// verified notices. EdgeURL, Replacement and FirstUse are for super
+// admins only.
+type EdgePending struct {
+	State       string `json:"state"`
+	Date        string `json:"date,omitempty"`
+	EdgeURL     string `json:"edge_url,omitempty"`
+	Replacement string `json:"replacement,omitempty"`
+	FirstUse    bool   `json:"first_use,omitempty"`
+}
+
+// EdgeNotice says that the server's edge address is retiring or retired
+// and names the address of the same edge to move to. Date, YYYY-MM-DD or
+// empty, is text for people. FirstUse is set when the notice came with
+// the connection that pinned the edge key, so it is trusted only as that
+// pin is, and for display.
+type EdgeNotice struct {
+	State       string `json:"state"`
+	Replacement string `json:"replacement"`
+	Date        string `json:"date,omitempty"`
+	FirstUse    bool   `json:"first_use,omitempty"`
+	// RestartPending is set when the server's options file names another
+	// edge-url than the running one, as after edge move and before the
+	// restart. MovedTo, for super admins only, is that edge-url,
+	// canonical.
+	RestartPending bool   `json:"restart_pending,omitempty"`
+	MovedTo        string `json:"moved_to,omitempty"`
 }
 
 // EdgeAccount is an account signed in at an edge.
