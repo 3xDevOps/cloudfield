@@ -841,16 +841,18 @@ you, though its requests of a person still do
 [coordination.md](coordination.md#subsessions).
 
 Subsessions go one level deep: a subsession cannot start subsessions. A parent must be
-a Standard or Enhanced session that wakes when mail arrives; `subsession start` from a
-Standard session of an agent with no idle wake is refused with
-`<agent> in Standard mode has no idle wake; start it in Enhanced`. A
-Background session cannot start subsessions, so Antigravity, which has no
-Enhanced mode, cannot be a parent: its refusal is `antigravity in Standard
+a Standard or Enhanced session that wakes when mail arrives, and a
+Background session cannot start subsessions. Antigravity has no idle wake and
+no Enhanced mode, so it cannot be a parent: `subsession start` from a
+Standard Antigravity session is refused with `antigravity in Standard
 mode has no idle wake, and it has no Enhanced mode; as a subsession it runs
 only in Background, and a session that waits for mail needs another agent`. A
-subsession must wake on mail too: `--mode standard` for a subsession of an
-agent with no idle wake is refused with the same message as a Standard parent
-of that agent, and it runs Enhanced, or Background for Antigravity.
+subsession must wake on mail too: `--mode standard` for an Antigravity
+subsession is refused with the same message, and it runs Background. A
+Standard Copilot, Gemini or Cursor session is woken by a line typed into its
+terminal. A member in control of a session that is not a subsession is shown
+the line for 45 seconds first; mail to a subsession they control waits until
+they let go ([harnesses.md](harnesses.md#typed-wake)).
 
 ### Turn subsessions off
 

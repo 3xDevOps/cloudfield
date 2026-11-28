@@ -40,7 +40,7 @@ import { runViewIcon } from '@/routes/run/view-icons'
 import { runViewLabel, type RunView } from '@/routes/run/views'
 import type { FrameTile } from '@/routes/run'
 import { useStore } from '@/store'
-import { queuedSteers, unansweredQuestions } from '@/store/collaboration'
+import { agentMailVia, heldFor, unansweredQuestions } from '@/store/collaboration'
 import { useHeaderPrimary, useNeedsYouRuns, useRunPresentation } from '@/store/hooks'
 import type { RunRecord } from '@/store/runs'
 import type { NavigateOptions } from '@/store/ui'
@@ -93,11 +93,11 @@ export function usePrimaryAction(run: RunRecord, view: RunView, agent: AgentTerm
     }
     case 'request': {
       if (action.label === terminalAction.label) return openTerminal()
-      const steer = condition.id === 'queued-message' ? queuedSteers(room ?? []).find((m) => m.actor_id !== selfID) : undefined
+      const steer = condition.id === 'queued-message' ? heldFor(room ?? [], selfID)[0] : undefined
       const input = run.pending_inputs?.find((request) => isSudo(request) === (condition.id === 'sudo'))
       if (!steer && input && run.acp && !isSudo(input)) return { label: action.label, act: () => nav.focusRequest() }
       const card = steer ? requestCardID.steer(steer.id) : input ? requestCardID.input(input.id) : 'details-needs-you'
-      return { label: action.label, act: () => nav.reveal(card) }
+      return { label: steer?.via === agentMailVia ? 'Agent mail' : action.label, act: () => nav.reveal(card) }
     }
     case 'terminal':
       return openTerminal()

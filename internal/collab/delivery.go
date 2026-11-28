@@ -21,6 +21,9 @@ import (
 const agentDeliveryTimeout = 10 * time.Second
 
 func (s *Service) deliverResult(ctx context.Context, msg *store.RoomMessage, actor *domain.Member, run *domain.Run, force bool, approver domain.MemberID, claimAdmission func(func() error) error, steer bool) (Result, error) {
+	if msg.Via == domain.ViaAgentMail {
+		return s.deliverWake(ctx, msg, approver, claimAdmission)
+	}
 	var (
 		claimed bool
 		stored  *store.RoomMessage

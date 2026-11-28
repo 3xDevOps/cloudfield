@@ -102,8 +102,10 @@ run it on a timer.
 
 Add wake only if the agent has a supported API to start a turn in a specific live
 session, and lifecycle events that let you cancel on Stop, shutdown and session
-replacement. Do not write to the agent's terminal. Cloudfield has no
-terminal-input fallback.
+replacement. Do not write to the agent's terminal: an integration has no
+terminal-input fallback. For Copilot, Gemini and Cursor, whose CLIs have no
+such API, the server itself types one inbox line into an idle Standard
+session's terminal ([harnesses.md](harnesses.md#typed-wake)).
 
 One call performs one bounded, non-consuming check of the mailbox:
 

@@ -4,6 +4,7 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -993,6 +994,52 @@ func ViaFrom(ctx context.Context) string {
 	via, _ := ctx.Value(viaKey{}).(string)
 	return via
 }
+
+// ViaAgentMail is the Via of the room message the server writes to show a
+// member in control the wake it owes their session's agent for unread mail.
+// No connector client posts under it.
+const ViaAgentMail = "agent mail"
+
+type wakeApprovedKey struct{}
+
+// WithWakeApproved marks ctx as the member in control of a session asking
+// for the mail wake held for them to be typed now.
+func WithWakeApproved(ctx context.Context) context.Context {
+	return context.WithValue(ctx, wakeApprovedKey{}, true)
+}
+
+// WakeApproved reports whether WithWakeApproved marked ctx.
+func WakeApproved(ctx context.Context) bool {
+	approved, _ := ctx.Value(wakeApprovedKey{}).(bool)
+	return approved
+}
+
+type wakeShownKey struct{}
+
+// WithWakeShown marks ctx as typing a held mail wake that the member in
+// control of the session was shown and did not ask for.
+func WithWakeShown(ctx context.Context) context.Context {
+	return context.WithValue(ctx, wakeShownKey{}, true)
+}
+
+// WakeShown reports whether WithWakeShown marked ctx.
+func WakeShown(ctx context.Context) bool {
+	shown, _ := ctx.Value(wakeShownKey{}).(bool)
+	return shown
+}
+
+// ErrWakeHeld means a typed wake wrote nothing because its terminal cannot
+// take the line now. The wake stays owed and a later try may type it.
+var ErrWakeHeld = errors.New("typed wake held")
+
+// ErrWakeDraft is the ErrWakeHeld of a terminal whose member in control
+// typed and has not pressed Enter since: the line would be submitted with
+// what they left in the agent's input box.
+var ErrWakeDraft = fmt.Errorf("%w: the terminal may have text that was not sent; send it with Enter and the line is typed after that", ErrWakeHeld)
+
+// AgentMailReason is why a session with a held mail wake needs its member
+// in control, on every surface.
+const AgentMailReason = "The agent has unread mail. Cloudfield will type a line telling it to read its inbox."
 
 // AccountMember returns the member whose agent account backs the run.
 func (r *Run) AccountMember() MemberID {

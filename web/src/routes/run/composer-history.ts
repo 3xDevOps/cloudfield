@@ -2,13 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import type * as React from 'react'
 import type { RoomMessage } from '@/lib/types'
 import { useStore } from '@/store'
+import { agentMailVia } from '@/store/collaboration'
 
 const noMessages: RoomMessage[] = []
 
 /** The member's own prompts on the run, newest first, without repeats in a row. */
 export function sentPrompts(messages: RoomMessage[], selfID: string | null): string[] {
   const bodies = messages
-    .filter((m) => m.kind === 'steer_request' && m.actor_id === selfID && m.body.trim())
+    .filter((m) => m.kind === 'steer_request' && m.actor_id === selfID && m.via !== agentMailVia && m.body.trim())
     .map((m) => m.body)
     .reverse()
   return bodies.filter((body, index) => body !== bodies[index - 1])

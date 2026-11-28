@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/3xDevOps/cloudfield/internal/children"
+	"github.com/3xDevOps/cloudfield/internal/collab"
 	"github.com/3xDevOps/cloudfield/internal/control"
 	"github.com/3xDevOps/cloudfield/internal/coord"
 	"github.com/3xDevOps/cloudfield/internal/domain"
@@ -29,6 +30,10 @@ func init() {
 		var childAuthority coord.ChildService
 		if childSvc != nil {
 			childAuthority = childSvc
+		}
+		rooms, ok := d.SSH.Services.Rooms.(*collab.Service)
+		if !ok {
+			return nil, errors.New("coordination needs the collaboration service, which must register before it")
 		}
 		svc, err := coord.New(coord.Config{
 			Dir:              filepath.Join(d.DataDir, "coord"),
@@ -57,10 +62,12 @@ func init() {
 			WakeAdmission:     newCoordWakeAdmission(d),
 			Waker:             d.Runs,
 			ReminderAdmission: newCoordReminderAdmission(d),
+			HoldWake:          rooms.HoldWake,
 		})
 		if err != nil {
 			return nil, err
 		}
+		rooms.SetWaker(svc.TypeHeldWake)
 		if childSvc != nil {
 			childSvc.SetMailer(svc)
 		}

@@ -3,6 +3,7 @@ package harness
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -26,7 +27,7 @@ func TestCapabilityTable(t *testing.T) {
 			mail = append(mail, hooks[c.Hooks])
 		}
 		if c.IdleWake {
-			mail = append(mail, "idle wake")
+			mail = append(mail, map[bool]string{true: "typed idle wake", false: "idle wake"}[c.TypedWake])
 		}
 		if c.Steer {
 			mail = append(mail, "mid-turn steer")
@@ -49,8 +50,14 @@ func TestCapabilityTable(t *testing.T) {
 func TestCapabilitiesNeedTheirLaunch(t *testing.T) {
 	for _, p := range Profiles() {
 		c := p.Capabilities
-		if c.IdleWake && c.Hooks != HooksManaged && !c.Steer {
-			t.Errorf("%s: idle wake rides on the managed hooks or the app-server", p.Name)
+		if c.IdleWake && c.Hooks != HooksManaged && !c.Steer && !c.TypedWake {
+			t.Errorf("%s: idle wake rides on the managed hooks, the app-server or a typed line", p.Name)
+		}
+		if c.TypedWake != slices.Contains([]string{"copilot", "cursor", "gemini"}, p.Name) || c.TypedWake && !c.IdleWake {
+			t.Errorf("%s: only Copilot, Gemini and Cursor are woken by a typed line, which is their idle wake", p.Name)
+		}
+		if !c.IdleWake && p.EnhancedSupport() != EnhancedNone {
+			t.Errorf("%s: WakeRefusal tells an agent with no idle wake that it has no Enhanced mode", p.Name)
 		}
 		if (c.EnhancedDefault || c.ModeSwitch || c.BackgroundTasks || c.Sleep) && p.EnhancedSupport() == EnhancedNone {
 			t.Errorf("%s: declares an Enhanced capability with no ACP command", p.Name)

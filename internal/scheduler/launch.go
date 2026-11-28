@@ -459,6 +459,7 @@ func (s *Scheduler) provision(ctx context.Context, run *domain.Run, ws *domain.W
 		memberID:    run.HomeMember(),
 		launchMode:  run.Mode,
 		acp:         run.ACP,
+		harness:     run.Harness,
 		status:      domain.RunProvisioning,
 		startedAt:   time.Now().UTC(),
 		done:        make(chan struct{}),

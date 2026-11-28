@@ -3,7 +3,17 @@ import { RequestAction, StaleReason } from '@/components/ui/request-choice'
 import { useStale } from '@/store/hooks'
 import { stillWaiting, usePastDeadline } from '@/store/optimistic'
 
-export function DecisionButtons({ decide }: { decide: (approve: boolean) => Promise<unknown> }) {
+export interface DecisionAnswers {
+  /** Each answer's label, at rest and while it is sent. */
+  approve: [string, string]
+  deny: [string, string]
+  /** A refusal is `danger`; dismissing a notice is not. */
+  denyVariant: 'danger' | 'secondary'
+}
+
+const approveOrDeny: DecisionAnswers = { approve: ['Approve', 'Approving…'], deny: ['Deny', 'Denying…'], denyVariant: 'danger' }
+
+export function DecisionButtons({ decide, answers = approveOrDeny }: { decide: (approve: boolean) => Promise<unknown>; answers?: DecisionAnswers }) {
   const [pending, setPending] = useState<{ approve: boolean } | null>(null)
   // A painted snapshot may be minutes old: the request could be answered already.
   const stale = useStale()
@@ -13,13 +23,14 @@ export function DecisionButtons({ decide }: { decide: (approve: boolean) => Prom
     setPending(mine)
     void decide(approve).finally(() => setPending((current) => (current === mine ? null : current)))
   }
-  const label = (approve: boolean) => stale ? (approve ? 'Approve' : 'Deny') : pending?.approve !== approve
-    ? (approve ? 'Approve' : 'Deny')
-    : late ? stillWaiting : approve ? 'Approving…' : 'Denying…'
+  const label = (approve: boolean) => {
+    const [rest, sending] = approve ? answers.approve : answers.deny
+    return stale || pending?.approve !== approve ? rest : late ? stillWaiting : sending
+  }
   return (
     <>
       <StaleReason />
-      <RequestAction label={label(false)} variant="danger" disabled={pending !== null} onClick={() => press(false)} />
+      <RequestAction label={label(false)} variant={answers.denyVariant} disabled={pending !== null} onClick={() => press(false)} />
       <RequestAction label={label(true)} variant="confirm" disabled={pending !== null} onClick={() => press(true)} />
     </>
   )

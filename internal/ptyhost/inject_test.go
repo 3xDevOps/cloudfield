@@ -2,6 +2,7 @@ package ptyhost
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -76,6 +77,26 @@ func TestInjectPastesWhenTheAgentEnabledBracketedPaste(t *testing.T) {
 	step("\x1b[?2004h", "one\ntwo", "\r", "\x1b[200~one\ntwo\x1b[201~", "\r")
 	step("working ", "a\x1b[201~b\x1b[20\x1b[20\x1b[201~1~1~c", "\r\r", "\x1b[200~abc\x1b[201~", "\r\r")
 	step("\x1b[?2004l", "one\ntwo", "\r", "one\ntwo\r")
+
+	// Text no person sent is never written raw: agent CLIs leave text and
+	// Enter that arrive in one write unsent in the input box.
+	mu.Lock()
+	writes = nil
+	mu.Unlock()
+	if err := h.InjectPasted(context.Background(), RunSession(run), "Cloudfield", "", "read your inbox", "\r"); !errors.Is(err, ErrPasteModeOff) {
+		t.Fatalf("InjectPasted with paste mode off = %v, want ErrPasteModeOff", err)
+	}
+	mu.Lock()
+	checkWrites(t, writes)
+	mu.Unlock()
+	att.writeOutput(t, "\x1b[?2004h")
+	waitFor(t, "paste mode on", func() bool { return strings.HasSuffix(a.out.String(), "\x1b[?2004h") })
+	if err := h.InjectPasted(context.Background(), RunSession(run), "Cloudfield", "", "read your inbox", "\r"); err != nil {
+		t.Fatalf("InjectPasted: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	checkWrites(t, writes, "\x1b[200~read your inbox\x1b[201~", "\r")
 }
 
 func TestInjectSeesBracketedPasteHeldBehindAResize(t *testing.T) {
@@ -98,7 +119,7 @@ func TestInjectSeesBracketedPasteHeldBehindAResize(t *testing.T) {
 	}()
 	<-att.entered
 	s.deliver([]byte("\x1b[?2004h"))
-	if err := s.inject(context.Background(), "Ana", "", "one\ntwo", "\r"); err != nil {
+	if err := s.inject(context.Background(), "Ana", "", "one\ntwo", "\r", false); err != nil {
 		t.Fatalf("inject: %v", err)
 	}
 	close(att.release)
@@ -146,7 +167,7 @@ func TestInjectFinishesAPasteItStarted(t *testing.T) {
 	s.modes.scan([]byte("\x1b[?2004h"))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- s.inject(ctx, "Ana", "", "one\ntwo", "\r") }()
+	go func() { done <- s.inject(ctx, "Ana", "", "one\ntwo", "\r", false) }()
 	<-entered
 	cancel()
 	close(release)
@@ -173,7 +194,7 @@ func TestInjectDeliveredDuringAFullResizeIgnoresTheCallerLeaving(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
-	go func() { result <- s.inject(ctx, "Ana", "", "ship it", "\r") }()
+	go func() { result <- s.inject(ctx, "Ana", "", "ship it", "\r", false) }()
 	waitFor(t, "the line on stdin", func() bool {
 		mu.Lock()
 		defer mu.Unlock()

@@ -893,6 +893,9 @@ type fakePTY struct {
 	logDir         string
 	// removedTranscripts are the session keys whose transcripts were removed.
 	removedTranscripts []ptyhost.SessionKey
+	// pasteOff makes every terminal refuse InjectPasted, as one whose agent
+	// has not turned bracketed paste mode on.
+	pasteOff bool
 }
 
 type fakePTYSession struct {
@@ -903,7 +906,11 @@ type fakePTYSession struct {
 	out   bytes.Buffer
 	last  time.Time
 	typed time.Time
+	draft time.Time
 	ended bool
+	// printing makes every LastOutput report output just now, as a working
+	// agent's spinner does.
+	printing bool
 }
 
 type fakeInject struct {
@@ -1025,7 +1032,22 @@ func (p *fakePTY) LastOutput(key ptyhost.SessionKey) (time.Time, bool) {
 	}
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
+	if sess.printing {
+		return time.Now(), true
+	}
 	return sess.last, true
+}
+
+func (p *fakePTY) Drafting(key ptyhost.SessionKey) time.Time {
+	p.mu.Lock()
+	sess, ok := p.sessions[key]
+	p.mu.Unlock()
+	if !ok {
+		return time.Time{}
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	return sess.draft
 }
 
 func (p *fakePTY) LastInput(key ptyhost.SessionKey) (time.Time, bool) {
@@ -1087,6 +1109,22 @@ func (p *fakePTY) Inject(_ context.Context, key ptyhost.SessionKey, actorName, a
 	// modeled here; it is covered by the ptyhost tests.
 	_, err := sess.att.Stdin().Write([]byte(message + submit))
 	return err
+}
+
+func (p *fakePTY) setPasteOff(off bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.pasteOff = off
+}
+
+func (p *fakePTY) InjectPasted(ctx context.Context, key ptyhost.SessionKey, actorName, actorColor, message, submit string) error {
+	p.mu.Lock()
+	off := p.pasteOff
+	p.mu.Unlock()
+	if off {
+		return ptyhost.ErrPasteModeOff
+	}
+	return p.Inject(ctx, key, actorName, actorColor, message, submit)
 }
 
 func (p *fakePTY) session(run domain.RunID) *fakePTYSession {

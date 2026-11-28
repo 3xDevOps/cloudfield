@@ -43,6 +43,9 @@ func (w *fakeWaker) InTurn(run domain.RunID) bool {
 	return w.inTurn[run]
 }
 
+func (*fakeWaker) TypedWake(domain.RunID) bool { return false }
+func (*fakeWaker) Printing(domain.RunID) bool  { return false }
+
 func (w *fakeWaker) endTurn(run domain.RunID) {
 	w.mu.Lock()
 	defer w.mu.Unlock()

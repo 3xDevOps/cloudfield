@@ -1673,6 +1673,7 @@ where a resend is deduped or refused and the eventual result still shows:
 | --- | --- | --- |
 | Question **Reply** (Details) | Replying… | Yes: a resend of the same text reuses the idempotency key, and the reply arrives as a room event |
 | Teammate message and permission **Approve** / **Deny** (Details) | Approving… / Denying… | No: a second decision would race the first, and its "already decided" refusal would sit beside the first's success |
+| Held typed wake **Type it now** / **Dismiss** (Details and its Chat row) | Typing… / Dismissing… | No, for the same reason |
 | Composer **Send** and the Enhanced pill's Send, Steer and Queue | Sending… | Yes: the draft keeps its idempotency key, so a resend delivers once |
 | Enhanced pill's **Interrupt**, **Stop waiting** and **Resume**, and a session option | None: the pill dims | No: these carry no key, so a late interrupt could stop the turn sent after it |
 | **Create workspace** | Creating… | No: `workspace.add` carries no idempotency key |
@@ -1764,7 +1765,7 @@ both show:
 | Native permission or question on a Standard session; blocked, held, or an Enhanced failure | **Open terminal** |
 | Native permission or question on an Enhanced session, or teammate question | **Answer** |
 | Usage limit with no account to move to | **Open** |
-| Teammate's message waiting for the controller | **Review message** |
+| Teammate's message waiting for the controller | **Review message** (the session's header says **Agent mail** for a held [typed wake](harnesses.md#typed-wake)) |
 | Unreviewed finish | **Review** |
 
 Every action but Approve and the card's Reply goes where the condition's
@@ -2302,6 +2303,7 @@ they come from the room, which the session's `state` does not cover, so push and
 | Pending native permission | owner or terminal controller | Permission: … (enhanced: Permission requested) |
 | Pending native question | owner or terminal controller | Question: answer in the terminal (enhanced: Question from the agent) |
 | Queued message from another member | terminal controller | Bob sent a message, approve to deliver |
+| Held [typed wake](harnesses.md#typed-wake): a queued message whose `via` is `agent mail`, written as the owner | terminal controller, the owner included | The agent has unread mail. Cloudfield will type a line telling it to read its inbox. |
 | Teammate question to the owner | owner | Bob asked you: … |
 | `state` `disconnected` (labelled Disconnected) | owner | the reason: Agent disconnected: … / Enhanced could not start: … |
 | `state` `needs-you` with a `blocked: <summary>` reason | owner | Blocked: … |
@@ -3328,7 +3330,7 @@ The actions, in order:
    with its composer focused, in whichever tile or tab holds the session's
    Chat, and is absent on Chat while a request card waits there, **Open terminal** switches to Terminal and asks for the
    lease, **Answer** focuses the docked request on Session or reveals the
-   question's card in Details, **Review message** reveals the queued message's
+   question's card in Details, **Review message** (**Agent mail** for a held typed wake) reveals the queued message's
    card in Details, and **Review** opens Changes for a finish. On the Terminal view there is no terminal action in
    the header; the toolbar has **Take control**. Session rows and Details cards
    that send the member elsewhere use secondary buttons.
@@ -5593,7 +5595,17 @@ and applies again once there is room. Sections (`details.tsx`):
 - **Needs you**: `RequestCard`s for pending native inputs, teammate messages
   awaiting the controller with **Deny** / **Approve** through
   `run.room.decide` and a bar draining toward `deliver_after`, and teammate
-  questions with a reply field. Message bodies clamp to six lines with
+  questions with a reply field. A held [typed wake](harnesses.md#typed-wake)
+  is such a message with `via` `agent mail`: its card is titled **Unread
+  agent mail** behind the agent's glyph, counts down as **Types in Ns**
+  and then reads **Waiting**,
+  and answers `run.room.decide` with **Type it now** (`approve`) and a
+  `secondary` **Dismiss** (`deny`), under the line "Dismiss types nothing.
+  The agent still finds this mail the next time it reads its inbox." It is
+  shown to the controller
+  although the server writes it as the session's owner, it stays out of the
+  composer's history, and Chat draws it as an event row, not a message
+  bubble, with its body only while it waits. Message bodies clamp to six lines with
   **Show more**. A pending
   decision or reply locks only its own card ([Actions](#actions)). With none of
   these, one card with the needs-you reason and the header's action as a
@@ -5697,8 +5709,10 @@ and applies again once there is room. Sections (`details.tsx`):
   admins once measured), Archived, and **Last reason**, the server's `run.reason`, so
   a parked error or stall detail the reason line leaves out is never hidden.
 
-Any other failed room action shows its error above the sections with
-**Dismiss**; the composer's own failures stay above the composer.
+A refused `run.room.decide` shows its error on the message's card and under
+its Chat row (`roomActionError` by message id). Any other failed room action
+shows its error above the sections with **Dismiss**; the composer's own
+failures stay above the composer.
 
 ### Session tree panel
 
@@ -5926,7 +5940,9 @@ in **Needs you**.
   a history icon.
 - **Rows share one time column.** Each row is a grid: relative time, a state
   dot only on `run.status` (the session's new state), the actor's avatar or the
-  message kind glyph, the sentence, and the session as a quiet link. On a phone
+  message kind glyph, the sentence, and the session as a quiet link. A held
+  [typed wake](harnesses.md#typed-wake)'s row has the session's agent glyph
+  instead of the avatar of the owner the server wrote it as. On a phone
   the sentence shares the first line with the time and the session link takes
   the full width under it. `coord.message` and `coord.message.acked` rows
   name sender and recipient by their session titles, never

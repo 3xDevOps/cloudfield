@@ -86,11 +86,13 @@ type AttentionOption struct {
 
 // AttentionMessage is a room question to the run's owner (answered with a
 // run.room.post reply), or a queued message its controller decides with
-// run.room.decide. From is the sender's member id.
+// run.room.decide. From is the sender's member id, and Via is RoomMessage.Via:
+// under "agent mail" the server wrote the message for the run's owner.
 type AttentionMessage struct {
 	ID   string `json:"id"`
 	Body string `json:"body"`
 	From string `json:"from,omitempty"`
+	Via  string `json:"via,omitempty"`
 }
 
 // RunInputRespondParams is RunInputAnswerParams without the lease.

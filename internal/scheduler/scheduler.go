@@ -541,6 +541,8 @@ type supervised struct {
 	// idleWake marks a Standard run whose terminal loads an idle wake
 	// (harness.NativeLaunch.IdleWake).
 	idleWake bool
+	// harness is the run's agent, which names how its idle wake arrives.
+	harness string
 	// switching is the mode a mode switch is moving the run to, empty when
 	// none is in flight. The switch holds lifecycleMu throughout.
 	switching    domain.LaunchMode

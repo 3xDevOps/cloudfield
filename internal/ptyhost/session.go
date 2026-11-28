@@ -90,6 +90,7 @@ type session struct {
 	stopped            bool
 	lastOut            time.Time
 	lastIn             time.Time
+	draftAt            time.Time
 	paintQuietUntil    time.Time
 	done               chan struct{}
 	title              titleScanner
@@ -629,7 +630,7 @@ func (s *session) clientAttached(c *client) bool {
 	_, ok := s.clients[c]
 	return ok
 }
-func (s *session) writeClientStdinContext(ctx context.Context, c *client, p []byte) error {
+func (s *session) writeClientStdinContext(ctx context.Context, c *client, p []byte, typed bool) error {
 	s.stdinMu.Lock()
 	defer s.stdinMu.Unlock()
 	s.mu.Lock()
@@ -647,7 +648,25 @@ func (s *session) writeClientStdinContext(ctx context.Context, c *client, p []by
 	}
 	s.lastIn = time.Now()
 	s.mu.Unlock()
-	return s.writeStdinContextLocked(ctx, p)
+	if err := s.writeStdinContextLocked(ctx, p); err != nil || !typed {
+		return err
+	}
+	// Still under stdinMu: inject must not land between keys and their record.
+	s.noteTyped(p)
+	return nil
+}
+
+// noteTyped records what a person typed on an attach: p ending in Enter
+// submits what is in the agent's input box, and anything else leaves a
+// draft there. Alt+Enter, ESC CR, is a newline in the draft.
+func (s *session) noteTyped(p []byte) {
+	s.mu.Lock()
+	if p[len(p)-1] == '\r' && !bytes.HasSuffix(p, []byte("\x1b\r")) {
+		s.draftAt = time.Time{}
+	} else {
+		s.draftAt = time.Now()
+	}
+	s.mu.Unlock()
 }
 
 func (s *session) removeClient(c *client) {
@@ -963,7 +982,7 @@ const (
 	submitAfterPaste = 200 * time.Millisecond
 )
 
-func (s *session) inject(ctx context.Context, actorName, actorColor, message, submit string) error {
+func (s *session) inject(ctx context.Context, actorName, actorColor, message, submit string, pasted bool) error {
 	s.stdinMu.Lock()
 	defer s.stdinMu.Unlock()
 	s.mu.Lock()
@@ -981,6 +1000,9 @@ func (s *session) inject(ctx context.Context, actorName, actorColor, message, su
 	bracketed := modes.set[2004]
 	tr := s.tr
 	s.mu.Unlock()
+	if pasted && !bracketed {
+		return ErrPasteModeOff
+	}
 	writeCtx, line := ctx, message+submit
 	if bracketed {
 		// Removing one end marker can join the bytes around it into
@@ -1010,6 +1032,9 @@ func (s *session) inject(ctx context.Context, actorName, actorColor, message, su
 	if err := s.writeStdinContextLocked(writeCtx, []byte(line)); err != nil {
 		return fmt.Errorf("ptyhost: inject: %w", err)
 	}
+	s.mu.Lock()
+	s.draftAt = time.Time{}
+	s.mu.Unlock()
 	return s.annotateDelivered(ctx, tr, actorName, actorColor, message)
 }
 

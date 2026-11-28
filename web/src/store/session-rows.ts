@@ -26,7 +26,7 @@ export type SessionRow =
       /** Container paths of attached files that are not images. */
       files?: string[]
       authorID?: string
-      /** The connector client, such as ChatGPT, the author sent it through. */
+      /** The connector client, such as ChatGPT, the author sent it through, or `agent mail`. */
       via?: string
       delivery?: Delivery
       deliverAfter?: string

@@ -147,6 +147,14 @@ describe('needs you conditions', () => {
     expect(presentRun(r, context)).toMatchObject({ state, reason })
   })
 
+  it('asks the member in control of their own session about a held mail wake', () => {
+    const wake = roomMessage({ kind: 'steer_request', state: 'queued', via: 'agent mail' })
+    const context = stateContext({ roomMessages: { run_1: [wake, roomMessage({ id: 'own', kind: 'steer_request', state: 'queued' })] } })
+    const controlled = record({ controller_member_id: alice.id })
+    expect(needsYou(controlled, context)?.reason(controlled, context)).toBe('The agent has unread mail. Cloudfield will type a line telling it to read its inbox.')
+    expect(needsYou(controlled, stateContext({ roomMessages: { run_1: [{ ...wake, via: undefined }] } }))).toBeUndefined()
+  })
+
   it('needs nobody for a plain working run', () => {
     expect(needsYou(record(), stateContext())).toBeUndefined()
     expect(presentRun(record({ status: 'queued' }), stateContext()).state).toBe('working')

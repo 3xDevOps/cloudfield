@@ -353,6 +353,19 @@ func (s *Service) TryAdmitUnheld(run string, fn func() error) error {
 }
 
 func (s *Service) tryAdmit(run string, unheld bool, fn func() error) error {
+	if fn == nil {
+		return ErrInvalid
+	}
+	return s.TryAdmitSnapshot(run, func(_ Snapshot, held bool) error {
+		if unheld && held {
+			return ErrHeld
+		}
+		return fn()
+	})
+}
+
+// TryAdmitSnapshot is AdmitSnapshot without waiting for an in-flight action.
+func (s *Service) TryAdmitSnapshot(run string, fn func(Snapshot, bool) error) error {
 	if err := s.validateRun(run); err != nil {
 		return err
 	}
@@ -365,10 +378,10 @@ func (s *Service) tryAdmit(run string, unheld bool, fn func() error) error {
 	}
 	defer state.mu.Unlock()
 	s.expireLocked(state, s.now())
-	if unheld && state.current != nil {
-		return ErrHeld
+	if state.current == nil {
+		return fn(Snapshot{}, false)
 	}
-	return fn()
+	return fn(s.snapshotLocked(domain.RunID(run), state.current), true)
 }
 
 // AdmitSnapshot is Admit with the current controller snapshot supplied while

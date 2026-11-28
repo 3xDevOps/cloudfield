@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type Api } from '@/lib/api'
-import { message } from '@/lib/format'
+import { errorSentence, message } from '@/lib/format'
 import { backoff } from '@/lib/stream'
 import type { RoomMessage, RoomMessageKind, RoomResolution, Run } from '@/lib/types'
 import type { ControlMetadata } from '@/routes/terminal/attach'
@@ -31,7 +31,7 @@ export interface RunRoom {
   loadOlder: () => Promise<void>
   refresh: () => Promise<void>
   error: string | undefined
-  /** A failed steer is shown at the composer that sent it, every other failure in Details. */
+  /** A failed steer is shown at the composer that sent it, a failed reply in Details. A failed decision is on its card and Chat row, from `roomActionError` under the message's id. */
   errorFromComposer: boolean
   clearError: () => void
 }
@@ -191,8 +191,7 @@ export function useRunRoom(run: Run, control: ControlMetadata | undefined, clien
 
   const decide = useCallback(async (messageID: string, decision: 'approve' | 'deny') => {
     const held = controlRef.current
-    setErrorFromComposer(false)
-    useStore.getState().setRoomActionError(runID)
+    useStore.getState().setRoomActionError(messageID)
     try {
       const result = await client.runRoomDecide({
         message_id: messageID,
@@ -202,9 +201,9 @@ export function useRunRoom(run: Run, control: ControlMetadata | undefined, clien
       })
       useStore.getState().upsertRoomMessage(result.message)
     } catch (cause) {
-      useStore.getState().setRoomActionError(runID, message(cause))
+      useStore.getState().setRoomActionError(messageID, errorSentence(cause))
     }
-  }, [client, runID])
+  }, [client])
 
   const note = useCallback(async (body: string) => {
     const same = sameIdentity()

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -461,5 +462,18 @@ func TestHandoffTransientEvidenceRetriesAndPublishesOneRoomRecord(t *testing.T) 
 	}
 	if !strings.Contains(page.Items[0].Body, "handoff-packet") {
 		t.Fatalf("handoff room record = %q, want packet attribution", page.Items[0].Body)
+	}
+}
+
+// The member who asked for a held mail wake reads the refusal on its card.
+func TestAMailWakeRefusedOverADraftTellsTheMemberWhatToDo(t *testing.T) {
+	refused := fmt.Errorf("%w: scheduler: %w", collab.ErrWakeNotTyped, domain.ErrWakeDraft)
+	want := "collab: the line was not typed and stays queued: scheduler: typed wake held: the terminal may have text that was not sent; send it with Enter and the line is typed after that"
+	if got := collaborationRPCError(refused); got.Code != protocol.CodeUnavailable || got.Message != want {
+		t.Fatalf("refusal = %+v, want %q", got, want)
+	}
+	held := fmt.Errorf("%w: scheduler: %w: the terminal printed 120ms ago", collab.ErrWakeNotTyped, domain.ErrWakeHeld)
+	if got := collaborationRPCError(held); got.Code != protocol.CodeUnavailable || got.Message != held.Error() {
+		t.Fatalf("another refusal = %+v, want the server's error %q", got, held)
 	}
 }

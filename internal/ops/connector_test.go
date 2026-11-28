@@ -501,6 +501,7 @@ func TestConnectorReadTools(t *testing.T) {
 		many[i].Kind = kind
 	}
 	many[44].Request = sudo
+	many[20].Message = &protocol.AttentionMessage{ID: "room-1", Body: "2 unread messages from other agents.", Via: domain.ViaAgentMail}
 	f.answers[protocol.MethodAttentionList] = returns(protocol.AttentionListResult{Items: many})
 	text, out = run(t, cs, "aether_needs_attention", nil)
 	items := out["items"].([]any)
@@ -523,6 +524,9 @@ func TestConnectorReadTools(t *testing.T) {
 	}
 	if sudoRow := items[3].(map[string]any); sudoRow["answer_id"] != "sudo-1" || sudoRow["answer_with"] != "aether_decide_approval" {
 		t.Fatalf("the sudo request = %v, want it answered with aether_decide_approval", sudoRow)
+	}
+	if wake := items[2].(map[string]any); wake["answer_id"] != "room-1" || wake["reason"] != domain.AgentMailReason {
+		t.Fatalf("the held mail wake = %v, want it named as agent mail, not a member's message", wake)
 	}
 
 	f.answers[protocol.MethodAttentionList] = returns(protocol.AttentionListResult{Items: many[:2]})

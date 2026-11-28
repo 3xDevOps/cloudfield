@@ -27,7 +27,8 @@ type Guide struct {
 	Background bool
 	// Wake is set where Aether resumes an idle session when mail arrives:
 	// Enhanced runs, managed Claude Code launches, Standard Codex on its
-	// app-server and loaded native pi/omp/OpenCode integrations.
+	// app-server, loaded native pi/omp/OpenCode integrations and Standard
+	// Copilot, Gemini and Cursor runs, which the server types into.
 	Wake  bool
 	Repos string
 	// Parent is the run that started this child run.

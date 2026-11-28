@@ -3,6 +3,7 @@ import { describeEvent } from '@/components/event-words'
 import { FeedEntry } from '@/components/feed-entry'
 import { typeLabel } from '@/lib/events'
 import type { Event } from '@/lib/types'
+import { EventRow } from '@/routes/activity/event-row'
 import { useStore } from '@/store'
 import { alice, bob, run } from '@/test/fixtures'
 
@@ -33,6 +34,19 @@ describe('event words', () => {
     expect(words('workspace.room_message', note, bob.id)).toBe("You added a note")
     expect(words('workspace.room_message', { ...note, resolution: 'done' }, alice.id)).toBe(`${alice.display_name} completed a note`)
     expect(words('workspace.room_message', { ...note, resolution: 'deleted' }, alice.id)).toBe(`${alice.display_name} deleted a note`)
+  })
+
+  it('does not name or picture the owner a held mail wake is written as', () => {
+    const wake = { kind: 'steer_request', actor_id: alice.id, via: 'agent mail' }
+    expect(words('workspace.room_message', { ...wake, state: 'queued' })).toBe('A line telling the agent to read its inbox is waiting for the member in control')
+    expect(words('workspace.room_message', { ...wake, state: 'denied' })).toBe('A line telling the agent to read its inbox was dismissed')
+    expect(words('workspace.room_message', { ...wake, via: undefined, state: 'denied' })).toBe(`A message from ${alice.display_name} was declined`)
+
+    const row = (payload: unknown) => render(<EventRow event={{ ...event('workspace.room_message', payload), run_id: 'run_planner' }} raw={false} />).container
+    const mail = row({ ...wake, state: 'queued' })
+    expect(mail.querySelector('[data-slot=agent-glyph]')).not.toBeNull()
+    expect(mail.querySelector('[data-slot=avatar]')).toBeNull()
+    expect(row({ ...wake, via: undefined, state: 'queued' }).querySelector('[data-slot=avatar]')).not.toBeNull()
   })
 })
 

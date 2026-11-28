@@ -68,6 +68,7 @@ var (
 	ErrWriteDenied     = errors.New("ptyhost: write access denied")
 	ErrInvalidRunID    = errors.New("ptyhost: invalid session id")
 	ErrSessionReplaced = errors.New("ptyhost: terminal was replaced")
+	ErrPasteModeOff    = errors.New("ptyhost: the terminal has bracketed paste mode off")
 	// ErrSnapshotPending means one bounded, deduplicated background repair is
 	// rebuilding a missing, stale, or invalid screen checkpoint.
 	ErrSnapshotPending = errors.New("ptyhost: terminal snapshot repair pending")
@@ -682,6 +683,19 @@ func (h *Host) LastInput(key SessionKey) (time.Time, bool) {
 	return s.lastInput()
 }
 
+// Drafting reports when a person last typed on an attach without pressing
+// Enter since. It is the zero time once they did, once Inject submitted a
+// line, which takes their draft with it, or when the key has no session.
+func (h *Host) Drafting(key SessionKey) time.Time {
+	s := h.lookup(key)
+	if s == nil {
+		return time.Time{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.draftAt
+}
+
 // Replay opens the retained raw terminal output and its metadata at one
 // immutable boundary. An expired prefix is explicit, not a complete transcript.
 // os.ErrNotExist means the run has never recorded a transcript.
@@ -899,7 +913,19 @@ func (h *Host) Inject(ctx context.Context, key SessionKey, actorName, actorColor
 	if s == nil {
 		return ErrNoSession
 	}
-	return s.inject(ctx, actorName, actorColor, message, submit)
+	return s.inject(ctx, actorName, actorColor, message, submit, false)
+}
+
+// InjectPasted is Inject for text no person sent. Inject writes message and
+// submit as one write when the terminal has bracketed paste mode off, which
+// agent CLIs leave unsent in the input box; InjectPasted then writes nothing
+// and returns ErrPasteModeOff.
+func (h *Host) InjectPasted(ctx context.Context, key SessionKey, actorName, actorColor, message, submit string) error {
+	s := h.lookup(key)
+	if s == nil {
+		return ErrNoSession
+	}
+	return s.inject(ctx, actorName, actorColor, message, submit, true)
 }
 
 // Annotate shows the banner Inject draws for a message actorName sent the
@@ -1183,8 +1209,9 @@ func (h *Host) Attach(ctx context.Context, key SessionKey, a AttachClient, conn 
 				return
 			}
 			if n > 0 && s.clientWritable(c) {
+				keys := scan.typed(buf[:n])
 				accept := func() error {
-					return s.writeClientStdinContext(ctx, c, buf[:n])
+					return s.writeClientStdinContext(ctx, c, buf[:n], keys)
 				}
 				if a.InputAdmission != nil {
 					if admissionErr := a.InputAdmission(accept); admissionErr != nil {
@@ -1195,7 +1222,7 @@ func (h *Host) Attach(ctx context.Context, key SessionKey, a AttachClient, conn 
 					report(writeErr)
 					return
 				}
-				if !typed && scan.typed(buf[:n]) {
+				if keys && !typed {
 					typed = true
 					h.reportInput(key, a.Member)
 				}

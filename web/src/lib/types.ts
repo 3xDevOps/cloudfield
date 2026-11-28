@@ -822,7 +822,7 @@ export interface RoomMessage {
   run_id: string
   actor_id: string
   actor_display_name?: string
-  /** The connector client, such as ChatGPT, the actor posted through. */
+  /** The connector client, such as ChatGPT, the actor posted through, or `agent mail` on the server's notice of a held mail wake. */
   via?: string
   kind: RoomMessageKind
   body: string

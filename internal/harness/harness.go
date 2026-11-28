@@ -639,7 +639,7 @@ var profiles = map[string]Profile{
 		TUIArgs:       []string{"copilot", "--allow-all", "--interactive=" + TaskPlaceholder},
 		HeadlessArgs:  []string{"copilot", "--allow-all", "--prompt=" + TaskPlaceholder},
 		ACPArgs:       []string{"copilot", "--acp", "--allow-all"},
-		Capabilities:  Capabilities{Hooks: HooksManaged, EnhancedDefault: true},
+		Capabilities:  Capabilities{Hooks: HooksManaged, IdleWake: true, TypedWake: true, EnhancedDefault: true},
 		ModelArgs:     []string{"--model", ModelPlaceholder},
 		EffortArgs:    []string{"--reasoning-effort", EffortPlaceholder},
 		EffortLevels:  []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"},
@@ -674,7 +674,7 @@ var profiles = map[string]Profile{
 		HeadlessArgs: []string{"gemini", "--approval-mode=yolo", "--prompt=" + TaskPlaceholder},
 		ACPArgs:      []string{"gemini", "--acp"},
 		ACPMode:      "yolo",
-		Capabilities: Capabilities{Hooks: HooksByHand, EnhancedDefault: true},
+		Capabilities: Capabilities{Hooks: HooksByHand, IdleWake: true, TypedWake: true, EnhancedDefault: true},
 		ModelArgs:    []string{"--model", ModelPlaceholder},
 		// In a folder it does not trust, Gemini drops yolo to default and
 		// skips ~/.gemini/.env.
@@ -699,7 +699,7 @@ var profiles = map[string]Profile{
 		TUIArgs:         []string{"agent", "--force", "--trust", TaskPlaceholder},
 		HeadlessArgs:    []string{"agent", "-p", "--force", "--trust", TaskPlaceholder},
 		ACPArgs:         []string{"agent", "--force", "acp"},
-		Capabilities:    Capabilities{Hooks: HooksByHand, EnhancedDefault: true},
+		Capabilities:    Capabilities{Hooks: HooksByHand, IdleWake: true, TypedWake: true, EnhancedDefault: true},
 		ModelArgs:       []string{"--model", ModelPlaceholder},
 		EnvPassthrough:  []string{"CURSOR_API_KEY"},
 		CredentialPaths: []string{".config/cursor/auth.json"},

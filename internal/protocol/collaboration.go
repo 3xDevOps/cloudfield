@@ -64,7 +64,8 @@ type RoomMessage struct {
 	// message was authored. It remains available after member removal.
 	ActorDisplayName string `json:"actor_display_name,omitempty"`
 	// Via is the connector client, such as ChatGPT, the actor posted
-	// through.
+	// through, or "agent mail" on the notice the server writes as the run's
+	// owner for a mail wake it holds for the member in control.
 	Via            string              `json:"via,omitempty"`
 	Body           string              `json:"body"`
 	Kind           RoomMessageKind     `json:"kind"`

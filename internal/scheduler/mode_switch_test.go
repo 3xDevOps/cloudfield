@@ -48,7 +48,7 @@ type fakeSupervisor struct {
 }
 
 func (f *fakeSupervisor) exec(_ runtime.ID, argv []string) (int, string, error) {
-	if len(argv) == 5 && argv[3] == "aether-switch" {
+	if len(argv) == 5 && argv[3] == "aether-state" {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		return 0, f.state, nil

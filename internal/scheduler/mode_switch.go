@@ -399,13 +399,13 @@ func (s *Scheduler) settleSwitch(ctx context.Context, entry *supervised) {
 		return
 	}
 	readCtx, cancel := context.WithTimeout(ctx, recoveryStepTimeout)
-	_, stdout, _, err := s.cfg.Runtime.Exec(readCtx, cid, []string{"/bin/sh", "-c", `cat "$1" 2>/dev/null || :`, "aether-switch", supervisorStateFile}, "")
+	state, err := s.supervisorState(readCtx, cid)
 	cancel()
 	if err != nil {
 		slog.Warn("scheduler: read the run supervisor's state", "run", entry.runID, "error", err)
 		return
 	}
-	if nonce, _, _ := strings.Cut(stdout, " "); nonce == intent.Nonce {
+	if nonce, _, _ := strings.Cut(state, " "); nonce == intent.Nonce {
 		if err := s.commitMode(ctx, entry, intent.Mode, intent.Reporter, intent.IdleWake); err != nil {
 			slog.Warn("scheduler: finish an interrupted mode switch", "run", entry.runID, "error", err)
 		}

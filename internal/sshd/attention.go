@@ -240,7 +240,7 @@ func (r *attentionRun) openRoomQuestions() []*store.RoomMessage {
 func (r *attentionRun) queuedMessages() []*store.RoomMessage {
 	var queued []*store.RoomMessage
 	for _, m := range r.open {
-		if m.Kind == store.RoomMessageSteerRequest && m.ActorID != r.controller {
+		if m.Kind == store.RoomMessageSteerRequest && (m.ActorID != r.controller || m.Via == domain.ViaAgentMail) {
 			queued = append(queued, m)
 		}
 	}
@@ -330,7 +330,10 @@ var attentionRows = []attentionRow{
 				sender = viewer.name(m.ActorID)
 			}
 			item.Reason, item.Since = sender+" sent a message, approve to deliver", since(&m.CreatedAt)
-			item.Message = &protocol.AttentionMessage{ID: m.ID, Body: m.Body, From: string(m.ActorID)}
+			if m.Via == domain.ViaAgentMail {
+				item.Reason = domain.AgentMailReason
+			}
+			item.Message = &protocol.AttentionMessage{ID: m.ID, Body: m.Body, From: string(m.ActorID), Via: m.Via}
 		},
 	},
 	{

@@ -561,6 +561,8 @@ type RoomMessagePayload struct {
 	// Resolution lets a client without the message cached tell a completed
 	// or deleted comment apart from one whose state alone did not change.
 	Resolution string `json:"resolution,omitempty"`
+	// Via is the message's: domain.ViaAgentMail marks one no person sent.
+	Via string `json:"via,omitempty"`
 }
 
 func (RoomMessagePayload) EventType() Type { return TypeRoomMessage }
