@@ -66,13 +66,13 @@ describe('Machines', () => {
 
   test('a machine short of memory says a launch is refused, why the last ones were, and what was counted', async () => {
     await show(full())
-    expect(screen.getByText(/A launch would be refused for memory and the memory stall\./)).toBeDefined()
-    expect(screen.getByText('2.0 GB available of 16 GB. The server keeps 1.6 GB free, and a launch needs 2.0 GB above that.')).toBeDefined()
-    expect(screen.getByRole('meter', { name: 'Memory available' }).getAttribute('aria-valuetext')).toBe('2.0 GB free of 16 GB; a launch needs 3.6 GB')
-    expect(screen.getByText(/12\.5%, limit 10% · launches refused/)).toBeDefined()
-    expect(screen.getByText('200 GB free of 500 GB. The server keeps 25 GB free, and a launch needs 4.0 GB above that.')).toBeDefined()
-    expect(screen.getByText('Frozen by the memory brake').previousElementSibling?.textContent).toBe('1')
-    expect(screen.getByText('Asleep on disk').previousElementSibling?.textContent).toBe('5')
+    expect(screen.getByText("A launch would be refused: memory is under the launch line and the server's memory stall is at its limit.")).toBeDefined()
+    expect(screen.getByText('2.0 GiB available of 16.0 GiB. A launch needs 3.6 GiB available.')).toBeDefined()
+    expect(screen.getByRole('meter', { name: 'Memory available' }).getAttribute('aria-valuetext')).toBe('2.0 GiB free of 16.0 GiB; the launch line is 3.6 GiB')
+    expect(screen.getByText(/12\.5% · launches refused at 10% · refusing launches now/)).toBeDefined()
+    expect(screen.getByText('200.0 GiB free of 500.0 GiB. A launch needs 29.0 GiB free.')).toBeDefined()
+    expect(screen.getByText('Frozen by the memory brake').nextElementSibling?.textContent).toBe('1')
+    expect(screen.getByText('Asleep on disk').nextElementSibling?.textContent).toBe('5')
 
     expect(screen.getByText(refusalText)).toBeDefined()
     expect(screen.getByRole('button', { name: 'Copy why the last launch was refused' })).toBeDefined()
@@ -84,7 +84,8 @@ describe('Machines', () => {
     const cells = (label: string) => within(summary).getByRole('rowheader', { name: new RegExp(label) }).parentElement!.querySelectorAll('td')
     expect([...cells('Launches refused')].map((td) => td.textContent)).toEqual(['2', '5'])
     expect([...cells('Subsessions that waited')].map((td) => td.textContent)).toEqual(['0', '6'])
-    expect([...cells('Wait before a start')].map((td) => td.textContent)).toEqual(['1m 30s mean, 2m 00s longest', '2m 30s mean, 5m 00s longest'])
+    expect([...cells('Mean wait')].map((td) => td.textContent)).toEqual(['1m 30s', '2m 30s'])
+    expect([...cells('Longest wait')].map((td) => td.textContent)).toEqual(['2m 00s', '5m 00s'])
     expect([...cells('idle over an hour')].map((td) => td.textContent)).toEqual(['50%', '25%'])
     expect([...cells('Wakes refused')].map((td) => td.textContent)).toEqual(['0', '3'])
     expect(screen.getByText('All 6 counters')).toBeDefined()
@@ -100,9 +101,8 @@ describe('Machines', () => {
     expect(screen.getByText('open /proc/meminfo: permission denied')).toBeDefined()
     expect(screen.getByText('read /sys/fs/cgroup/system.slice/memory.pressure: no such device')).toBeDefined()
     expect(screen.getByText(/Cannot connect to the Docker daemon/)).toBeDefined()
-    expect(screen.getByText("Not measured: the server's own cgroup reports no memory pressure.")).toBeDefined()
-    expect(screen.getByText('Not measured: the kernel reports no memory pressure.')).toBeDefined()
-    expect(screen.getByText(/refused for memory, which could not be measured and disk, which could not be measured\./)).toBeDefined()
+    expect(screen.getAllByText('Not measured: the error is below.')).toHaveLength(2)
+    expect(screen.getByText('A launch would be refused: memory and disk could not be measured.')).toBeDefined()
   })
 
   test('a healthy machine with nothing counted says a launch fits and nothing happened', async () => {
