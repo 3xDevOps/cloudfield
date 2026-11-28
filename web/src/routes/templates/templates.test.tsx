@@ -226,7 +226,7 @@ describe('templates view', () => {
     await rowAction('Schedule')
     const dialog = within(await screen.findByRole('dialog', { name: `Schedule ${template.name}` }))
     fireEvent.change(dialog.getByLabelText('Time zone'), { target: { value: 'Europe/Berln' } })
-    expect(dialog.getByText('Not a time zone this browser knows. Pick one from the list.')).toBeDefined()
+    expect(dialog.getByText('Not a time zone this browser knows. Check the spelling, such as Europe/Berlin.')).toBeDefined()
     expect(dialog.getByRole('button', { name: 'Schedule' }).hasAttribute('disabled')).toBe(true)
     fireEvent.change(dialog.getByLabelText('Time zone'), { target: { value: 'europe/berlin' } })
     fireEvent.click(dialog.getByRole('button', { name: 'Schedule' }))
@@ -248,6 +248,22 @@ describe('templates view', () => {
     fireEvent.click(dialog.getByRole('radio', { name: 'Monthly' }))
     fireEvent.click(dialog.getByRole('radio', { name: 'Cron' }))
     expect(dialog.getByLabelText('Cron rule')).toHaveProperty('value', '*/15 9-17 * * 1-5')
+  })
+
+  it('carries a rule typed in cron back into the picker', async () => {
+    const client = fakeApi({ scheduleList: vi.fn(async () => []) })
+    seed()
+    render(<Templates client={client} />)
+
+    await rowAction('Schedule')
+    const dialog = within(await screen.findByRole('dialog', { name: `Schedule ${template.name}` }))
+    fireEvent.click(dialog.getByRole('radio', { name: 'Cron' }))
+    fireEvent.change(dialog.getByLabelText('Cron rule'), { target: { value: 'CRON_TZ=Asia/Tokyo 0 7 * * 1-5' } })
+    fireEvent.click(dialog.getByRole('radio', { name: 'Weekly' }))
+    expect(dialog.getByLabelText('At')).toHaveProperty('value', '07:00')
+    expect(dialog.getByLabelText('Time zone')).toHaveProperty('value', 'Asia/Tokyo')
+    expect(dialog.getByRole('checkbox', { name: 'Friday' }).getAttribute('aria-checked')).toBe('true')
+    expect(dialog.getByText('CRON_TZ=Asia/Tokyo 0 7 * * 1-5')).toBeDefined()
   })
 
   it('fills cron with the rule the picker makes', async () => {

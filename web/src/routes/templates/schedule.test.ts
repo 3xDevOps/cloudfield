@@ -1,4 +1,4 @@
-import { canonicalZone, describeRule, readRule, writeRule, type Plan } from '@/routes/templates/schedule'
+import { describeRule, readRule, writeRule, type Plan, zoneName } from '@/routes/templates/schedule'
 
 const clock = (at: string) => new Date(`2000-01-01T${at}:00Z`).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })
 
@@ -33,11 +33,14 @@ describe('schedule rules', () => {
     expect(describeRule(rule)).toEqual({ cron, zone })
   })
 
-  it('spells a zone the way the browser does, and knows when it does not know one', () => {
-    expect(canonicalZone(' europe/berlin ')).toBe('Europe/Berlin')
-    expect(canonicalZone('utc')).toBe('UTC')
-    expect(canonicalZone('Europe/Berln')).toBeNull()
-    expect(canonicalZone('')).toBeNull()
+  it('keeps a zone as typed, in the listed spelling when listed, and refuses one the browser does not know', () => {
+    expect(zoneName(' europe/berlin ')).toBe('Europe/Berlin')
+    expect(zoneName('utc')).toBe('UTC')
+    expect(zoneName('Asia/Kolkata')).toBe('Asia/Kolkata')
+    expect(zoneName('Etc/UTC')).toBe('Etc/UTC')
+    expect(zoneName('Europe/Berln')).toBeNull()
+    expect(zoneName('+05:30')).toBeNull()
+    expect(zoneName('')).toBeNull()
   })
 
   it('starts a new schedule daily at 09:00 in the browser zone', () => {

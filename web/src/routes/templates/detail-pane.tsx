@@ -18,7 +18,7 @@ function Timing({ template, schedule }: { template: Template; schedule?: Schedul
   return (
     <>
       Scheduled {'words' in shown ? shown.words : <><code className="font-code">{shown.cron}</code> {shown.zone}</>}
-      {fire && <>, {fire[0]} <RelativeTime at={fire[1]} /></>}
+      {fire && <span className="whitespace-nowrap">, {fire[0]} <RelativeTime at={fire[1]} /></span>}
     </>
   )
 }

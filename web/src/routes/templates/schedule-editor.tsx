@@ -11,13 +11,11 @@ import { RelativeTime } from '@/components/ui/relative-time'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { api, type Api } from '@/lib/api'
 import type { Schedule } from '@/lib/types'
-import { canonicalZone, mondayFirst, readRule, weekdayNames, writeRule, type Plan, type Repeat } from '@/routes/templates/schedule'
+import { mondayFirst, readRule, weekdayNames, writeRule, zoneName, zones, type Plan, type Repeat } from '@/routes/templates/schedule'
 import type { Failure } from '@/routes/templates/template-form'
 import { stillWaiting, usePastDeadline } from '@/store/optimistic'
 
 const repeats: [Repeat, string][] = [['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly'], ['cron', 'Cron']]
-// Intl lists canonical zones only, which leaves out UTC.
-const zones = ['UTC', ...Intl.supportedValuesOf('timeZone')]
 
 export function ScheduleEditor({
   workspaceID,
@@ -48,7 +46,7 @@ export function ScheduleEditor({
   const late = usePastDeadline(busy || saving)
   const [error, setError] = useState<string | null>(null)
   const set = (fields: Partial<Plan>) => setPlan((current) => ({ ...current, ...fields }))
-  const zone = canonicalZone(plan.zone)
+  const zone = zoneName(plan.zone)
   const rule = writeRule(zone ? { ...plan, zone } : plan)
   const ready = plan.repeat === 'cron' ? Boolean(rule) : Boolean(plan.at && zone && (plan.repeat !== 'weekly' || plan.days.length))
   const saved = schedule && writeRule(readRule(schedule.cron, '')) === rule
@@ -84,9 +82,10 @@ export function ScheduleEditor({
             value={plan.repeat}
             onValueChange={(value) => {
               const repeat = value as Repeat
-              // A rule the fields cannot show is kept rather than replaced by what they make.
-              const fill = repeat === 'cron' && plan.repeat !== 'cron' && ready && readRule(plan.rule, '').repeat !== 'cron'
-              set(fill ? { repeat, rule } : { repeat })
+              const typed = readRule(plan.rule, plan.zone)
+              // Switching carries the rule across when the other side can show it; a rule only Cron can show stays in Cron.
+              if (plan.repeat === 'cron' && plan.rule.trim() && typed.repeat !== 'cron') setPlan({ ...typed, repeat, rule: plan.rule })
+              else set(repeat === 'cron' && ready && typed.repeat !== 'cron' ? { repeat, rule } : { repeat })
             }}
           >
             {repeats.map(([value, label]) => <RadioPillsItem key={value} value={value}>{label}</RadioPillsItem>)}
@@ -128,7 +127,7 @@ export function ScheduleEditor({
         {plan.repeat === 'cron' ? (
           <FormField
             label="Cron rule"
-            help={<>Five fields: minute hour day month weekday, such as <code className="font-code">30 9 * * 1-5</code>, or <code className="font-code">@hourly</code>. UTC unless it starts with <code className="font-code">CRON_TZ=&lt;zone&gt;</code> and a space.</>}
+            help={<>Five fields: minute hour day month weekday, such as <code className="font-code whitespace-nowrap">30 9 * * 1-5</code>, or <code className="font-code whitespace-nowrap">@hourly</code>. UTC unless it starts with <code className="font-code whitespace-nowrap">CRON_TZ=&lt;zone&gt;</code> and a space.</>}
           >
             <Input placeholder="0 3 * * *" value={plan.rule} spellCheck={false} onChange={(e) => set({ rule: e.target.value })} className="font-code" />
           </FormField>
@@ -141,7 +140,7 @@ export function ScheduleEditor({
               <FormField
                 label="Time zone"
                 help="An IANA zone, such as Europe/Berlin."
-                error={plan.zone.trim() && !zone ? 'Not a time zone this browser knows. Pick one from the list.' : undefined}
+                error={plan.zone.trim() && !zone ? 'Not a time zone this browser knows. Check the spelling, such as Europe/Berlin.' : undefined}
                 className="min-w-0 flex-1 basis-40"
               >
                 <Input required value={plan.zone} spellCheck={false} list={`${id}-zones`} onChange={(e) => set({ zone: e.target.value })} />

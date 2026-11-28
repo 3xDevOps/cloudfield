@@ -35,13 +35,21 @@ function weekdays(field: string): number[] | null {
   return [...days].sort()
 }
 
-/** The browser's spelling of an IANA zone, or null for one it does not know. */
-export function canonicalZone(zone: string): string | null {
+// Intl lists canonical zones only, which leaves out UTC.
+export const zones = ['UTC', ...Intl.supportedValuesOf('timeZone')]
+
+/** The zone as typed, in the list's spelling when it is listed, or null when the browser does not know it. */
+export function zoneName(typed: string): string | null {
+  const zone = typed.trim()
+  const listed = zones.find((name) => name.toLowerCase() === zone.toLowerCase())
+  if (listed) return listed
   try {
-    return new Intl.DateTimeFormat('en', { timeZone: zone.trim() }).resolvedOptions().timeZone
+    new Intl.DateTimeFormat('en', { timeZone: zone })
   } catch {
     return null
   }
+  // Intl also takes offsets such as +05:30, which Go's zone database does not.
+  return /^[A-Za-z]/.test(zone) ? zone : null
 }
 
 export function readRule(stored: string, browserZone: string): Plan {
