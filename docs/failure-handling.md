@@ -779,8 +779,8 @@ it is stopped or cannot write. `awake` includes a session a member paused;
 still being saved; the last figure is the VMs of closed sessions that can
 still hold memory, until the guard stops them. A wake the server tried by itself is marked on the
 last refused wake. The refusal is admission's text. Under the counters it
-prints the share of the memory in use at memory refusals that session VMs
-idle for over an hour, or closed, held, and the mean and longest wait of the
+prints the share of the memory in use at memory and stall refusals that
+session VMs idle for over an hour, or closed, held, and the mean and longest wait of the
 waits that ended in a start. The two windows cover whole hours, so "24
 hours" is the current hour and the 24 before it.
 
@@ -788,7 +788,7 @@ hours" is the current hour and the 24 before it.
 server's own view to any member: its memory and stalls, every filesystem it
 checks, and its live VM counts. With `--min-free-disk` negative it lists no
 disk and sets `disk_unchecked`; `disk_error` still says when the runtime
-cannot be asked, which refuses every launch. The session a refusal names, and the text of
+cannot be asked, which refuses every launch and wake. The session a refusal names, and the text of
 a measurement that failed, which can name a path of the host, go to a super
 admin only.
 
