@@ -47,6 +47,7 @@ func TestEnhancedChildWokenWithinTheGraceForwardsOnlyItsLastTurn(t *testing.T) {
 	c, _ := withCoordination(t, e)
 	parent := e.launchACP(t, "parent")
 	var wake sync.Once
+	c.mu.Lock()
 	c.onWake = func(run domain.RunID) {
 		if run == parent.ID {
 			return
@@ -59,6 +60,7 @@ func TestEnhancedChildWokenWithinTheGraceForwardsOnlyItsLastTurn(t *testing.T) {
 			}()
 		})
 	}
+	c.mu.Unlock()
 	run := launchChildRun(t, e, parent, "fake", domain.LaunchACP)
 	waitItems(t, e.sched, run.ID, "both turns", turnEnded("end_turn", 2))
 	waitFor(t, "a provisional report", func() bool { return len(c.provisionalReports()) > 0 })

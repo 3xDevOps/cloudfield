@@ -174,7 +174,7 @@ func (s *Scheduler) bootToCapture(ctx context.Context, booter runtime.CaptureRun
 			return packet, err
 		}
 	}
-	release, err := s.reserveBoot(ctx, cid)
+	release, err := s.reserveBoot(ctx, r.ID, cid)
 	if err != nil {
 		return protocol.EvidencePacket{}, fmt.Errorf("%w; Cloudfield boots the VM to commit it once the host has memory: %w", cause, err)
 	}
