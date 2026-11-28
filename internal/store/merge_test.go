@@ -36,6 +36,7 @@ var memberRefs = map[string]bool{
 	"runs.requested_account_member_id":         true,
 	"runs.children_set_by":                     true,
 	"run_children.owner_member_id":             true,
+	"launch_intents.member_id":                 true,
 	"run_children.account_member_id":           true,
 	"child_settings.member_id":                 false,
 	"agent_logins.member_id":                   true,

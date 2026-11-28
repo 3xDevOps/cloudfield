@@ -341,6 +341,17 @@ type LaunchOptions struct {
 	// recorded with FromBranch, instead of capturing the workspace base.
 	FromCommit string
 	FromBranch string
+	// Base starts the checkout at a workspace base captured earlier, for a
+	// launch that waited for room, and Intent creates the session with
+	// that launch intent, ReservedRunID, marked started in one transaction.
+	Base   *LaunchBase
+	Intent bool
+	// Reclaim, when set, lets a Retry free disk as a launch somebody asked
+	// for does, and is called when it goes to free some.
+	Reclaim func()
+	// Queue refuses the launch without an admission of its own while
+	// launches wait for room, so it waits behind them.
+	Queue bool
 	// LinearIssueURL is recorded on the run as its Linear issue.
 	LinearIssueURL string
 }

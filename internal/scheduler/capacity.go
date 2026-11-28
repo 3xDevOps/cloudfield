@@ -24,12 +24,18 @@ var (
 	ErrMemoryPressure     = errors.New("scheduler: insufficient host memory headroom")
 	ErrBrowserCPUCapacity = errors.New("scheduler: insufficient browser CPU capacity")
 	ErrCapacityUnknown    = errors.New("scheduler: host capacity unavailable")
+	// ErrLaunchesWaiting sends a launch that asked to wait behind the
+	// launches already waiting for room, without an admission of its own.
+	ErrLaunchesWaiting = errors.New("scheduler: launches asked for earlier are waiting for room, and this one waits behind them")
 )
 
 // CapacityRefused reports whether err is a refusal for want of disk or
 // memory, or a failed measurement of them: a later attempt can succeed.
-func (s *Scheduler) CapacityRefused(err error) bool {
-	return errors.Is(err, ErrDiskFull) || errors.Is(err, ErrMemoryPressure) || errors.Is(err, ErrCapacityUnknown)
+func (s *Scheduler) CapacityRefused(err error) bool { return IsCapacityRefusal(err) }
+
+// IsCapacityRefusal is CapacityRefused for a caller without the scheduler.
+func IsCapacityRefusal(err error) bool {
+	return errors.Is(err, ErrDiskFull) || errors.Is(err, ErrMemoryPressure) || errors.Is(err, ErrCapacityUnknown) || errors.Is(err, ErrLaunchesWaiting)
 }
 
 const (
@@ -109,6 +115,9 @@ type memoryClaim struct {
 	// op and run name the admission in the capacity counters.
 	op  string
 	run domain.RunID
+	// reclaim, when set, lets a launch-retry free disk, and is called
+	// when it goes to.
+	reclaim func()
 	// wake starts a container whose disks exist, so it is not held to the
 	// disk reserve: refusing it would keep a saved VM's memory on disk.
 	wake bool
@@ -143,12 +152,12 @@ func (s *Scheduler) reserveCapacity(ctx context.Context) (func(), error) {
 // one was reserved for it. With retry the server tries it again unasked
 // after a capacity refusal: disk reclaim removes what closed and sleeping
 // sessions keep, so only an attempt somebody asked for runs it.
-func (s *Scheduler) reserveLaunch(ctx context.Context, run domain.RunID, retry bool) (func(), error) {
+func (s *Scheduler) reserveLaunch(ctx context.Context, run domain.RunID, retry bool, reclaim func()) (func(), error) {
 	op := opLaunch
 	if retry {
 		op = opLaunchRetry
 	}
-	return s.reserve(ctx, &memoryClaim{bytes: startupMemoryBytes, op: op, run: run})
+	return s.reserve(ctx, &memoryClaim{bytes: startupMemoryBytes, op: op, run: run, reclaim: reclaim})
 }
 
 // reserveWake admits the wake of a sleeping container: a saved VM must fit
@@ -225,7 +234,10 @@ func (s *Scheduler) reserve(ctx context.Context, claim *memoryClaim) (release fu
 	var short *memoryShortage
 	switch {
 	case ctx.Err() != nil:
-	case errors.Is(err, ErrDiskFull) && claim.op != opLaunchRetry:
+	case errors.Is(err, ErrDiskFull) && (claim.op != opLaunchRetry || claim.reclaim != nil):
+		if claim.reclaim != nil {
+			claim.reclaim()
+		}
 		s.reclaimDisk(ctx, "")
 		return s.tryReserveCapacity(ctx, claim)
 	case errors.As(err, &short) && s.saveIdleVMs(ctx, short.need+short.claimed):

@@ -401,6 +401,11 @@ const FeatureWorkspaceAccess = "workspace-access"
 // runs. An older server ignores login and launches on the default login.
 const FeatureLogins = "logins"
 
+// FeatureLaunchWait marks a server whose run.launch takes wait and that
+// serves launch.waiting.*. An older server refuses wait as an unknown
+// param.
+const FeatureLaunchWait = "launch-wait"
+
 // CapabilityRunRepos is listed in a gateway's capability methods but is not an RPC method.
 const CapabilityRunRepos = "run.repos"
 
@@ -539,6 +544,11 @@ type RunLaunchParams struct {
 	// IdempotencyKey makes a retry by the same member return the run the
 	// first launch started instead of starting another.
 	IdempotencyKey string `json:"idempotency_key,omitempty"`
+	// Wait keeps a launch the server has no memory or disk for: the result
+	// then has no run and says where it waits (RunLaunchResult.Waiting),
+	// and the server starts it when there is room. Without it such a
+	// launch is refused with -32004.
+	Wait bool `json:"wait,omitempty"`
 	// ExtraWorkspaceIDs must differ from each other and from WorkspaceID.
 	ExtraWorkspaceIDs []string `json:"extra_workspace_ids,omitempty"`
 	// Children is the run's own child-run setting: "on", "off", or empty to
@@ -558,9 +568,63 @@ type RunLaunchParams struct {
 // SkippedFallbackAccounts are the fallback accounts the launch left out
 // because checking them failed; a replay does not repeat them.
 type RunLaunchResult struct {
-	Run                     Run              `json:"run"`
+	// Run is absent when Waiting is set.
+	Run                     Run              `json:"run,omitzero"`
 	Replayed                bool             `json:"replayed,omitempty"`
 	SkippedFallbackAccounts []SkippedAccount `json:"skipped_fallback_accounts,omitempty"`
+	// Waiting is the launch waiting for room, for a request with Wait. The
+	// same request with the same idempotency_key returns it again while it
+	// waits, and its session once it started.
+	Waiting *LaunchWaiting `json:"waiting,omitempty"`
+}
+
+const (
+	// MethodLaunchWaitingList lists the caller's launches that wait for
+	// room and those that stopped waiting without a session in the last
+	// 24 hours.
+	MethodLaunchWaitingList = "launch.waiting.list"
+	// MethodLaunchWaitingCancel stops one of the caller's waiting launches.
+	MethodLaunchWaitingCancel = "launch.waiting.cancel"
+)
+
+// LaunchWaiting is a launch the server had no room for. It is not a session
+// until its state is "started", when ID is its session's.
+type LaunchWaiting struct {
+	// ID is the session ID reserved for it.
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	Harness     string `json:"harness"`
+	Task        string `json:"task,omitempty"`
+	// State is "waiting", "starting" (an attempt is under way), "started",
+	// "cancelled", "expired" (no room within 24 hours) or "refused" (a
+	// check every launch makes failed at an attempt).
+	State string `json:"state"`
+	// Refusal is the server's last refusal as a launch would get it, or
+	// why a launch that did not start ended.
+	Refusal string `json:"refusal"`
+	// Attempts counts the tries since the first refusal, and Passed the
+	// launches the server admitted while this one waited.
+	Attempts int `json:"attempts"`
+	Passed   int `json:"passed"`
+	// IdempotencyKey is the request's, absent when it had none.
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
+	CreatedAt      string `json:"created_at"`
+	// ExpiresAt is when a launch still waiting ends "expired".
+	ExpiresAt string `json:"expires_at"`
+	EndedAt   string `json:"ended_at,omitempty"`
+}
+
+type LaunchWaitingListParams struct {
+	// ID returns that one launch, of any state and age.
+	ID string `json:"id,omitempty"`
+}
+
+type LaunchWaitingListResult struct {
+	Waiting []LaunchWaiting `json:"waiting"`
+}
+
+type LaunchWaitingCancelParams struct {
+	ID string `json:"id"`
 }
 
 // SkippedAccount is a fallback account a launch left out and why; no

@@ -63,7 +63,7 @@ func launchWithOptions(ctx context.Context, runs RunController, workspace domain
 	if launcher, ok := runs.(RunLauncherWithOptions); ok {
 		return launcher.LaunchWithOptions(ctx, workspace, member, account, task, harness, mode, opts)
 	}
-	if opts.CachedBase != "" || opts.Model != "" || opts.Effort != "" || len(opts.ExtraWorkspaces) > 0 || opts.Limits != (domain.RunLimits{}) || opts.LinearIssueURL != "" || (opts.Permission != "" && opts.Permission != domain.PermissionDefault) {
+	if opts.Intent || opts.Base != nil || opts.CachedBase != "" || opts.Model != "" || opts.Effort != "" || len(opts.ExtraWorkspaces) > 0 || opts.Limits != (domain.RunLimits{}) || opts.LinearIssueURL != "" || (opts.Permission != "" && opts.Permission != domain.PermissionDefault) {
 		return nil, errLaunchOptionsUnsupported
 	}
 	return runs.Launch(ctx, workspace, member, account, task, harness, mode)
@@ -75,6 +75,9 @@ type RunController interface {
 	// counts its session VMs.
 	Machine(ctx context.Context) scheduler.MachineStatus
 	VMs() domain.VMCounts
+	// CaptureLaunchBase captures a workspace's base now, for a launch that
+	// starts from it once the server has room.
+	CaptureLaunchBase(ctx context.Context, workspace domain.WorkspaceID, cached string) (domain.LaunchBase, error)
 	Launch(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode) (*domain.Run, error)
 	// CheckSharedLaunch reports whether member's launch of harness on
 	// account would be refused over the harness or the account owner's

@@ -603,6 +603,33 @@ account means listing the candidates failed); `error` is a fixed reason, such
 as `the account's agent could not be checked`, and the server log has the
 detail. A replay does not repeat them.
 
+`run.launch` takes an optional `wait`. Without it a launch the server has
+no memory or disk for is refused with `-32004` and the refusal text, as
+before. With `"wait": true` the server keeps it: the result has no `run`
+and a `waiting` object, `{id, workspace_id, harness, task, state, refusal,
+attempts, passed, idempotency_key, created_at, expires_at, ended_at}`, and
+the server starts it when there is room
+([A launch that waits for room](failure-handling.md#a-launch-that-waits-for-room)).
+`id` is the session ID reserved for it; no session has that ID until
+`state` is `started`. `task` is the first 200 bytes of the task. The same request with the same `idempotency_key`
+returns the same `waiting` object while it waits and its session once it
+started. Without `wait`, that key answers `-32004` with the refusal and that
+the launch waits, so a caller that did not ask to wait never gets a result
+without a `run`. For 7 days after it ended `cancelled` the key answers
+`-32003`, and after `expired` or `refused` `-32004`, each with why, and
+launches nothing. `wait` is not part of what the key fingerprints. A server that does
+not know `wait` refuses it as an unknown param, so send it only when
+`server.info` lists the `launch-wait` feature.
+
+`launch.waiting.list` (no params, or `{"id":"<id>"}` for one, kept 7 days
+after it ended)
+returns `{"waiting":[...]}`: the caller's launches that wait, and those that
+ended in the last 24 hours `expired`, `refused`, or `cancelled` by someone
+else. `launch.waiting.cancel`
+`{"id":"<id>"}` ends one `cancelled` and returns it; one that has started
+answers `-32002` and names the session to stop. Both act on the caller's own
+launches; a super admin may name anyone's by `id`.
+
 `run.launch` and `template.launch` refuse a param they do
 not know with `-32602` `unknown param "<name>"; this server does not support
 it`, so a client never launches without an option it asked for. Other
