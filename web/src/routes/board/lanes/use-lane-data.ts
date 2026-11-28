@@ -69,7 +69,17 @@ async function readBack(workspaceID: string, floor: number): Promise<void> {
   } catch (err) {
     if (useStore.getState().laneHistory[workspaceID] && owns() && same()) setLaneHistory(workspaceID, { loading: false, error: message(err) })
   } finally {
-    if (reads.get(workspaceID) === read) reads.delete(workspaceID)
+    if (reads.get(workspaceID) === read) {
+      reads.delete(workspaceID)
+      // A read abandoned because another member signed in leaves a history marked loading that nothing
+      // would read again: it is not that member's, so it goes, and a mounted view reads its own.
+      if (!same() && useStore.getState().laneHistory[workspaceID]?.loading) {
+        useStore.setState((s) => {
+          const { [workspaceID]: _abandoned, ...laneHistory } = s.laneHistory
+          return { laneHistory }
+        })
+      }
+    }
   }
 }
 

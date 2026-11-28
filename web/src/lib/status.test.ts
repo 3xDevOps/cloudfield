@@ -155,6 +155,16 @@ describe('run presentation', () => {
     expect(stateTitle({ state: 'working', reason: 'Working' }, '2026-08-14T10:15:00Z', now)).toBe('Working since 5 minutes ago.')
   })
 
+  it("reads Starting while an open session's agent starts, and only while the run is running", () => {
+    const starting = stateContext({ startingRuns: { run_1: true } })
+    const live = presentRun(toRecord(run({ cause: 'turn' })), starting)
+    expect(stateLine(live)).toBe('Starting')
+    expect(stateTitle(live, '2026-08-14T10:15:00Z', starting.now))
+      .toBe('Starting since 5 minutes ago. A message you send now is delivered when the agent is ready. Why: the session opened before its agent started.')
+    const failed = presentRun(toRecord(run({ status: 'needs-attention', state: 'disconnected', reason: 'enhanced session failed: exit 1' })), starting)
+    expect(stateName(failed)).toBe('Disconnected')
+  })
+
   it('reads a reported success as Finished: review, never Needs you, until the owner answers it', () => {
     const ready = shown({ status: 'needs-attention', state: 'finished', reason: 'agent reported success', review: 'ready' })
     expect(ready).toEqual({ state: 'ready', reason: 'Agent reported success', next: 'Mark it complete, or send a message to keep going.' })

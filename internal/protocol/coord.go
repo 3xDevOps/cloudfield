@@ -434,6 +434,12 @@ type RunReportParams struct {
 	// lets a hook hold back: Aether may refuse it while the turn owes a
 	// report.
 	Stop bool `json:"stop,omitempty"`
+	// LastMessage is the agent's last message of the turn an idle report
+	// ends. A subsession's reporter sends it, for the parent.
+	LastMessage string `json:"last_message,omitempty"`
+	// SessionEnd marks the idle report of a session's end, which ends no
+	// turn.
+	SessionEnd bool `json:"session_end,omitempty"`
 }
 
 // RunReportResult is the result of run.report. Continue is set when Aether

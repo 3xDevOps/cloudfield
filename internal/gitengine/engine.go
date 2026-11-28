@@ -148,6 +148,9 @@ type Engine struct {
 	// preparing counts the background preparations of checkout disks. Close
 	// waits for them to stop; a build already started outlives them.
 	preparing sync.WaitGroup
+	// prepareNext is the newest base commit of each workspace whose
+	// checkout disks are being prepared. mu guards it.
+	prepareNext map[domain.WorkspaceID]string
 }
 
 // New validates cfg, applies defaults, and creates the repos and checkouts
@@ -191,6 +194,7 @@ func New(cfg Config) (*Engine, error) {
 		evidencePruneDelay: evidencePruneDelay,
 		pruneCtx:           pruneCtx,
 		cancelPrunes:       cancelPrunes,
+		prepareNext:        make(map[domain.WorkspaceID]string),
 	}, nil
 }
 

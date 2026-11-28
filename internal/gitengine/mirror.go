@@ -1,6 +1,7 @@
 package gitengine
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -40,6 +41,8 @@ type MirrorRequest struct {
 	PrivateKeyPath string
 	KnownHostsPath string
 	GitHubToken    string `json:"-"`
+	// FetchTimeout bounds the upstream fetch alone; zero leaves it to ctx.
+	FetchTimeout time.Duration
 }
 
 // MirrorResult reports the upstream observation and refs accepted into the
@@ -544,6 +547,11 @@ func (e *Engine) fetchMirror(ctx context.Context, repo string, req MirrorRequest
 	if req.Auth == domain.MirrorAuthGitHub && (req.GitHubToken == "" || strings.ContainsAny(req.GitHubToken, "\x00\r\n\t ")) {
 		return &mirrorFetchFailure{err: errors.New("GitHub credential unavailable"), output: "authentication failed"}
 	}
+	if req.FetchTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, req.FetchTimeout)
+		defer cancel()
+	}
 	if e.cfg.MirrorFetch != nil {
 		return e.cfg.MirrorFetch(ctx, repo, req, incomingRef)
 	}
@@ -595,8 +603,16 @@ func (e *Engine) fetchMirror(ctx context.Context, repo string, req MirrorRequest
 	args = append(args, "fetch", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", req.SourceURL, "+refs/heads/"+req.Branch+":"+incomingRef)
 	cmd := exec.CommandContext(ctx, e.cfg.GitPath, args...)
 	cmd.Env = env
-	if out, err := cmd.CombinedOutput(); err != nil {
-		output := string(out)
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	// The fetch's transport helper outlives a killed git and keeps its
+	// output open, so the call would not return when ctx ends.
+	if err := runInProcessGroup(cmd); err != nil {
+		// A git ended by ctx reports its signal, not why it was sent.
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+		output := out.String()
 		if req.Auth == domain.MirrorAuthGitHub {
 			output = redactMirrorGitHubCredential(output, req.GitHubToken)
 		}

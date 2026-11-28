@@ -354,6 +354,19 @@ cloudfield workspace origin --workspace myproject --clear
 A `git@github.com:` address is stored as its HTTPS form, because sessions can
 authenticate over HTTPS only.
 
+Do not put a credential in the address (`https://user:token@host/...`);
+git credentials belong in your environment home
+([environment-home.md](environment-home.md)). The
+address is stored as given and every member who can read the workspace sees
+it: `workspace.list` returns it, the dashboard shows it, and it is the
+`origin` remote in every session's checkout, where its agent can read it.
+`cloudfield link` copies your clone's `origin` when the workspace has none, so
+check `git remote get-url origin` first. The timeline note for a change says
+"workspace origin set" without the address when the address holds an `@`,
+`?` or `#`; notes written before that change keep what they hold. If a token
+was ever set this way, rotate it: it reached every member who could read the
+workspace, the agents that ran in it, and anything that read its timeline.
+
 ### Source mirror
 
 A local-only workspace lets collaborators push the base branch directly. A
@@ -477,12 +490,12 @@ more than one workspace exists`. `cloudfield sessions` lists sessions from every
 
 | Command | What it does |
 | --- | --- |
-| `cloudfield sessions` | Every session you can see, colored by owner, with an overlap column. `--needs-you` lists only sessions that need you |
+| `cloudfield sessions` | Every session you can see, colored by owner, with its `MODE`, the `PARENT` of a subsession, the count of agent `MAIL` it has not acknowledged, and an `OVERLAP` column. `--needs-you` lists only sessions that need a member |
 | `cloudfield who` | Who is online and which sessions they watch |
 | `cloudfield attach [--read-only] <session>` | Attach to a session's terminal. Several people can attach at once |
 | `cloudfield message [--steer] [--attach <path>]... <session> "..."` | Message a session's agent. It shows as a banner in your color. `--attach` sends a file with it, `--steer` adds it to an Enhanced agent's running turn |
 | `cloudfield pause`, `resume`, `kill <session>` | Suspend, thaw or stop a session. The checkout and transcript survive a kill |
-| `cloudfield sessions --needs-you` | Sessions waiting on you. `cloudfield sessions <session-id>` shows what one needs and the command that answers it |
+| `cloudfield sessions --needs-you` | Sessions waiting on a member, then on stderr what each needs from you with the command that answers it, or that it waits on another member. `cloudfield sessions <session-id>` prints that for one session on stdout, with its agent, mode, parent, unacknowledged mail, controller and wait conditions |
 | `cloudfield timeline` | The workspace history. `cloudfield timeline <session-id>` shows one session's. Filter with `--member`, `--type`, `--limit`. `--jsonl` exports |
 | `cloudfield messages` | The messages agents sent each other, with bodies. `cloudfield messages <session-id>` shows one session's, `--thread <id>` one question and its replies ([coordination.md](coordination.md#seeing-agent-messages)) |
 | `cloudfield changes` | Session changes since a cursor: status, reports, mail, pull requests and lifecycle. `--follow` keeps polling ([coordination.md](coordination.md#follow-changes-from-a-cursor)) |
@@ -808,7 +821,8 @@ subsessions, because it still runs the previous owner's agent on their home;
 launch a session of your own to use them. The
 agent can pick your account or any account shared with you whose owner reaches
 the session's workspaces instead. The subsession appears under its parent in the
-dashboard, with its purpose, agent, model, account and state, and you open,
+dashboard, with its purpose, agent, model, account and state, and
+`cloudfield sessions` names its parent in the `PARENT` column. You open,
 message, take over or stop it like any session. Its result reaches the parent's
 inbox, as does a notice when it has sat idle or waiting for over an hour, or
 stopped on an error such as a signed-out login for a minute, so the parent can
@@ -879,7 +893,8 @@ change.
 switch in the launch panel, allows or stops them for that one session without changing your
 setting. Only the session's owner allows it, and a handoff to another member voids
 it. An admin can turn it off. Handing a session to another member detaches it from
-its parent and from its subsessions, so no lineage spans two owners.
+its parent and from its subsessions, so no lineage spans two owners;
+`cloudfield sessions` then shows the subsession's `PARENT` with `(detached)`.
 
 The quick-launch button beside **New session** launches your last agent again
 with no task, and always allows subsessions for that session.

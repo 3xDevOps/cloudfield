@@ -438,6 +438,7 @@ From the CLI, on your computer:
   adds it to an Enhanced agent's running turn
   ([Messages and notes](terminal.md#messages-and-notes)).
 - `cloudfield logs <session-id>` prints what the agent did as plain text.
+  `--follow` keeps printing an Enhanced session's conversation as it is written.
 - `cloudfield attach <session-id>` attaches your terminal to a Standard session's agent.
   Every key, Ctrl-C included, goes to the agent; close the terminal to detach,
   and the session keeps going. `cloudfield attach --read-only <session-id>` only watches.
@@ -512,9 +513,10 @@ while the session waits on agents, CI or a process. When Cloudfield cannot vouch
 it says so once on stderr: `session <session-id> still waits, but <condition>: status
 unknown (last read 12m ago): <error>`. It also exits 1 on its
 own error, such as an unknown session id, with the error on stderr and nothing on
-stdout. `cloudfield sessions --needs-you` lists the sessions waiting on you, and `cloudfield
-sessions <session-id>` shows what one needs with the command that answers it. `cloudfield
-answer` allows a permission request once or denies it once, never always.
+stdout. `cloudfield sessions --needs-you` lists the sessions waiting on a member, then on stderr what each
+needs from you with the command that answers it, or that it waits on another member, and
+`cloudfield sessions <session-id>` prints that for one session on stdout. `cloudfield answer` allows a
+permission request once or denies it once, never always.
 `--json` on `cloudfield sessions <session-id>` and `cloudfield wait` prints the session as one JSON
 object.
 

@@ -19,7 +19,9 @@ func init() {
 		usage:   "cloudfield edge-ssh [ssh-options] <host> [command]",
 		example: "cloudfield edge-ssh git@github.com git-upload-pack acme/app",
 		run: func(args []string) error {
-			os.Exit(edgeSSH(args, os.Stdin, os.Stdout, os.Stderr))
+			if code := edgeSSH(args, os.Stdin, os.Stdout, os.Stderr); code != 0 {
+				return exitCode(code)
+			}
 			return nil
 		},
 	})

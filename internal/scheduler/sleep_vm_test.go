@@ -533,6 +533,61 @@ func TestAPromptBeforeTheSaveStartsEndsTheSleep(t *testing.T) {
 	}
 }
 
+// A save the memory guard makes is for memory the host lacks: a prompt that
+// arrives during it waits for the save and restores the session.
+func TestAPromptWaitsForASaveTheMemoryGuardMakes(t *testing.T) {
+	t.Parallel()
+	e, rt, sr := newSaveEnv(t, false)
+	run := e.launchACP(t, "say pong")
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	sr.saveMu.Lock()
+	sr.saving, sr.release = make(chan struct{}), make(chan struct{})
+	sr.saveMu.Unlock()
+	e.sched.mu.Lock()
+	entry := e.sched.runs[run.ID]
+	e.sched.mu.Unlock()
+	cid := e.cid(t, run.ID)
+	saved := make(chan bool)
+	waitFor(t, "the memory guard's save under way", func() bool {
+		go func() {
+			done, _ := e.sched.heldSave(memoryCandidate{e: entry, cid: cid, idle: true}, false)
+			saved <- done
+		}()
+		select {
+		case <-sr.saving:
+			return true
+		case <-saved:
+			return false
+		}
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	sent := make(chan error, 1)
+	go func() {
+		_, err := e.sched.Inject(ctx, run.ID, e.member.ID, domain.AgentPrompt{Text: "after the save"}, false, nil)
+		sent <- err
+	}()
+	waitFor(t, "the prompt waiting for the save", func() bool {
+		e.sched.mu.Lock()
+		defer e.sched.mu.Unlock()
+		return entry.wakeWaits
+	})
+	close(sr.release)
+	if !<-saved {
+		t.Fatal("the prompt ended the memory guard's save")
+	}
+	if err := <-sent; err != nil {
+		t.Fatalf("a prompt to a session the memory guard saves: %v", err)
+	}
+	sr.saveMu.Lock()
+	restores := sr.restores
+	sr.saveMu.Unlock()
+	if restores != 1 || !adopted(rt) {
+		t.Fatalf("the prompt restored the session %d times with %d agents, want once with the one it had", restores, len(rt.all()))
+	}
+	waitItems(t, e.sched, run.ID, "a turn after the wake", turnEnded("end_turn", 2))
+}
+
 // A server that shuts down while a VM is being saved lets the save finish
 // instead of stopping the VM.
 func TestAShutdownDuringASaveDoesNotStopTheVM(t *testing.T) {

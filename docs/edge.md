@@ -364,6 +364,64 @@ If the device would be the server's only super admin and that super admin has no
 device, the refusal carries an approval code for `sudo aether-server device
 approve <code>` instead.
 
+#### When the address you signed in at is retiring
+
+When an edge's operator marks the pair this machine signed in at retiring
+([Retiring an address pair](#retiring-an-address-pair)), every answer from it
+says so, and the CLI prints the notice once per command, on stderr, after the
+command's own output and exit status:
+
+```
+cloudfield: https://<old relay host> says it is retiring on 2027-03-01 and that its new address is https://<new relay host>.
+Sign in there with: cloudfield login --edge https://<new relay host>
+The default link (server <server id>) still names https://<old relay host>.
+The link "work" (server <server id>) still names https://<old relay host>.
+The sync daemon's unit names https://<old relay host>.
+Moving links and the sync daemon, and signing out of https://<old relay host>: https://github.com/3xDevOps/cloudfield/blob/main/docs/edge-retire.md#moving-a-device
+```
+
+The notice is the old address's own word; nothing authenticates it. The
+`login` line appears only when this machine already knows the new address (it
+holds a token there or a saved link names it; the built-in default edge counts
+only when the old address is one of the project's hosted addresses) and holds no
+token for exactly that address. For an address it does not know, the second
+line is `Confirm that address with whoever runs the edge before you sign in
+there.` The lines after it name each saved link and the sync daemon that still
+use the old address. The CLI runs nothing, changes no configuration and leaves
+stdout, `--json` output included, unchanged.
+
+Once the pair is retired, every command there fails with the edge's text:
+`<command>: <host> refused: <text> (HTTP 410)`, where `<host>` is the host the
+request went to, the sign-in host for `cloudfield servers` and `cloudfield
+logout`. `cloudfield logout --edge https://<old relay host>` then deletes the
+token here, since the retired address never confirms a sign-out, and prints:
+
+```
+deleted the device token for <old relay host> here, but the edge did not confirm the sign-out: it answered that this address is retired and that its new address is https://<new relay host>.
+Device <device id> may still be signed in; revoke it on https://<new sign-in host>/devices.
+```
+
+The second line names the Devices page of the sign-in origin this machine
+recorded at the new address, or of the new address when it is known otherwise.
+For an address it does not know, it says to ask whoever runs the edge for the
+address of its Devices page. A `410` that names no replacement, or that comes
+without the edge's protocol version header, keeps the token, as any other
+refusal does.
+
+In the desktop and Android apps, the sign-in step shows the notice under the
+signed-in edge as text, `<old relay host> says it is retiring[ on <date>] and
+that its new address is <new>.`, followed by `You are already signed in at
+<new>.` when this computer is, or else the line asking you to confirm the
+address. The app fills in no address and starts no sign-in because of a notice;
+sign in there yourself, with `cloudfield login --edge <new address>`. When a linked server is behind a retired
+address, the connection error is titled `<old relay host> says it is retired`,
+gives the `cloudfield login --edge <new address>` command and shows the edge's
+refusal text.
+
+`cloudfield login` sends the relay origin it signs in for with the device start
+(`relay_origin`), so the edge can check that the request reached that origin's
+own pair; an edge that does not know the field ignores it.
+
 ### Members, invitations and devices
 
 Invitations, device approval and removing access are in

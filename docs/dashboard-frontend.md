@@ -386,7 +386,14 @@ top to bottom:
    server's error, below the row (`choices_error`). Drag the panel's right
    edge, or focus **Resize launch panel** and press the arrow keys, to set its
    width from 360px to 720px, never past the room right of the sidebar. The
-   width is saved on this browser.
+   width is saved on this browser. While the panel is open it calls
+   `workspace.mirror.warm` for its workspace, once when the panel opens or
+   the workspace changes and at most every 5 seconds as the task is edited
+   (`launch/warm-base.ts`), so a launch right after typing starts from a
+   source mirror the server has just refreshed and does not wait for the
+   upstream. One call runs at a time, and after one fails the panel makes no
+   more until the workspace changes or the panel is reopened. Nothing is
+   shown; the launch reports a source that cannot be fetched.
 3. **Sessions** (`sidebar-runs.tsx`), a `region` with three groups, **Needs you**,
    **Working** and **Finished** (see [Session state](#session-state)), each an `h2`
    holding an `aria-expanded` disclosure button, a chevron that turns a
@@ -1516,7 +1523,9 @@ Removal also repairs the selection and open route before any refresh awaits.
 - A `run.status` event for a session the client has never seen fetches that session
   before the event is applied, which is what keeps two quick transitions of a
   brand new session in order. If the fetch fails the event is unresolved: the
-  cursor stays put and a fresh snapshot is taken to repair the store. A
+  cursor stays put and a fresh snapshot is taken to repair the store. The
+  snapshot holds no Lanes history, so when the event is one Lanes holds that
+  workspace's is dropped and a mounted Lanes view reads it again. A
   `run.deleted` event removes the session from every connected dashboard; a
   `run.status` event that raced a local deletion treats a `404` re-fetch as
   resolved instead of forcing a redundant hydration. An event naming an
@@ -2214,6 +2223,7 @@ running"; beside the chip, the chip's own count stands.
 | State | Dot | Comes from | Group |
 | --- | --- | --- | --- |
 | Working | filled circle, pulses | `state` `working` (a turn is in progress), or `queued` / `provisioning` ("Queued", "Starting") | Working |
+| Starting | filled circle, pulses | A `running` session whose `aether-acp` stream is live in this tab and last acked `starting`: the launch returned before the agent started | Working |
 | Waiting for agents | clock | `waiting-agents`: held background subagents or workflows, ACP Task agents, a session with live subsessions, or a `waiting --for agents` report | Working |
 | Waiting for CI | clock | `waiting-ci`: a `waiting --for ci` report | Working |
 | Waiting for process | clock | `waiting-tools`: a background task the agent holds, such as Claude's Monitor, or a `waiting --for process` report | Working |
@@ -4148,8 +4158,10 @@ Escape already closes sheets and an accidental reject cancels the tool call.
 The header's **Answer** focuses the docked card on every screen. While Session shows the dock, Details' **Needs
 you** shows one link, "1 request, shown below the timeline", that closes a
 Details sheet and focuses the card; on other views it lists the cards. `routes/run/session-failure.tsx` shows an adapter failure with
-**Retry Enhanced** and **Open in Standard**, and a sign-in failure with the
-agent's auth methods. On a run on the viewer's own account it adds **Sign in
+**Retry Enhanced** and **Open in Standard**, which starts a new Standard
+session when the switch is refused with `session_not_reported`, and a sign-in failure with the
+agent's auth methods, plus **Retry Enhanced** when the agent failed to start,
+since signing in does not start it. On a run on the viewer's own account it adds **Sign in
 on Agents**, and when that agent's `agent.list` row has `login_problem` its
 title is the alert's ("Claude Code is signed out" or "Claude Code's sign-in
 was refused"); a login-file problem shows verbatim, while a refusal is

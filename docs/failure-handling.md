@@ -31,7 +31,7 @@ shown beside the status says why it is there.
 | An agent update an older Cloudfield interrupted left the agent's npm package missing | The launch that starts the repair may not find the agent. | Restores the copy in `~/.local/lib/.<agent>-update.*/previous` in the background, before contacting npm. | Launch again. The next launch finds the agent. |
 | An SSH connection drops during an attach | The CLI or dashboard disconnects. | Nothing changes for the session: its terminal lives on the server. Input that never reached the server is dropped whole. | Attach again. The full transcript replays before live output. |
 | A `cloudfield forward` connection drops | The local port stops answering. | Closes both ends of the tunnel. | Run `cloudfield forward <run-id|terminal> <port>` again. |
-| An operation on one session never returns, such as a pause its container runtime does not answer | A pause, resume, close, kill, release, mode switch or **Relaunch** of that session waits for it. The dashboard reports `server did not answer <method> within 1m0s`; an agent's `aether-internal subsession cancel` gives up after 30 seconds. | Ends each waiting request when its caller gives up, with `wait for another operation on session <id> to finish: context canceled`, and leaves the session as it was. A wake of the session while it sleeps waits until its own time runs out instead (3 minutes, longer for a saved VM), then shows **Wake failed** with `wake the session: wait for another operation on session <id> to finish: context deadline exceeded`. These requests hold up no other session and no launch, except a **Relaunch**: launches wait behind it until its caller gives up. | Retry. Only a server restart ends an operation that never returns; sessions whose sandboxes survive keep their status (first row). |
+| An operation on one session never returns, such as a pause its container runtime does not answer | A pause, resume, close, kill, release, mode switch or **Relaunch** of that session waits for it. The dashboard reports `server did not answer <method> within 1m0s`; an agent's `aether-internal subsession cancel` gives up after 30 seconds. | Ends each waiting request when its caller gives up, with `wait for another operation on session <id> to finish: context canceled`, and leaves the session as it was. A wake of the session while it sleeps, including the one a close or kill of a sleeping VM runs first, waits until its own time runs out instead (3 minutes, longer for a saved VM), then shows **Wake failed** with `wake the session: wait for another operation on session <id> to finish: context deadline exceeded`. A waiting **Relaunch** holds up every launch until its caller gives up. These waits for a stuck session have no limit: deleting the workspace of a closed one, which holds up every launch; the disk reclaim of a closed one's container ([Recover from disk pressure](#recover-from-disk-pressure)), which holds up each launch, wake, **Relaunch** and environment terminal start that needs disk freed, and every launch behind such a **Relaunch** or terminal start; the stop or close of a subsession whose parent ended, which keeps queued subsessions from starting; and the periodic check (`--poll-interval`) that finds a closed one's retention over, which stops the stall, retention and disk checks of every session. | Retry. Only a server restart ends an operation that never returns; sessions whose sandboxes survive keep their status (first row). |
 | A launch is still waiting for its turn when its caller gives up | The dashboard reports `server did not answer run.launch within 1m0s`. | Launches are admitted one at a time, and wait as well for a **Relaunch**, an environment terminal's start, a workspace import or a mirror refresh in progress. One not yet admitted is dropped, so no session appears later; one already admitted keeps starting. | Launch again. |
 | A launch cannot refresh the workspace mirror | The launch fails with `gitengine: mirror <kind> for branch "<branch>": <diagnostic>`. No session is created. | Never falls back to an older base on its own. | [Launch and mirror failures](#launch-and-mirror-failures). |
 | Your environment's main shell exits | The environment terminal closes. | Stops the terminal and keeps the stopped container. | Open the environment again. It starts the container, or rebuilds it from your saved image. |
@@ -40,7 +40,7 @@ shown beside the status says why it is there.
 | The kernel's file-watch limits are spent | Server log `gitengine: cannot watch checkout for file changes; polling for diff snapshots instead`. | Launches the session anyway and checks its files every 60 seconds. | [Raise file-watch limits](#raise-file-watch-limits). |
 | Another process holds the database at startup | `store: begin migration <n>: database is locked (5) (SQLITE_BUSY)` | The server exits. | Find and stop the other writer, then start again. Never delete the database. |
 | The first start after an upgrade takes minutes | Clients cannot connect and the server logs nothing yet. `sudo cloudfield-server update` prints `aether-server is migrating the database at schema <n> to <m>; waiting for it`. | Migrates the database before it serves. Migration 109 reads every stored event to build three indexes: on a 9 GB event log that took 1-2 minutes in testing, longer on a busy disk. | Wait. A restart starts the migration over, and an update rolls back a release that starts twice without finishing. Before the update, free the database's size again plus a tenth of it: the update copies the database into `server-update/`, and the migration adds indexes of about 4% of the event log's size (400 MB on 9 GB in testing), as much again in `aether.db-wal`, and sort files in `/var/tmp`. |
-| `sudo cloudfield-server update` takes minutes while many sessions are open | The update waits after the new server starts. The server log shows `scheduler: recovery: reconnecting sessions sessions=<n> at_once=4`, then `scheduler: recovery: session started run=<id>` and `scheduler: recovery: session done run=<id> took=<duration>` for each session, then `scheduler: recovery: sessions done`. | Reconnects every open session before it counts as started, 4 at a time, so one slow session does not hold up the rest. A sandbox that does not answer is waited for within fixed bounds, and its session is kept. A session whose VM is stopped, as the disk guard leaves it, is paused, so only its terminal's 5 seconds and its browser's 30 apply. One whose sandbox runs and stays silent gets 5 seconds for the agent's terminal, which carries on once the sandbox answers; 1 minute for an Enhanced agent, which then waits for **Retry Enhanced** ([Enhanced sessions](#enhanced-sessions)); 30 seconds for its other terminals and shell tabs, which the next request for them takes up; and 30 seconds each for its browser and for a switch between Standard and Enhanced the restart interrupted. The bounds apply to each session: with 9 or more Enhanced sessions whose sandboxes do not answer, an update can take longer than its 5 minutes. An update still rolls back if a session has not finished 5 minutes after the database migration. | Wait. `sudo journalctl -u aether-server -f` shows each session; a session with `session started` and no `session done` is the one still reconnecting, and a long `took` names a slow one. |
+| `sudo cloudfield-server update` takes minutes while many sessions are open | The update waits after the new server starts. The server log shows `scheduler: recovery: reconnecting sessions sessions=<n> at_once=4`, then `scheduler: recovery: session started run=<id>` and `scheduler: recovery: session done run=<id> took=<duration>` for each session, then `scheduler: recovery: sessions done`. | Reconnects every open session before it counts as started, 4 at a time, so one slow session does not hold up the rest. A sandbox that does not answer is waited for within fixed bounds, and its session is kept. A session whose VM is stopped, as the disk guard leaves it, is paused, so only its terminal's 5 seconds and its browser's 30 apply. One whose sandbox runs and stays silent gets 5 seconds for the agent's terminal, which carries on once the sandbox answers; 1 minute for an Enhanced agent, which then waits for **Retry Enhanced** ([Enhanced sessions](#enhanced-sessions)); 30 seconds for its other terminals and shell tabs, which the next request for them takes up and the log names with `scheduler: recovery: session terminals not taken up in time run=<id> waited=30s`; and 30 seconds each for its browser and for a switch between Standard and Enhanced the restart interrupted. The bounds apply to each session: with 9 or more Enhanced sessions whose sandboxes do not answer, an update can take longer than its 5 minutes. Terminals and browsers are taken up after `sessions done`, 8 sessions at a time, so silent sandboxes hold the update there too. An update still rolls back if a session has not finished 5 minutes after the database migration. | Wait. `sudo journalctl -u aether-server -f` shows each session; a session with `session started` and no `session done` is the one still reconnecting, and a long `took` names a slow one. |
 | The server is down when a schedule is due | Nothing. | Skips the missed occurrence and waits for the next one. | Launch the session by hand if it matters. |
 
 A lost connection does not prove that a command failed. Before you retry
@@ -107,6 +107,9 @@ condition under **Waiting until** with what the server last read, when it
 checks next, its failures and whether the wake reached the agent, and
 **Cancel** ends a pending one
 ([dashboard-frontend.md](dashboard-frontend.md#details)).
+`cloudfield sessions <session-id>` prints each condition as an `until` line
+with its id, its spec and `pending` or how it ended, and `--json` carries them
+whole as `wait_conditions`.
 
 A broken wait is the only one that needs you, because only then can nothing
 but a person move the session. While another of its conditions is still pending
@@ -337,9 +340,10 @@ otherwise the error ends `<n> available bytes; reserve <n> bytes plus ...`.
 Memory ceilings (`--run-memory`) are never counted, only what sessions hold
 now.
 
-- A launch takes 512 MiB while it runs. On a hosted test runner a 2 GiB
-  session VM held 159 MiB of the host once booted; what it grows to later is
-  memory the next check sees as used.
+- A launch takes 512 MiB while it runs, an Enhanced one until its agent has
+  started. On a hosted test runner a 2 GiB session VM held 159 MiB of the
+  host once booted; what it grows to later is memory the next check sees as
+  used.
 - The wake of a saved session VM takes the size of its saved memory on
   disk, which the restore loads back: 918 MiB on disk for a VM that held
   934 MiB, and 938 MiB held again after the wake. After the wake it keeps
@@ -407,7 +411,8 @@ timeline says `Paused: the server was running out of memory. It carries on
 by itself once memory is free again. If it has to be saved to disk for
 that, it wakes with every process where it was.`, at most once in 5
 minutes. A session the server is working on needs its guest to answer, so
-the brake leaves it running until that is done: one it is launching,
+the brake leaves it running until that is done: one it is launching, an
+Enhanced one until its agent has started and taken the messages held for it,
 waking once admission lets the wake go ahead, closing, killing, finishing,
 saving because it is idle, or taking up after a restart, an Enhanced
 session whose agent it restarts, and a Background session whose turn it
@@ -428,7 +433,10 @@ measured in a real frozen VM: 3 for the keeper to confirm a detach, 1 for
 the ack of the last output the server recorded, and 5 to close the input;
 Codex app-servers, 5 seconds to close their input. Frozen guests so add at
 most about 41 seconds to a stop, within the `TimeoutStopSec=90` of
-`aether-server.service`. The next server adopts each agent as after a kill
+`aether-server.service`. Before those steps the stop waits for the agent of
+an Enhanced session launched just before it to start, which takes seconds
+and gives up after 1 minute; a start that hangs that long while guests are
+frozen takes the stop past 90 seconds, and systemd kills the server. The next server adopts each agent as after a kill
 ([enhanced-sessions.md](enhanced-sessions.md#restarts-and-failures)). The
 server that starts, after a stop or a crash, never lets a frozen VM run to
 take its session up. It takes the session up asleep, marked to wake, and
@@ -653,10 +661,14 @@ binaries by hand as described in [install.md](install.md#upgrading).
 A workspace with a mirror refreshes it from the upstream before a launch, unless
 a refresh succeeded in the 10 seconds before: that launch starts from the
 commit the refresh accepted, so a commit pushed upstream in those seconds is
-not in it. The session records the time of the refresh it started from as
-`base_checked_at`. If the refresh fails, the launch is refused and no session is
-created; Cloudfield never starts from an older accepted commit on its own. When
-an accepted commit exists, the CLI prints a one-off retry from it:
+not in it. The dashboard refreshes the mirror of the launch panel's
+workspace, not of its extra repositories, when the panel opens and at most
+every 5 seconds while you edit the task, so a launch right after typing does
+not wait for the upstream. Its upstream fetch gives up after 10 seconds. The
+session records the time of the refresh it started from as
+`base_checked_at`. If the refresh fails, the launch is refused and no session
+is created; Cloudfield never starts from an older accepted commit on its own.
+When an accepted commit exists, the CLI prints a one-off retry from it:
 
 ```text
 retry from cached <commit> with:
@@ -734,7 +746,7 @@ launch retried on an older image, is on the line twice.
 | `image_ms` | VM: finding the image's base disk, or pulling and converting it on first use. |
 | `disks_ms` | VM: creating the root, data and cache disks. |
 | `checkout_disk_ms` | VM: the checkout's disk, built from the base commit when no session has used it. |
-| `prepare_ms` | VM: the state disk, the VM's record and attaching the agent program disks. |
+| `prepare_ms` | VM: the state disk, the VM's record and attaching the agent program disks, and on a start after a stop a new cache disk. |
 | `helper_disk_ms` | VM: the helper disk ([vm-guest.md](vm-guest.md)): hashing a server binary not seen before, and building its disk when it has none. |
 | `network_ms` | VM: the host side of the VM network and its firewall. |
 | `unit_ms` | VM: `systemd-run` of the VM's unit. |
@@ -742,13 +754,29 @@ launch retried on an older image, is on the line twice.
 | `guest_boot_ms` | VM: the guest kernel's boot and the helper's mounts, until the helper answers. |
 | `guest_setup_ms` | VM: the session user's account and the checkout's git setup in the guest. |
 | `helper_boot_ms` | VM: the helper's `Boot`: the setup script, then the main process. |
-| `agent_ms` | Attaching to the agent; for an Enhanced session, until its conversation is open. In a Docker container, also creating and starting the container. |
+| `agent_ms` | Attaching to the agent. In a Docker container, also creating and starting the container. An Enhanced session's agent starts after the launch returned, on a line of its own. |
 | `wait_for_save_ms` | Wake: waiting for a save still in progress when the wake was asked for. |
 | `restore_ms` | Wake: Cloud Hypervisor loading the saved memory. |
 | `resume_ms` | Wake: resuming the guest. |
 | `helper_ms` | Wake: until the guest's helper answers. |
 | `saved_state_ms` | Wake: setting the guest's clock, recording the wake and deleting the saved state. |
 | `reattach_ms` | Wake: taking up the agent, its terminal, the diff watch and the terminals again. In a Docker container, also starting the container. |
+
+An Enhanced session's launch returns before its agent has started. The start
+logs its own line when it ends, also when it failed, in which case
+`scheduler: enhanced session failed` with the error comes before it.
+The line repeats the launch's steps and adds `agent_start_ms`, how long the
+start took: from the launch attaching to the agent until the agent's
+conversation is open with its mode, model and effort set and the task sent.
+`total_ms` on this line runs from the launch request to that point:
+
+```sh
+sudo journalctl -u aether-server | grep 'scheduler: agent start'
+```
+
+```
+INFO scheduler: agent start run=<run id> total_ms=... admission_ms=... ... agent_ms=... agent_start_ms=...
+```
 
 ## Enhanced sessions
 
@@ -758,7 +786,7 @@ login shell stay up.
 
 | Failure | What you see | What you do |
 | --- | --- | --- |
-| The session cannot start, for example because the agent is not signed in | **Disconnected**, `enhanced session failed: <error>`. Messages are refused with `scheduler: the enhanced session is not running: <error>`. | Fix the cause, then press **Retry Enhanced** in the Chat view. |
+| The session cannot start, for example because the agent is not signed in | **Disconnected**, `enhanced session failed: <error>`. Messages are refused with `scheduler: the enhanced session is not running: <error>`. | Fix the cause, then press **Retry Enhanced** in the Chat view. A session whose first start failed then starts with the task it was launched with. |
 | The agent's process exits | The turn in flight shows **Turn interrupted**; **Disconnected**, `enhanced session ended: the agent's ACP server exited with code <n>`, with `; stderr: <tail>` when it printed any. | **Retry Enhanced**. |
 | The agent drops its conversation but keeps running, as Claude's adapter does when Claude Code dies | **Prompt failed** with `Session not found`, then **Agent conversation lost** while Cloudfield restores the conversation. Lost again within 5 minutes: **Disconnected**, `enhanced session failed: the agent lost its conversation again within 5 minutes: ...`. | Send the failed message again. After a second loss, **Retry Enhanced**. |
 | The agent refuses a turn with `Authentication required` | **Sign-in refused**, or **Agent signed out** when the login file cannot sign the agent in, while Cloudfield restarts the agent in its container, then `enhanced turn failed: ... Authentication required ...; <owner>'s <agent> login is signed out. Sign in, then send the message again: dashboard Agents page, or aether agent login <agent>`, or `...; Cloudfield restarted the agent to reread <owner>'s login: send the message again. Refused again? Sign in: ...` when the login file looks sound. The account owner's dashboard shows **\<agent\> is signed out** or **\<agent\>'s sign-in was refused** until the login works again. | Send the message again when the reason says so. Otherwise the account's owner signs in on the **Agents** page or with `cloudfield agent login <agent>`, then you send it again ([harnesses.md](harnesses.md#when-a-login-is-signed-out)). |
@@ -778,7 +806,8 @@ running; when the server cannot reattach, it restores the session and asks the
 agent to continue. A reattach to the agent's keeper that runs out of its 1
 minute, after a server restart or a resume, ends nothing: the session keeps
 running, its Chat view shows **Enhanced agent failed** with the error, and
-pausing and resuming it, which **Retry Enhanced** does, reattaches.
+pausing and resuming it, which **Retry Enhanced** does, reattaches. Nothing
+retries it for you, and its sandbox stays up until you do or you kill it.
 
 ## Usage limit mid-session
 
@@ -980,7 +1009,7 @@ sooner:
   has not stopped yet, and the session stays awake. A save the server
   makes because the host is short of memory is not ended.
 - A closed session's VM is stopped as soon as the close finishes, whatever
-  `--run-sleep-after` is, and keeps its disks without its memory
+  `--run-sleep-after` is, and keeps its disks, except the cache disk, without its memory
   ([Relaunching a closed session](#relaunching-a-closed-session)). Closing
   or killing a sleeping session wakes it first, so its work is committed as
   for a running one.
@@ -1070,8 +1099,10 @@ the guest drops its page cache: 137 MiB for an idle test VM of 2 GiB whose
 page cache held 1400 MiB. A save waits up to 40 seconds for the host to get
 that cache back first ([vm-guest.md](vm-guest.md#limits-stats-and-the-clock)),
 and a wake, close or kill that arrives during that wait ends the save and
-leaves the session awake; once the guest is paused it waits for the save. When disk runs low, Cloudfield deletes the saved
-memory of the longest-sleeping sessions first
+leaves the session awake, unless the server makes the save because the host
+is short of memory; once the guest is paused it waits for the save. When
+disk runs low, Cloudfield deletes the saved memory of the longest-sleeping
+sessions first
 ([Recover from disk pressure](#recover-from-disk-pressure)). A server
 restart or update leaves sleeping VMs asleep; the next use wakes them. A
 stop cuts short a wake still running and leaves its session asleep: with
@@ -1086,7 +1117,7 @@ next wake starts the agent and restores its conversation.
 
 | Action | Container | Checkout | Reopen |
 | --- | --- | --- | --- |
-| **Close** (`cloudfield close <session-id> --outcome merged` or `abandoned`) | Paused for the close's commit, then stopped with only its disks kept, for `--run-container-ttl` (30 days). A Standard or mode-switched session's container on a Docker host stays paused with its memory instead, kept 7 days by default ([Relaunching a closed session](#relaunching-a-closed-session)). | Kept while the container is kept. Removed after that, but no sooner than `--checkout-ttl` (72 hours) after the session ended: at 30 days with the defaults. | Yes, until the deadline: **Relaunch** or `cloudfield reopen <session-id>` ([Relaunching a closed session](#relaunching-a-closed-session)). The deadline is cleared while the session is live; the next close sets a new one. |
+| **Close** (`cloudfield close <session-id> --outcome merged` or `abandoned`) | Paused for the close's commit, then stopped with only its disks kept, a VM's cache disk excepted ([environments.md](environments.md#sessions-in-virtual-machines)), for `--run-container-ttl` (30 days). A Standard or mode-switched session's container on a Docker host stays paused with its memory instead, kept 7 days by default ([Relaunching a closed session](#relaunching-a-closed-session)). | Kept while the container is kept. Removed after that, but no sooner than `--checkout-ttl` (72 hours) after the session ended: at 30 days with the defaults. | Yes, until the deadline: **Relaunch** or `cloudfield reopen <session-id>` ([Relaunching a closed session](#relaunching-a-closed-session)). The deadline is cleared while the session is live; the next close sets a new one. |
 | No activity for 7 days in a live session, `needs-attention` included | As **Close**, with the outcome `completed`. Its timeline notes `Closed after 7 days without activity`. Only activity counts: a question waiting for an answer, a pause or a turn that made no progress does not keep it open, while an open exec or port forward, a change of mode or account, and a session the memory guard saved while it worked do. A sleeping session's 7 days run from its sleep; an awake one's restart with the server. A sleeping session VM is woken first to commit; while admission refuses the wake, it stays open until the next hourly check. | As **Close**. | As **Close**. Once its container is gone, launch a new session on its branch. |
 | A Background session finishes | Removed at once. | Kept for `--checkout-ttl` (72 hours) after the session ends. | No. |
 | **Kill run** (`cloudfield kill <session-id>`) | Stopped and removed. | Kept for `--checkout-ttl` after the session ends. | No. |
@@ -1183,7 +1214,7 @@ session's container or VM disks are deleted: its work is on its branch, and
 its transcript stays readable.
 
 A session VM, or the container of a session launched and closed as Enhanced,
-is stopped when its session closes. It keeps its disks and no memory; a VM
+is stopped when its session closes. It keeps its disks, except a VM's cache disk, and no memory; a VM
 with a checkout stays up with only its helper for the 10-minute linger
 first, which the memory guard leaves to end. Relaunch starts it from those
 disks:

@@ -650,6 +650,19 @@ func NormalizeOrigin(origin string) string {
 	return "https://github.com/" + strings.TrimPrefix(path, "/")
 }
 
+// OriginForNote returns origin when it is safe to show in a note every reader
+// of the workspace sees, and "" when it may hold a credential. Userinfo
+// (https://user:token@host, a token given as the ssh or scp-like user), a
+// query and a fragment can each carry one, so an origin with any of "@", "?"
+// or "#" is not shown at all. A token mistyped into the host or path with
+// none of those is not caught.
+func OriginForNote(origin string) string {
+	if strings.ContainsAny(origin, "@?#") {
+		return ""
+	}
+	return origin
+}
+
 // Member is a person. Identity is the SSH public key, the tailnet login
 // resolved via Tailscale WhoIs, or both - either may be empty, never both.
 // The color is the stable attribution color used everywhere in the UI.

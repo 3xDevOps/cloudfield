@@ -354,8 +354,8 @@ func (s *Scheduler) deleteDevelopment(ctx context.Context, id domain.RunID) erro
 // terminals or browser companion cannot be recovered is logged, and a
 // companion that cannot release held input is kept unavailable until the
 // session's browser is reset. Each step is bounded and sessions recover
-// concurrently, so sessions that do not answer do not add up past the
-// update trial's deadline.
+// browserRecoveryConcurrency at a time, so a session that does not answer
+// holds a slot for at most the bounds of its two steps.
 func (s *Scheduler) recoverDevelopment(ctx context.Context) error {
 	type recoveredDevelopment struct {
 		runID       domain.RunID
@@ -382,9 +382,14 @@ func (s *Scheduler) recoverDevelopment(ctx context.Context) error {
 			defer s.needGuest(entry.containerID)()
 			terminalsCtx, cancel := context.WithTimeout(ctx, recoveryStepTimeout)
 			err := s.RecoverDevelopmentTerminals(terminalsCtx, entry.runID)
+			cutShort := terminalsCtx.Err() != nil
 			cancel()
-			if err != nil && ctx.Err() == nil {
+			switch {
+			case ctx.Err() != nil:
+			case err != nil:
 				slog.Warn("scheduler: recovery: session terminals unavailable", "run", entry.runID, "error", err)
+			case cutShort:
+				slog.Warn("scheduler: recovery: session terminals not taken up in time", "run", entry.runID, "waited", recoveryStepTimeout)
 			}
 			if err := s.recoverDevelopmentBrowser(ctx, entry.runID, entry.containerID, entry.freeze); err != nil && ctx.Err() == nil {
 				slog.Warn("scheduler: recovery: session browser", "run", entry.runID, "error", err)

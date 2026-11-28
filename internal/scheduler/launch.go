@@ -337,7 +337,10 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	if err != nil {
 		return nil, err
 	}
-	defer release()
+	// An Enhanced launch returns before its agent has started, and the claim
+	// covers that start too.
+	var launched domain.RunID
+	defer func() { s.acp.afterOpening(launched, release) }()
 	runtime.Step(ctx, "admission")
 	s.mu.Lock()
 	bases := s.cfg.Bases
@@ -432,6 +435,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	if opts.Created != nil {
 		opts.Created(run.ID)
 	}
+	launched = run.ID
 	pending := s.beginPending(run.ID)
 	defer s.finishPending(run.ID, pending)
 	if opts.Admitted != nil {
@@ -712,6 +716,13 @@ func (s *Scheduler) startRunContainer(ctx context.Context, entry *supervised, ru
 	s.mu.Lock()
 	entry.appServer, entry.idleWake = appServer, native.IdleWake
 	s.mu.Unlock()
+	stored, err := s.cfg.Store.GetRun(ctx, run.ID)
+	if err != nil {
+		return nil, fmt.Errorf("read the session's parent: %w", err)
+	}
+	if stored.ParentRunID != "" {
+		plan.Env[coordtransport.SubsessionEnv] = "1"
+	}
 	limits, err := s.runLimits(ctx, run.Limits)
 	if err != nil {
 		return nil, err

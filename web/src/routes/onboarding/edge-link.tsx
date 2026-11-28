@@ -1,11 +1,12 @@
 // The local gateway runs the edge device flow and keeps the device token;
 // this screen never sees it.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { CopyableCommand } from '@/components/copyable-command'
 import { Button } from '@/components/ui/button'
 import { Callout } from '@/components/ui/callout'
+import { Radio, RadioGroup } from '@/components/ui/radio'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { FormField } from '@/components/ui/form-field'
 import { Input } from '@/components/ui/input'
@@ -15,7 +16,7 @@ import { ApiError, type Api } from '@/lib/api'
 import { parseClaim, parseJoin } from '@/lib/claim-link'
 import { edgeHost, message, providerName } from '@/lib/format'
 import { isApprovalCode, shellQuote } from '@/lib/shell'
-import type { EdgeAccount, EdgeLinkResult, EdgeLogin, EdgeRefusal, EdgeServer } from '@/lib/types'
+import type { EdgeAccount, EdgeLinkResult, EdgeLogin, EdgeStatus, EdgeStatusNotice, EdgeRefusal, EdgeServer } from '@/lib/types'
 import type { HandedLink } from '@/lib/url-state'
 import { useStore } from '@/store'
 import type { Capability } from '@/lib/capability'
@@ -37,10 +38,60 @@ function ErrorLine({ children }: { children: string }) {
 
 type SignIn = {
   phase: Phase
-  setPhase: (phase: Phase) => void
+  setPhase: Dispatch<SetStateAction<Phase>>
   error: string | null
   starting: boolean
   signIn: () => Promise<void>
+}
+
+/** The edges edge.status reports this machine signed in to, only `edge`
+ * when the sign-in is for it; null when there is none. */
+function signedInPhase(status: EdgeStatus, edge: string | undefined, chosen?: string): Phase | null {
+  const edges = status.edges.flatMap((e) => (e.account && (!edge || e.edge === edge) ? [{ edge: e.edge, account: e.account }] : []))
+  if (edges.length === 0) return null
+  return { name: 'signed-in', edges, chosen: chosen ?? (edges.length === 1 ? edges[0].edge : null) }
+}
+
+/** edge as the gateway spells an edge's relay origin, as edgeproto.Origin
+ * does: scheme and host in lower case, no trailing slash, an explicit port
+ * kept. Anything else is returned unchanged. */
+function edgeOrigin(edge: string): string {
+  const m = /^(https?):\/\/([^/?#@\s]+)\/?$/i.exec(edge)
+  return m ? `${m[1].toLowerCase()}://${m[2].toLowerCase()}` : edge
+}
+
+/** edge.status with each edge's retiring notice, for the screen that shows
+ * them. It is asked while that screen is visible on a sign-in, on becoming
+ * so and again when the window gets focus; the latest request wins, a failed
+ * one keeps the last answer, and hiding the screen drops the requests in
+ * flight. The last answer lasts as long as the sign-in. */
+function useEdgeNotices(client: Api, signedIn: boolean, visible: boolean): EdgeStatus | null {
+  const [status, setStatus] = useState<EdgeStatus | null>(null)
+  useEffect(() => {
+    if (!signedIn) return
+    return () => setStatus(null)
+  }, [signedIn])
+  useEffect(() => {
+    if (!signedIn || !visible) return
+    let latest = 0
+    let live = true
+    const ask = () => {
+      const n = ++latest
+      client.localEdgeStatus(true).then(
+        (answer) => {
+          if (live && n === latest) setStatus(answer)
+        },
+        () => {},
+      )
+    }
+    ask()
+    window.addEventListener('focus', ask)
+    return () => {
+      live = false
+      window.removeEventListener('focus', ask)
+    }
+  }, [client, signedIn, visible])
+  return signedIn ? status : null
 }
 
 /** The gateway's edge sign-in as edge.status reports it, started here and
@@ -64,13 +115,12 @@ function useEdgeSignIn(client: Api, edge?: string): SignIn {
           return
         }
         if (login?.state === 'failed' && login.error) setError(login.error)
-        const edges = status.edges.filter((e) => !edge || e.edge === edge)
-        const signedIn = edges.flatMap((e) => (e.account ? [{ edge: e.edge, account: e.account }] : []))
-        if (signedIn.length > 0) {
-          setPhase({ name: 'signed-in', edges: signedIn, chosen: signedIn.length === 1 ? signedIn[0].edge : null })
+        const signedIn = signedInPhase(status, edge)
+        if (signedIn) {
+          setPhase(signedIn)
           return
         }
-        const unreadable = edges.find((e) => e.error)?.error
+        const unreadable = status.edges.find((e) => (!edge || e.edge === edge) && e.error)?.error
         if (unreadable) setError(unreadable)
         setPhase({ name: 'signed-out' })
       } catch (err) {
@@ -100,12 +150,15 @@ function useEdgeSignIn(client: Api, edge?: string): SignIn {
               setError('Sign-in was replaced by another window. Try again.')
               setPhase({ name: 'signed-out' })
             } else if (login.state === 'signed_in' && login.account) {
+              // Matched on the gateway's own spelling of the edge, not a
+              // handed claim's; an answer without its entry yet is polled again.
+              const next = signedInPhase(status, edge === undefined ? undefined : login.edge, login.edge)
+              if (!next || !status.edges.some((e) => e.edge === login.edge && e.account)) {
+                poll()
+                return
+              }
               setError(null)
-              setPhase({
-                name: 'signed-in',
-                edges: [{ edge: login.edge, account: login.account }],
-                chosen: login.edge,
-              })
+              setPhase(next)
             } else if (login.state === 'failed') {
               setError(login.error ?? 'sign in failed')
               setPhase({ name: 'signed-out' })
@@ -127,7 +180,7 @@ function useEdgeSignIn(client: Api, edge?: string): SignIn {
       live = false
       clearTimeout(timer)
     }
-  }, [client, waitingEdge, waitingCode])
+  }, [client, edge, waitingEdge, waitingCode])
 
   const signIn = async () => {
     setStarting(true)
@@ -227,20 +280,39 @@ export function EdgeSignIn({
   onHand,
   onLinked,
   onSignedOut,
+  visible,
 }: {
   client: Api
   /** A claim link handed to the dashboard, filled into the claim form. The
    * edge it names is the only one signed in to. */
   claim?: string
+  /** Whether the person sees this screen; it stays mounted while hidden so
+   * a sign-in in flight keeps going. Becoming visible counts as entering. */
+  visible: boolean
   /** Called with a join link, or a claim link naming another edge, pasted
    * into the claim form. */
   onHand: (link: HandedLink) => void
   onLinked: (result: EdgeLinkResult) => void
   onSignedOut: (signedOut: boolean) => void
 }) {
-  const claimEdge = claim === undefined ? undefined : parseClaim(claim)?.edge
+  const handed = claim === undefined ? undefined : parseClaim(claim)?.edge
+  const claimEdge = handed === undefined ? undefined : edgeOrigin(handed)
   const signIn = useEdgeSignIn(client, claimEdge)
   const { phase, setPhase } = signIn
+  const notices = useEdgeNotices(client, phase.name === 'signed-in', visible)
+  // Each notices answer also says which edges are signed in now: the choice
+  // follows it, keeps the chosen edge while it is there, and falls back as
+  // on entering when it is not. The replacement a notice names is never
+  // chosen for the person.
+  useEffect(() => {
+    if (!notices) return
+    setPhase((p) => {
+      if (p.name !== 'signed-in') return p
+      const next = signedInPhase(notices, claimEdge)
+      if (!next || next.name !== 'signed-in') return { name: 'signed-out' }
+      return p.chosen !== null && next.edges.some((e) => e.edge === p.chosen) ? { ...next, chosen: p.chosen } : next
+    })
+  }, [notices, claimEdge, setPhase])
   const picked = phase.name === 'signed-in' ? phase.edges.find((e) => e.edge === phase.chosen) : undefined
   const signedOut = phase.name === 'signed-out'
   useEffect(() => {
@@ -270,15 +342,20 @@ export function EdgeSignIn({
         <EdgeChoice
           edges={phase.edges}
           chosen={phase.chosen}
+          notices={notices}
           onChoose={(edge) => setPhase({ ...phase, chosen: edge })}
         />
       )}
+      {phase.name === 'signed-in' &&
+        phase.edges.map((e) => e.edge !== picked?.edge && retiringNotice(e.edge, notices))}
       {picked && (
         <ServerPicker
-          key={`${picked.edge} ${claim ?? ''}`}
+          key={`${picked.edge} ${picked.account.id} ${claim ?? ''}`}
           client={client}
           edge={picked.edge}
           account={picked.account}
+          notice={retiringNotice(picked.edge, notices)}
+          retired={notices?.edges.find((e) => e.edge === picked.edge)?.retiring?.state === 'retired'}
           claim={claim}
           onHand={onHand}
           onLinked={onLinked}
@@ -445,6 +522,52 @@ function JoinPanel({
   )
 }
 
+/** edge's notice and whether this machine is signed in at its replacement,
+ * both from the one answer notices. */
+function retiringNotice(edge: string, notices: EdgeStatus | null) {
+  const notice = notices?.edges.find((e) => e.edge === edge)?.retiring
+  if (!notice) return null
+  // Tokens are per exact origin: another spelling is another sign-in.
+  const signedInThere = notices!.edges.some((o) => o.edge === notice.replacement && o.account)
+  return <RetiringNotice key={edge} edge={edge} notice={notice} signedInThere={signedInThere} />
+}
+
+/** What an edge address says of itself, as text: nothing authenticates
+ * it, so nothing here fills in or signs in at the address it names. */
+export function RetiringNotice({ edge, notice, signedInThere }: { edge: string; notice: EdgeStatusNotice; signedInThere: boolean }) {
+  return (
+    <Callout
+      tone={notice.state === 'retired' ? 'failed' : 'needs-you'}
+      className="self-stretch"
+      title={
+        <>
+          <span className="font-code">{edgeHost(edge)}</span> says it{' '}
+          {notice.state === 'retired' ? 'is retired' : 'is retiring'}
+          {notice.state === 'retiring' && notice.date && (
+            <>
+              {' '}on <span className="whitespace-nowrap">{notice.date}</span>
+            </>
+          )}{' '}
+          and that its new address is <span className="break-words font-code">{notice.replacement}</span>.
+        </>
+      }
+    >
+      <p className="text-muted">
+        {signedInThere ? (
+          <>
+            You are already signed in at <span className="font-code">{notice.replacement}</span>.
+          </>
+        ) : (
+          <>
+            Confirm that address with whoever runs the edge before you sign in there. Then run{' '}
+            <span className="whitespace-nowrap font-code">cloudfield login --edge &lt;new address&gt;</span>.
+          </>
+        )}
+      </p>
+    </Callout>
+  )
+}
+
 function accountName(account: EdgeAccount): string {
   const name = account.login ?? account.email ?? account.name ?? account.subject
   const provider = providerName[account.provider] ?? account.provider
@@ -454,31 +577,36 @@ function accountName(account: EdgeAccount): string {
 function EdgeChoice({
   edges,
   chosen,
+  notices,
   onChoose,
 }: {
   edges: SignedInEdge[]
   chosen: string | null
+  /** The latest notices answer, to mark an edge that says it is leaving. */
+  notices: EdgeStatus | null
   onChoose: (edge: string) => void
 }) {
+  const id = useId()
   if (edges.length < 2) return null
   return (
     <fieldset className="flex min-w-0 flex-col gap-1.5">
-      <legend className="mb-1.5">
+      <legend id={id} className="mb-1.5">
         You are signed in to {edges.length} edges. Link through:
       </legend>
-      {edges.map((e) => (
-        <label key={e.edge} className="flex min-w-0 items-center gap-2">
-          <input
-            type="radio"
-            name="edge"
-            checked={chosen === e.edge}
-            onChange={() => onChoose(e.edge)}
-          />
-          <span className="min-w-0 break-all">
-            <span className="font-code">{edgeHost(e.edge)}</span> as {accountName(e.account)}
-          </span>
-        </label>
-      ))}
+      <RadioGroup aria-labelledby={id} value={chosen ?? ''} onValueChange={onChoose} className="gap-0">
+        {edges.map((e, i) => {
+          const state = notices?.edges.find((n) => n.edge === e.edge)?.retiring?.state
+          return (
+            <label key={e.edge} htmlFor={`${id}-${i}`} className="flex min-h-7 min-w-0 cursor-pointer items-center gap-2 coarse:min-h-11">
+              <Radio id={`${id}-${i}`} value={e.edge} />
+              <span className="min-w-0 [overflow-wrap:anywhere]">
+                <span className="font-code">{edgeHost(e.edge)}</span> as {accountName(e.account)}
+                {state && <span className="whitespace-nowrap text-muted"> · says it is {state}</span>}
+              </span>
+            </label>
+          )
+        })}
+      </RadioGroup>
     </fieldset>
   )
 }
@@ -492,6 +620,8 @@ function ServerPicker({
   client,
   edge,
   account,
+  notice,
+  retired,
   claim,
   onHand,
   onLinked,
@@ -499,6 +629,11 @@ function ServerPicker({
   client: Api
   edge: string
   account: EdgeAccount
+  /** The signed-in edge's retiring notice, shown under the line that names it. */
+  notice: ReactNode
+  /** The edge address is retired: its refusals do not change on a retry,
+   * and a server list it gave before is stale. */
+  retired: boolean
   claim?: string
   onHand: (link: HandedLink) => void
   onLinked: (result: EdgeLinkResult) => void
@@ -574,23 +709,25 @@ function ServerPicker({
         Signed in to <span className="font-code">{edgeHost(edge)}</span> as{' '}
         <span className="font-medium">{accountName(account)}</span>.
       </p>
+      {retired && notice}
       {error && (
         <div className="flex min-w-0 flex-col items-start gap-2">
           <ErrorLine>{error}</ErrorLine>
-          {servers === null && (
+          {servers === null && !retired && (
             <Button size="sm" variant="secondary" onClick={() => void load()}>
               Retry
             </Button>
           )}
         </div>
       )}
-      {servers?.length === 0 && (
+      {!retired && notice}
+      {!retired && servers?.length === 0 && (
         <p className="text-muted">
           Your account reaches no servers yet. Paste the claim link <span className="font-code">aether-server setup</span>{' '}
           printed, or the invite link an admin sent {account.login ?? account.email ?? 'your account'}.
         </p>
       )}
-      {servers && servers.length > 0 && (
+      {!retired && servers && servers.length > 0 && (
         <InsetList aria-label="Your servers">
           {servers.map((server) => (
             <InsetListItem key={server.id}>
@@ -614,7 +751,7 @@ function ServerPicker({
           ))}
         </InsetList>
       )}
-      {confirming && (
+      {!retired && confirming && (
         <ConfirmPin
           key={confirming.id}
           client={client}
@@ -630,31 +767,33 @@ function ServerPicker({
           }
         />
       )}
-      {claimForm}
-      <Collapsible>
-        <CollapsibleTrigger>Other ways to link</CollapsibleTrigger>
-        <CollapsibleContent className="flex flex-col gap-4 pt-2 pl-5">
-          <form
-            aria-label="Link by server id"
-            className="flex min-w-0 max-w-sm flex-col items-start gap-2"
-            onSubmit={(e) => {
-              e.preventDefault()
-              void link(() => client.localEdgeLink(serverID.trim(), edge))
-            }}
-          >
-            <FormField
-              className="self-stretch"
-              label="Server id from your admin"
-              help={<>The admin reads it from <span className="font-code">aether-server edge status</span>. The link accepts only the server this id names.</>}
+      {!retired && claimForm}
+      {!retired && (
+        <Collapsible>
+          <CollapsibleTrigger>Other ways to link</CollapsibleTrigger>
+          <CollapsibleContent className="flex flex-col gap-4 pt-2 pl-5">
+            <form
+              aria-label="Link by server id"
+              className="flex min-w-0 max-w-sm flex-col items-start gap-2"
+              onSubmit={(e) => {
+                e.preventDefault()
+                void link(() => client.localEdgeLink(serverID.trim(), edge))
+              }}
             >
-              <Input className="font-code" autoComplete="off" value={serverID} disabled={busy} onChange={(e) => setServerID(e.target.value)} />
-            </FormField>
-            <Button type="submit" size="sm" variant="secondary" disabled={busy || !serverID.trim()}>
-              Link by id
-            </Button>
-          </form>
-        </CollapsibleContent>
-      </Collapsible>
+              <FormField
+                className="self-stretch"
+                label="Server id from your admin"
+                help={<>The admin reads it from <span className="font-code">aether-server edge status</span>. The link accepts only the server this id names.</>}
+              >
+                <Input className="font-code" autoComplete="off" value={serverID} disabled={busy} onChange={(e) => setServerID(e.target.value)} />
+              </FormField>
+              <Button type="submit" size="sm" variant="secondary" disabled={busy || !serverID.trim()}>
+                Link by id
+              </Button>
+            </form>
+          </CollapsibleContent>
+        </Collapsible>
+      )}
     </div>
   )
 }

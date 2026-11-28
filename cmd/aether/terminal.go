@@ -117,7 +117,7 @@ func terminalExec(args []string) error {
 		return err
 	}
 	if result.ExitCode != 0 {
-		os.Exit(result.ExitCode)
+		return exitCode(result.ExitCode)
 	}
 	return nil
 }
