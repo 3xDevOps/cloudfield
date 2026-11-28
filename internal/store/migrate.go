@@ -2730,8 +2730,9 @@ CREATE TABLE capacity_vms (
 	at     INTEGER NOT NULL,
 	awake  INTEGER NOT NULL,
 	frozen INTEGER NOT NULL,
-	paused INTEGER NOT NULL,
-	saved  INTEGER NOT NULL
+	paused  INTEGER NOT NULL,
+	saved   INTEGER NOT NULL,
+	stopped INTEGER NOT NULL
 );
 `,
 }

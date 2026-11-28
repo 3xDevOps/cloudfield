@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
 
 	"github.com/3xDevOps/cloudfield/internal/disk"
 	"github.com/3xDevOps/cloudfield/internal/domain"
@@ -41,6 +40,9 @@ type MachineStatus struct {
 	// StartDiskBytes is what a launch needs above a filesystem's reserve.
 	StartDiskBytes uint64
 	DiskError      string
+	// DiskUnchecked is set when a negative --min-free-disk turned the disk
+	// check off: no launch is refused for disk, and Filesystems is empty.
+	DiskUnchecked bool
 }
 
 // MachineFilesystem is a filesystem admission checks and the free space it
@@ -86,7 +88,8 @@ func MeasureMachine(serverPID int, dataDir string, minFree int64) MachineStatus 
 	if err = errors.Join(stallErr, hostErr); err != nil {
 		m.StallError = err.Error()
 	}
-	if minFree >= 0 {
+	m.DiskUnchecked = minFree < 0
+	if !m.DiskUnchecked {
 		data, diskErr := disk.Filesystem(dataDir)
 		if diskErr != nil {
 			m.DiskError = diskErr.Error()
@@ -119,6 +122,9 @@ func (s *Scheduler) Machine(ctx context.Context) MachineStatus {
 	total, available, err := s.hostMemoryTotal()
 	m.MemoryError = ""
 	m.setMemory(total, available, err)
+	if m.DiskUnchecked = s.cfg.MinFreeBytes < 0; m.DiskUnchecked {
+		return m
+	}
 	probeCtx, cancel := context.WithTimeout(ctx, capacityProbeTimeout)
 	defer cancel()
 	filesystems, _, err := s.measureCapacity(probeCtx)
@@ -130,13 +136,14 @@ func (s *Scheduler) Machine(ctx context.Context) MachineStatus {
 	return m
 }
 
-// VMs counts the session VMs by what they hold of the host: awake and
-// running, awake and frozen by the memory brake, asleep and paused in
-// memory, asleep and saved to disk.
+// VMs counts the session VMs of open sessions by what they hold of the
+// host.
 func (s *Scheduler) VMs() domain.VMCounts {
-	var frozen []runtime.ID
+	frozen := map[runtime.ID]bool{}
 	if vms, ok := s.cfg.Runtime.(runtime.FreezeRuntime); ok {
-		frozen = vms.Frozen()
+		for _, id := range vms.Frozen() {
+			frozen[id] = true
+		}
 	}
 	var c domain.VMCounts
 	s.mu.Lock()
@@ -146,14 +153,16 @@ func (s *Scheduler) VMs() domain.VMCounts {
 			continue
 		}
 		switch {
-		case e.asleepSince.IsZero() && slices.Contains(frozen, e.containerID):
+		case e.asleepSince.IsZero() && frozen[e.containerID]:
 			c.Frozen++
 		case e.asleepSince.IsZero():
 			c.Awake++
 		case e.asleepResident:
 			c.Paused++
-		default:
+		case e.asleepSaved:
 			c.Saved++
+		default:
+			c.Stopped++
 		}
 	}
 	return c

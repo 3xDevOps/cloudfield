@@ -30,9 +30,9 @@ type CapacityStore interface {
 
 func (d *DB) RecordVMCounts(ctx context.Context, c domain.VMCounts, at time.Time) error {
 	_, err := d.db.ExecContext(ctx, `
-INSERT INTO capacity_vms (id, at, awake, frozen, paused, saved) VALUES (1, ?1, ?2, ?3, ?4, ?5)
-ON CONFLICT(id) DO UPDATE SET at = ?1, awake = ?2, frozen = ?3, paused = ?4, saved = ?5`,
-		at.UTC().UnixNano(), c.Awake, c.Frozen, c.Paused, c.Saved)
+INSERT INTO capacity_vms (id, at, awake, frozen, paused, saved, stopped) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+ON CONFLICT(id) DO UPDATE SET at = ?1, awake = ?2, frozen = ?3, paused = ?4, saved = ?5, stopped = ?6`,
+		at.UTC().UnixNano(), c.Awake, c.Frozen, c.Paused, c.Saved, c.Stopped)
 	if err != nil {
 		return fmt.Errorf("store: record session VM counts: %w", err)
 	}
@@ -42,8 +42,8 @@ ON CONFLICT(id) DO UPDATE SET at = ?1, awake = ?2, frozen = ?3, paused = ?4, sav
 func (d *DB) VMCounts(ctx context.Context) (domain.VMCounts, time.Time, error) {
 	var c domain.VMCounts
 	var at int64
-	err := d.db.QueryRowContext(ctx, `SELECT at, awake, frozen, paused, saved FROM capacity_vms WHERE id = 1`).
-		Scan(&at, &c.Awake, &c.Frozen, &c.Paused, &c.Saved)
+	err := d.db.QueryRowContext(ctx, `SELECT at, awake, frozen, paused, saved, stopped FROM capacity_vms WHERE id = 1`).
+		Scan(&at, &c.Awake, &c.Frozen, &c.Paused, &c.Saved, &c.Stopped)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, time.Time{}, nil
 	}

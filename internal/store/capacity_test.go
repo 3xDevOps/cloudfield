@@ -64,7 +64,7 @@ func TestVMCountsKeepTheLatest(t *testing.T) {
 	if err := db.RecordVMCounts(ctx, domain.VMCounts{Awake: 9}, first); err != nil {
 		t.Fatal(err)
 	}
-	want := domain.VMCounts{Awake: 1, Frozen: 2, Paused: 3, Saved: 4}
+	want := domain.VMCounts{Awake: 1, Frozen: 2, Paused: 3, Saved: 4, Stopped: 5}
 	if err := db.RecordVMCounts(ctx, want, second); err != nil {
 		t.Fatal(err)
 	}

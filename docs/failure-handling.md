@@ -743,32 +743,50 @@ sudo cloudfield-server status
 ```
 
 ```
-memory   7.3 GiB available of 30.0 GiB; the server keeps 3.0 GiB, and a launch needs 0.5 GiB above that
-stall    the server's cgroup over 60s, which refuses launches: 0.0%, limit 10%
-stall    the host over 10s, which saves session VMs: 0.1%, limit 60%
-disk     Cloudfield data filesystem: 122.6 GiB free of 500.0 GiB; the server keeps 20.0 GiB, and a launch needs 1.0 GiB above that
-VMs      3 awake, 0 frozen by the memory brake, 2 asleep in memory, 4 asleep on disk (counted 2026-11-27T23:00:00Z)
-last refused launch: 2026-11-27T22:10:03Z session <run id>
+memory   7.3 GiB available of 30.0 GiB; the server keeps 3.0 GiB, and a launch needs at least 0.5 GiB above that
+         (more while other starts have yet to take theirs; the wake of a VM saved to disk needs what it saved)
+stall    the running aether-server unit's cgroup over 60s, which refuses launches: 0.0%, limit 10%
+stall    the host over 10s, which saves session VMs once it lasts 30s: 0.1%, limit 60%
+disk     Cloudfield data filesystem: 122.6 GiB free of 500.0 GiB; the server keeps 20.0 GiB, and a launch needs at least 1.0 GiB above that
+         (the running server also checks the filesystems of its container or VM runtime, which this command does not measure)
+VMs      3 awake, 0 frozen by the memory brake, 2 asleep in memory, 4 asleep on disk, 0 asleep with nothing kept
+         (counted by the server 12s ago, at 2026-11-27T23:00:00Z; it counts at least every minute while it runs)
+last refused launch: 2026-11-27T22:10:03Z, session <run id>
   scheduler: insufficient host memory headroom: ...
 last refused wake: none in 14 days
 
-counted                              24 hours    14 days
+counted, in whole hours (UTC)        24 hours    14 days
 refusal launch memory                       2          5
 ...
 ```
 
-It opens the database and measures memory, the stall and the data
-filesystem itself, so it answers while the server is too short of memory to
-answer a request. The server's own stall is read from the cgroup of the
-running `aether-server` unit and is left out when that unit is not running.
-The VM counts are the running server's, written when they change, with the
-time they were counted. The refusal is the text the caller got. Under the
-counters it prints the share of the memory in use at memory refusals that
-sessions idle for over an hour held, and the mean and longest wait of the
-waits that ended in a start.
+What it measures itself, and so prints while the server cannot answer a
+request: memory, the two stalls and the data filesystem, with the options
+in the config file. A server started before those options changed still
+runs with its own, and the last line of the output says so. The server's
+own stall is read from the cgroup of the running `aether-server` unit and
+is left out when that unit is not running.
 
-`server.capacity` ([local gateway](local-gateway.md)) returns the same to
-any member; the session a refusal names is returned to a super admin only.
+What it reads from the database, which it opens for reading only and never
+creates or migrates: the session VM counts, the last refusals and the
+counters. When the database cannot be read it prints its own measurements
+and `history  not read, ...` with the error. The VM counts are the running
+server's, written when they change and at least every minute, so their age
+says whether a server is running. `awake` includes a session a member
+paused; `asleep with nothing kept` is a VM stopped with no saved memory, or
+one still being saved. A wake the server tried by itself is marked on the
+last refused wake. The refusal is admission's text. Under the counters it
+prints the share of the memory in use at memory refusals that session VMs
+idle for over an hour, or closed, held, and the mean and longest wait of the
+waits that ended in a start. The two windows cover whole hours, so "24
+hours" is the current hour and the 24 before it.
+
+`server.capacity` ([local gateway](local-gateway.md)) returns the running
+server's own view to any member: its memory and stalls, every filesystem it
+checks, and its live VM counts. With `--min-free-disk` negative it lists no
+disk and sets `disk_unchecked`. The session a refusal names, and the text of
+a measurement that failed, which can name a path of the host, go to a super
+admin only.
 
 The server counts each time it was short of memory or disk and what it did
 about it, and logs each one:
