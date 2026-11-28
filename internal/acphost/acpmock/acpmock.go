@@ -430,10 +430,25 @@ func (a *Agent) setOption(id string, value any) []map[string]any {
 		a.options = r.ConfigOptions
 	}
 	for _, option := range a.options {
-		if option["id"] == id {
-			option["currentValue"] = value
-			return a.options
+		if option["id"] != id {
+			continue
 		}
+		// Claude Code's adapter takes a model under another name and every
+		// other option by its exact value: this one takes a model it offers
+		// in any letter case.
+		var choices []any
+		if option["category"] == "model" {
+			choices, _ = option["options"].([]any)
+		}
+		for _, choice := range choices {
+			fields, _ := choice.(map[string]any)
+			offered, _ := fields["value"].(string)
+			if sent, isString := value.(string); isString && strings.EqualFold(offered, sent) {
+				value = offered
+			}
+		}
+		option["currentValue"] = value
+		return a.options
 	}
 	a.options = append(a.options, map[string]any{"id": id, "currentValue": value})
 	return a.options

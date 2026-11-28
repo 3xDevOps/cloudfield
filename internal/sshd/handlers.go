@@ -49,6 +49,9 @@ func (s *Server) serverInfo(ctx context.Context, member domain.MemberID, _ json.
 	if s.dictationInstalled() {
 		features = append(features, protocol.FeatureDictation)
 	}
+	if s.cfg.Logins != nil && s.cfg.LoginSignIns != nil {
+		features = append(features, protocol.FeatureLogins)
+	}
 	floor := s.minClient()
 	return protocol.ServerInfoResult{
 		ServerVersion:         s.cfg.release,
@@ -246,6 +249,9 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 	}
 	// Cancelling a launch mid-provisioning fails the run it is creating, so
 	// it outlives the caller's channel; a server shutdown still stops it.
+	// A launch still waiting for admission has created nothing, and waits
+	// only as long as its caller.
+	caller := ctx
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
 	defer context.AfterFunc(s.authCtx(), cancel)()
@@ -254,7 +260,7 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 	run, replayed, perr := s.idempotentLaunch(ctx, member, key, protocol.MethodRunLaunch, p, earlier, func(created func(domain.RunID)) (*domain.Run, *protocol.Error) {
 		launched := p
 		launched.LinearIssueURL = linkedIssue
-		return s.launchRun(ctx, member, launched, mode, policy, func(id domain.RunID) {
+		return s.launchRun(ctx, caller, member, launched, mode, policy, func(id domain.RunID) {
 			if created != nil {
 				created(id)
 			}
@@ -280,29 +286,81 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 	return protocol.RunLaunchResult{Run: s.runSnapshot(run), Replayed: replayed, SkippedFallbackAccounts: skipped}, nil
 }
 
-func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protocol.RunLaunchParams, mode domain.LaunchMode, policy domain.AccountFallback,
+func (s *Server) launchRun(ctx, caller context.Context, member domain.MemberID, p protocol.RunLaunchParams, mode domain.LaunchMode, policy domain.AccountFallback,
 	created func(domain.RunID), skipped *[]protocol.SkippedAccount) (*domain.Run, *protocol.Error) {
 	ctx = runtime.WithSteps(ctx)
+	workspaces := append([]domain.WorkspaceID{domain.WorkspaceID(p.WorkspaceID)}, workspaceIDs(p.ExtraWorkspaceIDs)...)
+	authorize := func() (LaunchAdmission, *protocol.Error) {
+		admission, err := AuthorizeLaunch(ctx, s.cfg.Store, member, p.AccountMemberID, workspaces)
+		if errors.Is(err, permissions.ErrDenied) {
+			return admission, &protocol.Error{Code: protocol.CodeDenied, Message: protocol.MethodRunLaunch + ": " + err.Error()}
+		}
+		if err != nil {
+			return admission, rpcError(err)
+		}
+		return admission, nil
+	}
+	// Admitted before anything of the workspace or the account's logins is
+	// read, and again under the mutex below.
+	if _, perr := authorize(); perr != nil {
+		return nil, perr
+	}
+	permission := cmp.Or(domain.Permission(p.Permission), domain.PermissionDefault)
+	login, perr := s.launchLogin(ctx, domain.WorkspaceID(p.WorkspaceID), member, domain.MemberID(p.AccountMemberID), p.Harness, p.Login, mode, permission)
+	if perr != nil {
+		return nil, perr
+	}
+	payer := sync.OnceValues(func() (string, error) {
+		return s.cfg.Runs.LoginPayer(ctx, domain.WorkspaceID(p.WorkspaceID), member, p.Harness, mode)
+	})
+	// A named login is refused, never traded for another, when a variable
+	// or a setting would pay instead of it.
+	if login.Added() {
+		if paidBy, payerErr := payer(); payerErr != nil || paidBy != "" {
+			return nil, rpcError(cmp.Or(payerErr, scheduler.EnvironmentPays(login, paidBy)))
+		}
+	}
+	account := cmp.Or(domain.MemberID(p.AccountMemberID), member)
+	measure := func() (fallback.Measured, error) {
+		if p.Login != "" {
+			return fallback.Measure(ctx, s.cfg.Store, s.cfg.Services.Usage, member, domain.Account{Member: account, Login: login}, p.Harness, policy)
+		}
+		return MeasureUnnamed(ctx, &s.cfg, member, domain.Account{Member: account, Login: login}, p.Harness, policy, payer)
+	}
 	var warming sync.WaitGroup
 	if mirrors := s.cfg.Services.Mirrors; mirrors != nil && p.CachedBase == "" {
 		// The launch's own base capture reports a refresh that fails.
 		warming.Go(func() { _ = mirrors.Warm(ctx, domain.WorkspaceID(p.WorkspaceID)) })
 	}
-	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Services.Usage, member, p.AccountMemberID, p.Harness, policy)
+	measured, err := measure()
 	warming.Wait()
 	if err != nil {
 		return nil, rpcError(err)
 	}
-	s.authorizationMu.Lock()
+	if err = s.authorizationMu.LockContext(caller); err != nil {
+		return nil, rpcError(fmt.Errorf("%s: the request ended before the session was admitted, so no session was started: %w", protocol.MethodRunLaunch, err))
+	}
 	unlockAuthorization := sync.OnceFunc(s.authorizationMu.Unlock)
 	defer unlockAuthorization()
-	workspaces := append([]domain.WorkspaceID{domain.WorkspaceID(p.WorkspaceID)}, workspaceIDs(p.ExtraWorkspaceIDs)...)
-	admission, err := AuthorizeLaunch(ctx, s.cfg.Store, member, p.AccountMemberID, workspaces)
-	if err != nil {
-		if errors.Is(err, permissions.ErrDenied) {
-			return nil, &protocol.Error{Code: protocol.CodeDenied, Message: protocol.MethodRunLaunch + ": " + err.Error()}
+	admission, perr := authorize()
+	if perr != nil {
+		return nil, perr
+	}
+	// An unnamed start is chosen again under the mutex: the login chosen
+	// before the usage read may have been turned off or removed meanwhile.
+	// Another choice is measured once more, holding the mutex for at most
+	// that read's bound, so Select decides on its own usage.
+	if p.Login == "" {
+		again, perr := s.launchLogin(ctx, domain.WorkspaceID(p.WorkspaceID), member, domain.MemberID(p.AccountMemberID), p.Harness, p.Login, mode, permission)
+		if perr != nil {
+			return nil, perr
 		}
-		return nil, rpcError(err)
+		if again != login {
+			login = again
+			if measured, err = measure(); err != nil {
+				return nil, rpcError(err)
+			}
+		}
 	}
 	requested := admission.Account.ID
 	if mode == "" {
@@ -310,10 +368,9 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 			return nil, rpcError(err)
 		}
 	}
-	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, member, domain.AccountOf(requested), workspaces, policy, func(ctx context.Context, account domain.Account) (bool, error) {
-		return s.cfg.Runs.FallbackLaunchable(ctx, member, requested, account.Member, p.Harness, mode)
-	})
-	account := chosen.Member
+	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, member, domain.Account{Member: requested, Login: login}, p.Harness, workspaces, policy,
+		Launchable(s.cfg.Runs, payer, member, requested, p.Harness, mode, permission))
+	account = chosen.Member
 	if excluded != nil {
 		slog.Warn("sshd: fallback accounts left out of a launch", "member", member, "error", excluded)
 	}
@@ -322,10 +379,9 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 	if p.Limits != nil {
 		limits = domain.RunLimits{CPUs: p.Limits.CPUs, MemoryBytes: p.Limits.MemoryBytes, Pids: p.Limits.Pids}
 	}
-	permission := cmp.Or(domain.Permission(p.Permission), domain.PermissionDefault)
 	run, err := launchWithOptions(ctx, s.cfg.Runs, domain.WorkspaceID(p.WorkspaceID), member, account, p.Task, p.Harness, mode, domain.LaunchOptions{
 		Limits:     limits,
-		CachedBase: p.CachedBase, Model: p.Model, Effort: p.Effort, Permission: permission, RequestedAccount: requested, Fallback: policy,
+		CachedBase: p.CachedBase, Model: p.Model, Effort: p.Effort, Permission: permission, RequestedAccount: requested, AccountLogin: chosen.Login, Fallback: policy,
 		Admitted: unlockAuthorization, Created: created,
 		ExtraWorkspaces: workspaceIDs(p.ExtraWorkspaceIDs), LinearIssueURL: p.LinearIssueURL,
 	})
@@ -422,6 +478,14 @@ func (s *Server) runGet(ctx context.Context, member domain.MemberID, params json
 // protection or launch response must not erase input learned from the stream.
 func (s *Server) runSnapshot(run *domain.Run) protocol.Run {
 	out := protocol.RunFromDomain(run)
+	if run.AccountLogin.Added() {
+		logins, err := s.cfg.Store.ListAgentLogins(context.Background(), run.AccountMember(), run.Harness)
+		if err == nil {
+			if l, perr := addedLogin(logins, string(run.AccountLogin)); perr == nil {
+				out.AccountLoginName = l.Name
+			}
+		}
+	}
 	if s.cfg.Runs != nil {
 		out.Paused = s.cfg.Runs.Paused(run.ID)
 		if sleep := s.cfg.Runs.Sleep(run.ID); sleep.AsleepSince != nil {
@@ -688,7 +752,7 @@ func (s *Server) runRelaunch(ctx context.Context, member domain.MemberID, params
 			}
 		}
 	}
-	if _, err = fallback.ResolveLaunchAccountIn(ctx, s.cfg.Store, member, string(run.AccountMember()), workspaces); err != nil {
+	if err = fallback.ResolveRunRelaunch(ctx, s.cfg.Store, member, run, workspaces); err != nil {
 		return nil, rpcError(err)
 	}
 	reopened, err := s.cfg.Runs.Relaunch(ctx, id, member)
@@ -740,6 +804,22 @@ func (s *Server) runHandoff(ctx context.Context, member domain.MemberID, params 
 	}
 	if derr := checkLaunchIn(recipientActor, runWorkspaces(run)); derr != nil {
 		return nil, invalidParams(fmt.Sprintf("cannot hand off to %s: they have no access to every workspace of this session", recipient.DisplayName))
+	}
+	// A session on a login that is off for shares goes only to its owner.
+	if to != run.AccountMember() {
+		logins, lerr := s.cfg.Store.ListAgentLogins(ctx, run.AccountMember(), run.Harness)
+		if lerr != nil {
+			return nil, rpcError(lerr)
+		}
+		id := run.AccountLogin
+		if id == "" {
+			id = domain.DefaultLogin
+		}
+		for _, l := range logins {
+			if l.ID == id && !l.Shared {
+				return nil, invalidParams(fmt.Sprintf("cannot hand off to %s: the session is on a login its owner keeps out of shares", recipient.DisplayName))
+			}
+		}
 	}
 	from := run.MemberID
 	outbox, ok := s.cfg.Store.(store.HandoffOutboxStore)

@@ -71,6 +71,10 @@ func launchWithOptions(ctx context.Context, runs RunController, workspace domain
 
 // RunController is the SSH server's view of the scheduler (*scheduler.Scheduler).
 type RunController interface {
+	// Machine measures the machine as admission and the guards do, and VMs
+	// counts its session VMs.
+	Machine(ctx context.Context) scheduler.MachineStatus
+	VMs() domain.VMCounts
 	Launch(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode) (*domain.Run, error)
 	// CheckSharedLaunch reports whether member's launch of harness on
 	// account would be refused over the harness or the account owner's
@@ -79,7 +83,19 @@ type RunController interface {
 	// FallbackLaunchable reports whether member's launch of harness in mode
 	// on account can stand in for one on requested as a usage fallback,
 	// which never borrows the owner's installation.
-	FallbackLaunchable(ctx context.Context, member, requested, account domain.MemberID, harness string, mode domain.LaunchMode) (bool, error)
+	// StartLogin is the login a launch by member on account starts from
+	// when it names none.
+	StartLogin(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, harness string, mode domain.LaunchMode, permission domain.Permission) (domain.LoginID, error)
+	// LoginPayer is what signs the agent in, in a session in home's home,
+	// whatever added login it mounts: a workspace variable or home's agent
+	// settings. A launch then chooses between no logins. Empty when nothing
+	// does.
+	LoginPayer(ctx context.Context, workspace domain.WorkspaceID, home domain.MemberID, harness string, mode domain.LaunchMode) (string, error)
+	// LoginUsageUnknown reports whether a launch in home's home that names
+	// no login counts the usage of login, its start, as unknown: billed per
+	// use, or a default login whose kind cannot be read.
+	LoginUsageUnknown(ctx context.Context, home domain.MemberID, login domain.Account, harness string) (bool, error)
+	FallbackLaunchable(ctx context.Context, member, requested domain.MemberID, account domain.Account, harness string, mode domain.LaunchMode, permission domain.Permission) (bool, error)
 	// LoginProblem is why agent's login in account's home cannot sign it
 	// in for a launch by member, empty when the server knows of none, and
 	// whether a launch is refused over it.
@@ -146,7 +162,17 @@ type RunController interface {
 	// decision wins, and a later one is scheduler.ErrSudoNotPending.
 	DecideSudo(ctx context.Context, run domain.RunID, request string, allow bool, member domain.MemberID) error
 	ACPCancel(ctx context.Context, run domain.RunID) error
+	// Interrupt asks run's agent to stop the turn it is in, or returns
+	// scheduler.ErrNoInterrupt for an agent that takes none from outside
+	// its terminal. stopped waits for the agent's answer.
+	Interrupt(ctx context.Context, run *domain.Run, actor domain.MemberID) (stopped func() error, err error)
 	ACPSetOption(ctx context.Context, run domain.RunID, optionID string, value any) error
+	// ACPSetModelEffort sets an enhanced run's model, then its effort, by
+	// value, and returns the two as the agent then reports them; an empty
+	// one is left as it is. What it set is recorded on the timeline with
+	// actor. scheduler.ErrNoSuchOption refuses one the run's agent has no
+	// option for.
+	ACPSetModelEffort(ctx context.Context, run *domain.Run, actor domain.MemberID, model, effort string) (nowModel, nowEffort string, err error)
 	// ACPHistory reads up to limit items before beforeSeq, oldest first;
 	// zero reads from the newest.
 	ACPHistory(run domain.RunID, beforeSeq int64, limit int) (acphost.HistoryPage, error)

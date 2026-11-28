@@ -293,7 +293,9 @@ async function uploadTerminalFile(file: File, runID?: string): Promise<{ path: s
 
 /** A JSON-RPC error's data. The local gateway sets `refusal` on every
  * failure on the edge path; other fields belong to the method. */
-export type ApiErrorData = { refusal?: EdgeRefusal; edge_path?: EdgePath } & Record<string, unknown>
+/** `retired` is set when the edge address dialed refused as retired; its
+ * text is `refusal.refusal`. */
+export type ApiErrorData = { refusal?: EdgeRefusal; edge_path?: EdgePath; retired?: { replacement: string } } & Record<string, unknown>
 
 // internal/protocol's error codes.
 export const codeNotFound = -32000
@@ -740,6 +742,7 @@ export const api = {
     correlation_id?: string
     before?: string
     limit?: number
+    report_bodies?: boolean
   }) => call<CoordMessagesListResult>('coord.messages.list', params),
   runRoomStatus: (params: { workspace_id: string; run_id: string }, signal?: AbortSignal) =>
     call<RoomStatusResult>('run.room.status', params, signal),
@@ -940,6 +943,10 @@ export const api = {
     call<WorkspaceMirrorResult>('workspace.mirror.refresh', {
       workspace_id: workspaceID,
     }),
+  workspaceMirrorWarm: (workspaceID: string) =>
+    call<Record<string, never>>('workspace.mirror.warm', {
+      workspace_id: workspaceID,
+    }),
   workspaceMirrorAdopt: (workspaceID: string, generation: number, expectedCommit: string) =>
     call<WorkspaceMirrorResult>('workspace.mirror.adopt', {
       workspace_id: workspaceID,
@@ -1089,7 +1096,9 @@ export const api = {
   localLinkReset: () => local<{ deleted: string }>('link.reset'),
   /** Starts a sign-in at the edge; edge.status reports how it ends. */
   localEdgeLogin: (edge?: string) => local<EdgeLogin>('edge.login', edge ? { edge } : {}),
-  localEdgeStatus: () => local<EdgeStatus>('edge.status'),
+  /** With `notices`, the gateway asks each signed-in edge for its retiring
+   * notice: only for a screen that shows it, never in a polling loop. */
+  localEdgeStatus: (notices = false) => local<EdgeStatus>('edge.status', notices ? { notices } : {}),
   localEdgeServers: (edge: string) =>
     local<{ edge: string; servers: EdgeServer[] }>('edge.servers', { edge }),
   localEdgeHostKey: (serverID: string, edge: string) =>

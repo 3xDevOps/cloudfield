@@ -13,6 +13,7 @@ import type {
 } from '@/lib/types'
 import type { SliceCreator } from '@/store/slice'
 import { emptyTiles, routeTiles, viewContext } from '@/store/tiles'
+import { historyBudget } from '@/store/lanes'
 
 /** Which hop is down when the app cannot reach its data.
  * `network`: this machine has no usable network at all - DNS is dead, or
@@ -173,6 +174,8 @@ export interface ServerSlice {
   /** The approval code a device-pending refusal carried, which the server
    * sends only when nobody can approve the device in the app. */
   approvalCode: string | null
+  /** The edge's own text when the address dialed refused as retired. */
+  retiredText: string | null
   /** The last server.update_status answer; null until the update banner
    * host reads it, and on a server too old to serve the method. */
   serverUpdate: ServerUpdateStatus | null
@@ -199,7 +202,7 @@ export interface ServerSlice {
   resetSeq: () => void
   setHydrated: (hydrated: boolean, error?: string | null) => void
   setStreamDead: () => void
-  setUnreachable: (kind: UnreachableKind | null, approvalCode?: string, at?: Partial<EdgePath>) => void
+  setUnreachable: (kind: UnreachableKind | null, approvalCode?: string, at?: Partial<EdgePath>, retiredText?: string) => void
   setServerUpdate: (status: ServerUpdateStatus) => void
   /** Records a failed status read, keeping the last good answer. */
   setServerUpdateFailed: (detail: string) => void
@@ -223,6 +226,7 @@ export const createServerSlice: SliceCreator<ServerSlice> = (set) => {
       unreachable: null,
       unreachableAt: null,
       approvalCode: null,
+      retiredText: null,
     })
   return {
     info: null,
@@ -239,6 +243,7 @@ export const createServerSlice: SliceCreator<ServerSlice> = (set) => {
     unreachable: null,
     unreachableAt: null,
     approvalCode: null,
+    retiredText: null,
     serverUpdate: null,
     serverUpdateError: null,
     serverUpdateProgress: null,
@@ -296,13 +301,19 @@ export const createServerSlice: SliceCreator<ServerSlice> = (set) => {
         terminalCacheEpoch: s.terminalCacheEpoch + 1,
         sessionLogs: {},
         laneHistory: {},
+        laneBudget: historyBudget,
         traceLogs: {},
       })),
     setHydrated: (hydrated, error = null) =>
       set({ hydrated, hydrationError: error, ...(hydrated ? {} : { staleSince: null }) }),
     setStreamDead: () => set({ streamDead: true }),
-    setUnreachable: (unreachable, approvalCode, at) =>
-      set({ unreachable, unreachableAt: unreachable ? at ?? null : null, approvalCode: approvalCode ?? null }),
+    setUnreachable: (unreachable, approvalCode, at, retiredText) =>
+      set({
+        unreachable,
+        unreachableAt: unreachable ? at ?? null : null,
+        approvalCode: approvalCode ?? null,
+        retiredText: (unreachable && retiredText) || null,
+      }),
     setServerUpdate: (serverUpdate) =>
       set((s) => ({
         serverUpdate,

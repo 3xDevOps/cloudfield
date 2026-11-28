@@ -171,7 +171,7 @@ func push(t *testing.T, img v1.Image) (string, *countingRegistry, func()) {
 
 func openStore(t *testing.T, docker DockerImages) *Store {
 	t.Helper()
-	s, err := Open(filepath.Join(t.TempDir(), "images"), "/nonexistent/vmlinux", docker)
+	s, err := Open(filepath.Join(t.TempDir(), "images"), "/nonexistent/vmlinux", docker, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -622,7 +622,7 @@ func TestStoreHelperDisk(t *testing.T) {
 func TestStoreKernel(t *testing.T) {
 	dir := t.TempDir()
 	kernel := filepath.Join(dir, "vmlinux")
-	s, err := Open(filepath.Join(dir, "images"), kernel, nil)
+	s, err := Open(filepath.Join(dir, "images"), kernel, nil, -1)
 	if err != nil {
 		t.Fatal(err)
 	}

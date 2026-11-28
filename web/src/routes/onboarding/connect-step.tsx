@@ -290,6 +290,7 @@ export function ConnectStep({ client, caps, another, onNext }: { client: Api; ca
             onHand={setHanded}
             onLinked={(result) => void linkedThroughEdge(result)}
             onSignedOut={setSignedOut}
+            visible={relay}
           />
         </div>
       )}

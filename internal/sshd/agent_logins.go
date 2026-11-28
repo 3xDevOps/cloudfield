@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/fallback"
 	"github.com/3xDevOps/cloudfield/internal/memberhome"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
@@ -23,6 +26,7 @@ func init() {
 	registerMethod(protocol.MethodAgentLoginRemove, (*Server).agentLoginRemove)
 	registerMethod(protocol.MethodAgentLoginOrder, (*Server).agentLoginOrder)
 	registerMethod(protocol.MethodAgentLoginAutomatic, (*Server).agentLoginAutomatic)
+	registerMethod(protocol.MethodAgentLoginShare, (*Server).agentLoginShare)
 }
 
 // LoginSignIns runs the sign-ins of new logins, each in a container of its
@@ -37,6 +41,15 @@ type LoginSignIns interface {
 	// ReconcileLogins moves the login directories a merge gave another
 	// member to them and removes those with no row.
 	ReconcileLogins(ctx context.Context, member domain.MemberID) error
+	// LoginInUse lists the sessions on an added login, moving to it, or
+	// queued to start on it, each with the member who owns it.
+	LoginInUse(ctx context.Context, account domain.Account) (map[domain.RunID]domain.MemberID, error)
+	// RevokeLogin moves teammates' running sessions off a login its owner
+	// turned off for shares.
+	RevokeLogin(login domain.Account)
+	// RemoveLoginVolume removes the volume the mounts of a login's
+	// directory come from.
+	RemoveLoginVolume(ctx context.Context, member domain.MemberID, agent string, id domain.LoginID) error
 }
 
 var errNoAddedLogins = &protocol.Error{Code: protocol.CodeUnavailable, Message: "this server keeps no added logins"}
@@ -211,6 +224,34 @@ func (s *Server) agentLoginRemove(ctx context.Context, member domain.MemberID, r
 	if perr != nil {
 		return nil, perr
 	}
+	if signIns := s.cfg.LoginSignIns; signIns != nil {
+		inUse, err := signIns.LoginInUse(ctx, domain.Account{Member: member, Login: login.ID})
+		if err != nil {
+			return nil, rpcError(err)
+		}
+		if len(inUse) > 0 {
+			// The owner sees their own sessions; a teammate's are counted, not
+			// named.
+			var own []string
+			teammates := 0
+			for id, owner := range inUse {
+				if owner == member {
+					own = append(own, string(id))
+				} else {
+					teammates++
+				}
+			}
+			slices.Sort(own)
+			var parts []string
+			if len(own) > 0 {
+				parts = append(parts, "your sessions "+strings.Join(own, ", ")+" (end them, or free the sandbox of one that has ended)")
+			}
+			if teammates > 0 {
+				parts = append(parts, fmt.Sprintf("%d of your teammates' sessions, which hold it until they end and their containers go (revoking the share you gave a teammate, with cloudfield account revoke <member-id>, moves their running sessions off it)", teammates))
+			}
+			return nil, &protocol.Error{Code: protocol.CodeConflict, Message: fmt.Sprintf("login %q is in use by %s", login.Name, strings.Join(parts, " and "))}
+		}
+	}
 	// The directory goes first, wherever a merge left it, so a removal that
 	// fails half way keeps the row and can be asked again.
 	stored, err := s.cfg.Logins.List("")
@@ -219,6 +260,11 @@ func (s *Server) agentLoginRemove(ctx context.Context, member domain.MemberID, r
 	}
 	for _, l := range stored {
 		if l.Agent == p.Agent && l.ID == login.ID {
+			if signIns := s.cfg.LoginSignIns; signIns != nil {
+				if err := signIns.RemoveLoginVolume(ctx, l.Member, l.Agent, l.ID); err != nil {
+					return nil, rpcError(fmt.Errorf("remove login %q: %w", login.Name, err))
+				}
+			}
 			if err := s.cfg.Logins.Remove(l.Member, l.Agent, l.ID); err != nil {
 				return nil, rpcError(fmt.Errorf("remove login %q: %w", login.Name, err))
 			}
@@ -227,6 +273,7 @@ func (s *Server) agentLoginRemove(ctx context.Context, member domain.MemberID, r
 	if err := s.cfg.Store.DeleteAgentLogin(ctx, member, p.Agent, login.ID); err != nil {
 		return nil, rpcError(err)
 	}
+	fallback.ForgetRunOuts(member, p.Agent)
 	noteChange(ctx)
 	return struct{}{}, nil
 }
@@ -262,6 +309,9 @@ func (s *Server) agentLoginAutomatic(ctx context.Context, member domain.MemberID
 	if perr != nil {
 		return nil, perr
 	}
+	if p.Automatic == nil {
+		return nil, invalidParams("automatic is required: true or false")
+	}
 	s.authorizationMu.Lock()
 	defer s.authorizationMu.Unlock()
 	logins, perr := s.agentLoginCaller(ctx, member, p.Agent)
@@ -271,7 +321,7 @@ func (s *Server) agentLoginAutomatic(ctx context.Context, member domain.MemberID
 	if len(logins) == 0 {
 		return nil, invalidParams("you have only the default login; add a login first")
 	}
-	if err := s.cfg.Store.SetAgentLoginAutomatic(ctx, member, p.Agent, domain.LoginID(p.LoginID), p.Automatic); err != nil {
+	if err := s.cfg.Store.SetAgentLoginAutomatic(ctx, member, p.Agent, domain.LoginID(p.LoginID), *p.Automatic); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, &protocol.Error{Code: protocol.CodeNotFound, Message: fmt.Sprintf("you have no login %q", p.LoginID)}
 		}
@@ -279,6 +329,89 @@ func (s *Server) agentLoginAutomatic(ctx context.Context, member domain.MemberID
 	}
 	noteChange(ctx)
 	return struct{}{}, nil
+}
+
+// launchLogin resolves the login a launch by member on account, admitted
+// already, starts from: the one its owner named, or the account's first login in its
+// owner's order that member may use without naming it. Only a login's owner
+// may name it. An account none of whose logins member may use is not shared
+// with them; on their own account the launch is refused, naming each login
+// and why it does not serve.
+func (s *Server) launchLogin(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, harness, named string, mode domain.LaunchMode, permission domain.Permission) (domain.LoginID, *protocol.Error) {
+	if account == "" {
+		account = member
+	}
+	logins, err := s.cfg.Store.ListAgentLogins(ctx, account, harness)
+	if err != nil {
+		return "", rpcError(err)
+	}
+	if named != "" {
+		if account != member {
+			return "", &protocol.Error{Code: protocol.CodeDenied, Message: protocol.MethodRunLaunch + ": only a login's owner names it; a launch on a teammate's account is served in their order"}
+		}
+		if domain.LoginID(named) == domain.DefaultLogin {
+			return "", nil
+		}
+		login, perr := addedLogin(logins, named)
+		if perr != nil {
+			return "", perr
+		}
+		return login.ID, nil
+	}
+	if len(logins) == 0 {
+		return "", nil
+	}
+	login, err := s.cfg.Runs.StartLogin(ctx, workspace, member, account, harness, mode, permission)
+	if errors.Is(err, permissions.ErrDenied) {
+		return "", &protocol.Error{Code: protocol.CodeDenied, Message: protocol.MethodRunLaunch + ": " + err.Error()}
+	}
+	if err != nil {
+		return "", rpcError(err)
+	}
+	return login, nil
+}
+
+// MeasureUnnamed reads the usage fallback.Select decides on for member's
+// launch on login, which the launch did not name but was chosen for it: a
+// login billed per use, or whose kind cannot be read, is taken only when no
+// candidate with readable usage is left. An account whose owner keeps no
+// login rows is measured as before logins existed, and so is a launch where
+// something else signs the agent in (payer, a RunController.LoginPayer
+// answer): that pays on every account.
+func MeasureUnnamed(ctx context.Context, cfg *Config, member domain.MemberID, login domain.Account, harness string, policy domain.AccountFallback, payer func() (string, error)) (fallback.Measured, error) {
+	rows, err := cfg.Store.ListAgentLogins(ctx, login.Member, harness)
+	if err != nil {
+		return nil, err
+	}
+	unknown := false
+	if len(rows) > 0 {
+		if unknown, err = cfg.Runs.LoginUsageUnknown(ctx, member, login, harness); err != nil {
+			return nil, err
+		}
+	}
+	if unknown {
+		paidBy, payerErr := payer()
+		if payerErr != nil {
+			return nil, payerErr
+		}
+		unknown = paidBy == ""
+	}
+	return fallback.MeasureStart(ctx, cfg.Store, cfg.Services.Usage, member, login, harness, policy, unknown)
+}
+
+// Launchable is the fallback.Launchable of member's launch on requested: a
+// candidate the scheduler can launch on, never an added login where
+// something else signs the agent in (payer, a RunController.LoginPayer
+// answer), as that would pay instead.
+func Launchable(runs RunController, payer func() (string, error), member, requested domain.MemberID, harness string, mode domain.LaunchMode, permission domain.Permission) fallback.Launchable {
+	return func(ctx context.Context, account domain.Account) (bool, error) {
+		if account.Login.Added() {
+			if paidBy, err := payer(); err != nil || paidBy != "" {
+				return false, err
+			}
+		}
+		return runs.FallbackLaunchable(ctx, member, requested, account, harness, mode, permission)
+	}
 }
 
 // mayLaunch requires the permission a launch needs: a sign-in runs a
@@ -292,4 +425,38 @@ func (s *Server) mayLaunch(ctx context.Context, member domain.MemberID, method s
 		return &protocol.Error{Code: protocol.CodeDenied, Message: method + ": " + err.Error()}
 	}
 	return nil
+}
+
+func (s *Server) agentLoginShare(ctx context.Context, member domain.MemberID, raw json.RawMessage) (any, *protocol.Error) {
+	p, perr := decodeParams[protocol.AgentLoginShareParams](raw)
+	if perr != nil {
+		return nil, perr
+	}
+	if p.Shared == nil {
+		return nil, invalidParams("shared is required: true or false")
+	}
+	s.authorizationMu.Lock()
+	defer s.authorizationMu.Unlock()
+	logins, perr := s.agentLoginCaller(ctx, member, p.Agent)
+	if perr != nil {
+		return nil, perr
+	}
+	if len(logins) == 0 {
+		return nil, invalidParams("you have only the default login; add a login first")
+	}
+	if err := s.cfg.Store.SetAgentLoginShared(ctx, member, p.Agent, domain.LoginID(p.LoginID), *p.Shared); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, &protocol.Error{Code: protocol.CodeNotFound, Message: fmt.Sprintf("you have no login %q", p.LoginID)}
+		}
+		return nil, rpcError(err)
+	}
+	noteChange(ctx)
+	if !*p.Shared && s.cfg.LoginSignIns != nil {
+		login := domain.Account{Member: member}
+		if id := domain.LoginID(p.LoginID); id.Added() {
+			login.Login = id
+		}
+		s.cfg.LoginSignIns.RevokeLogin(login)
+	}
+	return struct{}{}, nil
 }

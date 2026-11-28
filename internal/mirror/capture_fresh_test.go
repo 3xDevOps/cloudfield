@@ -2,6 +2,7 @@ package mirror
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -31,18 +32,49 @@ func TestCaptureStartsFromARefreshYoungerThanCaptureFresh(t *testing.T) {
 	}
 	warmed := now
 	capture(1, warmed)
-	now = now.Add(captureFresh - time.Second)
-	if err = svc.Warm(ctx, "w"); err != nil {
+	now = now.Add(captureFresh/2 - time.Second)
+	if err = svc.WarmAhead(ctx, "w"); err != nil {
 		t.Fatal(err)
 	}
 	capture(1, warmed)
+	now = warmed.Add(captureFresh - time.Second)
+	git.refreshErr = errors.New("upstream answered 502")
+	if err = svc.Warm(ctx, "w"); err != nil || git.refreshCalls != 1 {
+		t.Fatalf("a second launch's warm of a refresh the first can still start from = %v after %d refreshes, want none", err, git.refreshCalls)
+	}
+	git.refreshErr = nil
+	capture(1, warmed)
+	now = warmed.Add(captureFresh)
+	if err = svc.Warm(ctx, "w"); err != nil || git.refreshCalls != 2 || git.refreshFetchTimeout != 0 {
+		t.Fatalf("a launch's warm of a refresh no capture starts from = %v after %d refreshes with fetch timeout %s, want a second its launch alone bounds", err, git.refreshCalls, git.refreshFetchTimeout)
+	}
+	launched := now
+	now = now.Add(captureFresh / 2)
+	git.refreshErr = errors.New("upstream answered 502")
+	if err = svc.WarmAhead(ctx, "w"); err != nil || git.refreshCalls != 2 {
+		t.Fatalf("warm ahead of a refresh a launch's warm accepted = %v after %d refreshes, want none until its capture", err, git.refreshCalls)
+	}
+	git.refreshErr = nil
+	capture(2, launched)
+	now = launched.Add(captureFresh)
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err = svc.WarmAhead(cancelled, "w"); err != nil || git.refreshCalls != 3 || git.refreshCtxErr != nil || git.refreshFetchTimeout != captureFresh {
+		t.Fatalf("warm ahead for a caller that left = %v after %d refreshes on a context with error %v, fetch timeout %s; want a third that outlives the caller and bounds its fetch",
+			err, git.refreshCalls, git.refreshCtxErr, git.refreshFetchTimeout)
+	}
+	now = now.Add(captureFresh / 2)
+	if err = svc.WarmAhead(ctx, "w"); err != nil || git.refreshCalls != 4 {
+		t.Fatalf("warm ahead in the second half of the window = %v after %d refreshes, want a fourth", err, git.refreshCalls)
+	}
+	capture(4, now)
 
 	git.branchCommit = "1111111111111111111111111111111111111111"
-	if _, err = svc.Capture(ctx, "w", ""); err != nil || git.refreshCalls != 2 {
-		t.Fatalf("capture of a base that moved since the refresh = %v after %d refreshes, want a second", err, git.refreshCalls)
+	if _, err = svc.Capture(ctx, "w", ""); err != nil || git.refreshCalls != 5 {
+		t.Fatalf("capture of a base that moved since the refresh = %v after %d refreshes, want a fifth", err, git.refreshCalls)
 	}
 	git.branchCommit = ""
 
 	now = now.Add(captureFresh)
-	capture(3, now)
+	capture(6, now)
 }

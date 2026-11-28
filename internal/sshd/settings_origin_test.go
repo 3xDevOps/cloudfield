@@ -87,6 +87,21 @@ func TestWorkspaceOrigin(t *testing.T) {
 		t.Fatalf("scp-like timeline note = %q", note)
 	}
 
+	// An origin with a credential in it is stored as given, since git needs it,
+	// but the note every reader of the workspace sees leaves the credential out.
+	const withCredential = "https://ada:not-a-real-value@git.example.test/acme/app.git"
+	if err = cc.Call(protocol.MethodWorkspaceOrigin, protocol.WorkspaceOriginParams{
+		WorkspaceID: string(e.ws.ID), Origin: withCredential,
+	}, nil); err != nil {
+		t.Fatalf("workspace.origin with userinfo: %v", err)
+	}
+	if note := waitTimelineNote(t, sub); note != "workspace origin set" {
+		t.Fatalf("timeline note = %q, want no address for an origin that may hold a credential", note)
+	}
+	if stored, err = e.store.GetWorkspace(ctx, e.ws.ID); err != nil || stored.Origin != withCredential {
+		t.Fatalf("stored origin = %q (%v), want it kept as given", stored.Origin, err)
+	}
+
 	var cleared protocol.WorkspaceOriginResult
 	if err := cc.Call(protocol.MethodWorkspaceOrigin, protocol.WorkspaceOriginParams{
 		WorkspaceID: string(e.ws.ID), Origin: "",

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/3xDevOps/cloudfield/internal/disk"
 )
 
 const (
@@ -71,6 +73,12 @@ func (s *Store) NewCacheDisk(ctx context.Context, pool, path string) (Disk, erro
 	return Disk{Path: path, Format: FormatRaw}, nil
 }
 
+// DropCacheDisk removes the cache disk at path and the link to the cache it
+// was made over. A snapshot SnapshotCache took of it stays whole.
+func DropCacheDisk(path string) error {
+	return errors.Join(removeIfExists(path), prunePins(path, ""))
+}
+
 func validPool(pool string) bool {
 	return pool != "" && filepath.Base(pool) == pool && !strings.HasPrefix(pool, ".")
 }
@@ -117,9 +125,18 @@ func linkNewest(dir, name string) error {
 	return os.Rename(link+".tmp", link)
 }
 
+// extendsNewest reports whether the cache in snapshot holds what the pool's
+// newest cache does: the pool has none, or the snapshot's disk reads
+// through it.
+func (s *Store) extendsNewest(dir, snapshot string) bool {
+	newest, err := s.readNewest(dir)
+	return err != nil || sameFile(newest.Path, filepath.Join(snapshot, "base.raw"))
+}
+
 // SnapshotCache links a stopped VM's cache disk, and a qcow2 one's base,
-// into the store for PromoteCache, so the VM may be deleted meanwhile. A VM
-// that starts again first takes a disk of its own with UnshareCache.
+// into the store for PromoteCache, so the disk may be deleted meanwhile. A
+// VM that starts again on that disk first takes one of its own with
+// UnshareCache.
 func (s *Store) SnapshotCache(disk Disk) (string, error) {
 	work, err := os.MkdirTemp(s.tmpDir(), fmt.Sprintf("snapshot-%d-", time.Now().UnixNano()))
 	if err != nil {
@@ -161,12 +178,50 @@ func (s *Store) UnshareCache(ctx context.Context, disk Disk) error {
 	return nil
 }
 
+// reservePromotion holds, until release, the room a promotion of cache may
+// take on the store's filesystem: a copy of cache, and for one read over
+// base a copy of base and cache's blocks again, which land in that copy's
+// holes. It refuses a promotion that would leave less free than disk
+// reclaim keeps, counting what the promotions under way hold: reclaim would
+// delete sessions' state to make up a dip that ends with the promotion.
+func (s *Store) reservePromotion(cache, base string) (release func(), err error) {
+	if s.minFree < 0 {
+		return func() {}, nil
+	}
+	info, err := os.Stat(cache)
+	if err != nil {
+		return nil, err
+	}
+	need := uint64(info.Sys().(*syscall.Stat_t).Blocks) * 512
+	if info, err = os.Stat(base); err == nil {
+		need = 2*need + uint64(info.Sys().(*syscall.Stat_t).Blocks)*512
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := disk.Filesystem(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	floor := disk.Reserve(data.TotalBytes, s.minFree) + disk.ReclaimHeadroom
+	if data.FreeBytes < floor+s.promoting+need {
+		return nil, fmt.Errorf("skipped: it may write %d bytes and other promotions hold %d more, and %s has %d free with %d to keep free",
+			need, s.promoting, s.dir, data.FreeBytes, floor)
+	}
+	s.promoting += need
+	return func() {
+		s.mu.Lock()
+		s.promoting -= need
+		s.mu.Unlock()
+	}, nil
+}
+
 // PromoteCache writes a snapshot SnapshotCache took as a raw disk, a copy
 // of a qcow2 one read over its base, and makes that pool's newest cache, or
 // drops the pool's caches when it takes more than cacheLimit, then deletes
-// the snapshot and every cache of the pool no disk uses. A snapshot older
-// than the pool's newest cache, whose promotion finished first, changes
-// nothing.
+// the snapshot and every cache of the pool no disk uses. A snapshot that
+// does not extend the pool's newest cache changes nothing and is not
+// copied, so a session never replaces what another has promoted since it
+// started; nor does one the store's filesystem has no room to write.
 func (s *Store) PromoteCache(pool, snapshot string) error {
 	defer func() { _ = os.RemoveAll(snapshot) }()
 	if !validPool(pool) {
@@ -174,8 +229,20 @@ func (s *Store) PromoteCache(pool, snapshot string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
 	defer cancel()
+	dir := filepath.Join(s.cachesDir(), pool)
+	if !s.extendsNewest(dir, snapshot) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return errors.Join(os.RemoveAll(snapshot), s.sweepCachesLocked(dir))
+	}
 	disk, cache, base := filepath.Join(snapshot, "disk.raw"), filepath.Join(snapshot, "cache"), filepath.Join(snapshot, "base.raw")
-	var err error
+	release, err := s.reservePromotion(cache, base)
+	if err != nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return errors.Join(fmt.Errorf("vmimage: promote cache: %w", err), os.RemoveAll(snapshot), s.sweepCachesLocked(dir))
+	}
+	defer release()
 	if _, statErr := os.Stat(base); statErr == nil {
 		top := filepath.Join(snapshot, "top.qcow2")
 		if err = copyDisk(ctx, cache, top); err == nil {
@@ -191,16 +258,14 @@ func (s *Store) PromoteCache(pool, snapshot string) error {
 	if err != nil {
 		return fmt.Errorf("vmimage: promote cache: %w", err)
 	}
-	seq := snapshotSeq(snapshot)
-	dir := filepath.Join(s.cachesDir(), pool)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	switch newest, _ := s.readNewest(dir); {
-	case newestSeq(newest) > seq:
+	switch {
+	case !s.extendsNewest(dir, snapshot):
 	case info.Sys().(*syscall.Stat_t).Blocks*512 > cacheLimit:
 		err = removeIfExists(filepath.Join(dir, currentCache))
 	default:
-		_, err = s.publishCacheLocked(dir, disk, seq)
+		_, err = s.publishCacheLocked(dir, disk, snapshotSeq(snapshot))
 	}
 	// The snapshot's link would keep the base it read through from the sweep.
 	return errors.Join(err, os.RemoveAll(snapshot), s.sweepCachesLocked(dir))
@@ -247,14 +312,6 @@ func (s *Store) sweepCachesLocked(dir string) error {
 // snapshotSeq is when SnapshotCache took a snapshot, from its name.
 func snapshotSeq(snapshot string) int64 {
 	digits, _, _ := strings.Cut(strings.TrimPrefix(filepath.Base(snapshot), "snapshot-"), "-")
-	seq, _ := strconv.ParseInt(digits, 10, 64)
-	return seq
-}
-
-// newestSeq is when the snapshot a pool's newest cache came from was taken,
-// 0 for none.
-func newestSeq(newest Base) int64 {
-	digits, _, _ := strings.Cut(filepath.Base(newest.Path), "-")
 	seq, _ := strconv.ParseInt(digits, 10, 64)
 	return seq
 }

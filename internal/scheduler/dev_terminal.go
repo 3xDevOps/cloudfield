@@ -51,8 +51,9 @@ type runTerminalSet struct {
 	ContainerID runtime.ID              `json:"container_id"`
 	Closed      bool                    `json:"closed"`
 	Terminals   map[string]*runTerminal `json:"terminals"`
-	// deferred is set while the recovery of terminals waits for the paused
-	// container, which takes no exec, to resume.
+	// deferred is set while terminals wait for the next load to take them
+	// up: the paused container, which takes no exec, has to resume first,
+	// or the context of their recovery ended before the container answered.
 	deferred bool
 }
 
@@ -210,7 +211,12 @@ func (s *Scheduler) recoverRunTerminalLocked(ctx context.Context, run domain.Run
 	execution, err := managed.RecoverExec(ctx, terminal.Identity)
 	if err != nil {
 		terminal.Unavailable = err.Error()
-		if errors.Is(err, runtime.ErrNotFound) {
+		// A runtime cut short while it reads an exit record reports the
+		// execution not found, which proves nothing once ctx has ended.
+		switch {
+		case ctx.Err() != nil:
+			set.deferred = true
+		case errors.Is(err, runtime.ErrNotFound):
 			terminalGone(terminal, err)
 		}
 		return

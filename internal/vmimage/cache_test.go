@@ -51,7 +51,7 @@ func qemuWrite(t *testing.T, path string, pattern byte) {
 func TestCachePoolLayersCachesOverRawBases(t *testing.T) {
 	needTools(t, "mkfs.ext4", "cp", "qemu-img", "qemu-io")
 	dir := t.TempDir()
-	s, err := Open(filepath.Join(dir, "images"), "", nil)
+	s, err := Open(filepath.Join(dir, "images"), "", nil, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,15 +169,17 @@ func TestCachePoolLayersCachesOverRawBases(t *testing.T) {
 		t.Errorf("a cache no disk reads through any more outlived the sweep: %v", err)
 	}
 
-	// A VM deleted before its promotion runs leaves only the snapshot on
-	// the base it read through, which the promotion's own sweep deletes.
-	deleted, err := s.NewCacheDisk(t.Context(), "pool1", filepath.Join(dir, "deleted.img"))
+	// A stopped VM's cache disk, dropped before its promotion runs, leaves
+	// only the snapshot on the base it read through, which the promotion's
+	// own sweep deletes.
+	stopped, err := s.NewCacheDisk(t.Context(), "pool1", filepath.Join(dir, "stopped.img"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	last, err := s.SnapshotCache(deleted)
+	qemuWrite(t, stopped.Path, 0xef)
+	last, err := s.SnapshotCache(stopped)
 	if err == nil {
-		err = errors.Join(os.Remove(deleted.Path), os.Remove(deleted.Backing))
+		err = DropCacheDisk(stopped.Path)
 	}
 	if err == nil {
 		err = s.PromoteCache("pool1", last)
@@ -186,23 +188,31 @@ func TestCachePoolLayersCachesOverRawBases(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err = os.Stat(flat.Path); !os.IsNotExist(err) {
-		t.Errorf("the promotion of a deleted VM's cache kept the base it read through: %v", err)
+		t.Errorf("the promotion of a stopped VM's cache kept the base it read through: %v", err)
 	}
 	if flat, err = s.readNewest(filepath.Join(s.cachesDir(), "pool1")); err != nil {
 		t.Fatal(err)
 	}
+	if left, _ := filepath.Glob(stopped.Path + "*"); len(left) != 0 {
+		t.Errorf("a dropped cache disk left %v", left)
+	}
 
+	// The VM starts again, on a disk over the cache its own became.
 	idle := time.Now().Add(-cacheIdleAge - time.Hour)
-	started := filepath.Join(dir, "started.img")
-	if _, err = s.NewCacheDisk(t.Context(), "pool1", started); err != nil {
+	started := stopped.Path
+	again, err := s.NewCacheDisk(t.Context(), "pool1", started)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if got := head(t, flat.Path, 512); !sameFile(again.Backing, flat.Path) || !bytes.Equal(got, bytes.Repeat([]byte{0xef}, 512)) {
+		t.Errorf("a VM started again has cache disk %+v over a cache that starts %x; want one over the newest cache %s, which holds what the VM wrote", again, got[:16], flat.Path)
 	}
 	// The session outlives cacheIdleAge, and ends without promoting.
 	if err = os.Chtimes(flat.Path, idle, idle); err == nil {
 		err = s.Sweep()
 	}
 	if err == nil {
-		err = errors.Join(os.Remove(started), prunePins(started, ""))
+		err = DropCacheDisk(started)
 	}
 	if err == nil {
 		err = s.Sweep()
@@ -231,5 +241,72 @@ func TestCachePoolLayersCachesOverRawBases(t *testing.T) {
 	}
 	if _, err = s.NewCacheDisk(t.Context(), "../escape", filepath.Join(dir, "x.img")); err == nil {
 		t.Error("a pool name with a path was accepted")
+	}
+}
+
+func TestCachePoolKeepsTheCacheALaterStopDidNotStartFrom(t *testing.T) {
+	needTools(t, "mkfs.ext4", "cp", "qemu-img", "qemu-io")
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "images"), "", nil, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := filepath.Join(s.cachesDir(), "pool1")
+	stop := func(disk Disk) {
+		t.Helper()
+		snapshot, stopErr := s.SnapshotCache(disk)
+		if stopErr == nil {
+			stopErr = s.PromoteCache("pool1", snapshot)
+		}
+		if stopErr != nil {
+			t.Fatal(stopErr)
+		}
+	}
+	first, err := s.NewCacheDisk(t.Context(), "pool1", filepath.Join(dir, "first.img"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop(first)
+	writer, err := s.NewCacheDisk(t.Context(), "pool1", filepath.Join(dir, "writer.img"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	idle, err := s.NewCacheDisk(t.Context(), "pool1", filepath.Join(dir, "idle.img"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	qemuWrite(t, writer.Path, 0xcd)
+	stop(writer)
+	warm, err := s.readNewest(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sameFile(warm.Path, writer.Backing) {
+		t.Fatal("the session that wrote did not become the pool's newest cache")
+	}
+	stop(idle)
+	after, err := s.readNewest(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Path != warm.Path || !bytes.Equal(head(t, after.Path, 512), bytes.Repeat([]byte{0xcd}, 512)) {
+		t.Errorf("a session that started from an older cache replaced the newest: %s starting %x, want %s", after.Path, head(t, after.Path, 8), warm.Path)
+	}
+	if entries, _ := os.ReadDir(s.tmpDir()); len(entries) != 0 {
+		t.Errorf("the dropped promotion left %d entries in %s", len(entries), s.tmpDir())
+	}
+
+	// A session that started from the newest replaces it.
+	next, err := s.NewCacheDisk(t.Context(), "pool1", filepath.Join(dir, "next.img"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	qemuWrite(t, next.Path, 0xee)
+	stop(next)
+	if after, err = s.readNewest(pool); err != nil {
+		t.Fatal(err)
+	}
+	if after.Path == warm.Path || !bytes.Equal(head(t, after.Path, 512), bytes.Repeat([]byte{0xee}, 512)) {
+		t.Errorf("a session that started from the newest cache did not replace it: %s starting %x", after.Path, head(t, after.Path, 8))
 	}
 }

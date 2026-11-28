@@ -15,16 +15,28 @@ import (
 )
 
 func (s *Scheduler) Kill(ctx context.Context, run domain.RunID, actor domain.MemberID) error {
-	return s.kill(ctx, run, actor, "")
+	return s.kill(ctx, run, actor, "", nil)
 }
 
 // StopForParent stops a child run on its parent's say-so. The child ends
 // completed with a reason naming the parent, not as an abandoned failure.
-func (s *Scheduler) StopForParent(ctx context.Context, run, parent domain.RunID) error {
-	return s.kill(ctx, run, "", parent)
+// The stop may wait for the child's other operations or its git work, so
+// attached is asked just before the child is stopped, and its error refuses
+// the stop.
+func (s *Scheduler) StopForParent(ctx context.Context, run, parent domain.RunID, attached func() error) error {
+	return s.kill(ctx, run, "", parent, attached)
 }
 
-func (s *Scheduler) kill(ctx context.Context, run domain.RunID, actor domain.MemberID, by domain.RunID) error {
+// lockLifecycle takes the lifecycle lock for a request or a wake, which
+// stops waiting when ctx ends.
+func (e *supervised) lockLifecycle(ctx context.Context) error {
+	if err := e.lifecycleMu.LockContext(ctx); err != nil {
+		return fmt.Errorf("wait for another operation on session %s to finish: %w", e.runID, err)
+	}
+	return nil
+}
+
+func (s *Scheduler) kill(ctx context.Context, run domain.RunID, actor domain.MemberID, by domain.RunID, allowed func() error) error {
 	s.mu.Lock()
 	entry := s.runs[run]
 	if entry == nil {
@@ -36,17 +48,24 @@ func (s *Scheduler) kill(ctx context.Context, run domain.RunID, actor domain.Mem
 			return nil
 		}
 		s.mu.Unlock()
-		return s.killUnsupervised(ctx, run, actor, by)
+		return s.killUnsupervised(ctx, run, actor, by, allowed)
 	}
 	s.mu.Unlock()
 	s.wakeBeforeEnd(ctx, entry, actor)
 
-	entry.lifecycleMu.Lock()
+	if err := entry.lockLifecycle(ctx); err != nil {
+		return err
+	}
 	defer entry.lifecycleMu.Unlock()
+	if allowed != nil {
+		if err := allowed(); err != nil {
+			return err
+		}
+	}
 	s.mu.Lock()
 	if s.runs[run] != entry {
 		s.mu.Unlock()
-		return s.killUnsupervised(ctx, run, actor, by)
+		return s.killUnsupervised(ctx, run, actor, by, allowed)
 	}
 	if entry.destroyPending {
 		s.mu.Unlock()
@@ -157,7 +176,7 @@ func (s *Scheduler) reconcileActiveDestroyPending(ctx context.Context, id domain
 
 // killUnsupervised writes status under s.mu: every scheduler status write
 // holds the lock, so a concurrent terminal transition cannot be overwritten.
-func (s *Scheduler) killUnsupervised(ctx context.Context, id domain.RunID, actor domain.MemberID, by domain.RunID) error {
+func (s *Scheduler) killUnsupervised(ctx context.Context, id domain.RunID, actor domain.MemberID, by domain.RunID, allowed func() error) error {
 	r, err := s.cfg.Store.GetRun(ctx, id)
 	if err != nil {
 		return err
@@ -167,7 +186,7 @@ func (s *Scheduler) killUnsupervised(ctx context.Context, id domain.RunID, actor
 		// A launch registered the run meanwhile: route through the
 		// supervised path.
 		s.mu.Unlock()
-		return s.kill(ctx, id, actor, by)
+		return s.kill(ctx, id, actor, by, allowed)
 	}
 	if pending := s.pending[id]; pending != nil {
 		pending.killRequested = true
@@ -197,7 +216,7 @@ func (s *Scheduler) killUnsupervised(ctx context.Context, id domain.RunID, actor
 			// between expiry and a terminal no-op. A retry with no owner
 			// means a pending launch or a row that moved back to active;
 			// route it through Kill as well so that state is not discarded.
-			return s.kill(ctx, id, actor, by)
+			return s.kill(ctx, id, actor, by, allowed)
 		}
 		return s.dismissFinished(ctx, id, actor)
 	}
@@ -208,7 +227,7 @@ func (s *Scheduler) killUnsupervised(ctx context.Context, id domain.RunID, actor
 	if handled, reconcileErr := s.reconcileActiveDestroyPending(ctx, id); reconcileErr != nil {
 		return reconcileErr
 	} else if handled {
-		return s.kill(ctx, id, actor, by)
+		return s.kill(ctx, id, actor, by, allowed)
 	}
 
 	identity := "none"
@@ -229,7 +248,7 @@ func (s *Scheduler) killUnsupervised(ctx context.Context, id domain.RunID, actor
 		// A launch registered the run meanwhile: route through the
 		// supervised path.
 		s.mu.Unlock()
-		return s.kill(ctx, id, actor, by)
+		return s.kill(ctx, id, actor, by, allowed)
 	}
 	if pending := s.pending[id]; pending != nil {
 		pending.killRequested = true
@@ -245,17 +264,23 @@ func (s *Scheduler) killUnsupervised(ctx context.Context, id domain.RunID, actor
 	}
 	if r.Status.Terminal() {
 		s.mu.Unlock()
-		return s.killUnsupervised(ctx, id, actor, by)
+		return s.killUnsupervised(ctx, id, actor, by, allowed)
 	}
 	// Sidecar writes are serialized by s.mu. Recheck immediately before the
 	// status write so a pending marker installed after the first probe still
 	// owns cleanup and cannot be bypassed by this transition.
 	if sc, serr := s.readSidecar(id); serr == nil && sc.DestroyPending {
 		s.mu.Unlock()
-		return s.killUnsupervised(ctx, id, actor, by)
+		return s.killUnsupervised(ctx, id, actor, by, allowed)
 	} else if serr != nil && !os.IsNotExist(serr) {
 		s.mu.Unlock()
 		return fmt.Errorf("scheduler: inspect destroy-pending sidecar: %w", serr)
+	}
+	if allowed != nil {
+		if err = allowed(); err != nil {
+			s.mu.Unlock()
+			return err
+		}
 	}
 	if err = s.persistEvidencePendingErr(id, identity, ""); err != nil {
 		s.mu.Unlock()
@@ -502,7 +527,9 @@ func (s *Scheduler) Pause(ctx context.Context, run domain.RunID, actor domain.Me
 	if entry == nil {
 		return fmt.Errorf("%w: session has no live sandbox", ErrInvalidTransition)
 	}
-	entry.lifecycleMu.Lock()
+	if err := entry.lockLifecycle(ctx); err != nil {
+		return err
+	}
 	defer entry.lifecycleMu.Unlock()
 	s.mu.Lock()
 	if s.runs[run] != entry || entry.containerID == "" ||
@@ -553,7 +580,9 @@ func (s *Scheduler) Resume(ctx context.Context, run domain.RunID, actor domain.M
 	if asleep {
 		return s.WakeRun(ctx, run, actor)
 	}
-	entry.lifecycleMu.Lock()
+	if err := entry.lockLifecycle(ctx); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	// A sleep that held the lifecycle lock may have finished meanwhile.
 	if !entry.asleepSince.IsZero() && !entry.retained {
@@ -636,6 +665,10 @@ func (s *Scheduler) Cause(run domain.RunID, activity domain.RunActivity) events.
 	return ""
 }
 
+// ErrMoving refuses a message to a session moving to another account or
+// login.
+var ErrMoving = errors.New("scheduler: the session is moving")
+
 // Inject delivers a steering message to the live run's agent through its
 // driver; the tui driver ends it with the harness's submit sequence so the
 // text reaches the agent's conversation rather than sitting in its input box.
@@ -645,6 +678,17 @@ func (s *Scheduler) Inject(ctx context.Context, run domain.RunID, actor domain.M
 	if entry != nil && entry.switching != "" {
 		s.mu.Unlock()
 		return "", fmt.Errorf("%w: %w; send the message when it finishes", ptyhost.ErrNoSession, ErrSwitching)
+	}
+	// The agent a move replaces would take the message, and the move would
+	// stop it mid-turn.
+	if entry != nil && entry.moving {
+		s.mu.Unlock()
+		return "", s.movingError(ctx, run)
+	}
+	// A terminal showing a dialog takes the typed message as its answer.
+	if entry != nil && !entry.acp && len(entry.pendingInputs) != 0 {
+		s.mu.Unlock()
+		return "", fmt.Errorf("%w: the agent is waiting for an answer in its terminal; answer it there, then send the message again", domain.ErrPromptNotSent)
 	}
 	if entry != nil && (entry.status == domain.RunRunning || entry.status == domain.RunNeedsAttention) {
 		workspace := entry.workspaceID
@@ -658,6 +702,27 @@ func (s *Scheduler) Inject(ctx context.Context, run domain.RunID, actor domain.M
 		return "", err
 	}
 	return "", fmt.Errorf("%w: inject requires a running or needs-attention session", ptyhost.ErrNoSession)
+}
+
+// movingError refuses a message to run, which a move holds.
+func (s *Scheduler) movingError(ctx context.Context, run domain.RunID) error {
+	var to domain.MemberID
+	s.mu.Lock()
+	if entry := s.runs[run]; entry != nil && entry.accountSwap != nil {
+		to = entry.accountSwap.To
+	}
+	s.mu.Unlock()
+	// Members of a move where nobody keeps added logins never see the word.
+	where := "another account"
+	if r, err := s.cfg.Store.GetRun(ctx, run); err == nil {
+		for _, member := range []domain.MemberID{r.MemberID, r.HomeMember(), r.AccountMember(), to} {
+			if logins, listErr := s.cfg.Store.ListAgentLogins(ctx, member, r.Harness); member != "" && listErr == nil && len(logins) > 0 {
+				where += " or login"
+				break
+			}
+		}
+	}
+	return fmt.Errorf("%w: %w to %s; send the message when it finishes", ptyhost.ErrNoSession, ErrMoving, where)
 }
 
 const steerRecordTimeout = 10 * time.Second
@@ -829,7 +894,9 @@ func (s *Scheduler) closeRun(ctx context.Context, run domain.RunID, spec closeSp
 	}
 
 	s.wakeBeforeEnd(ctx, entry, actor)
-	entry.lifecycleMu.Lock()
+	if err := entry.lockLifecycle(ctx); err != nil {
+		return err
+	}
 	defer entry.lifecycleMu.Unlock()
 	s.mu.Lock()
 	if err := s.reportedOnlyRefusalLocked(ctx, run, spec); err != nil {

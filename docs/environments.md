@@ -311,8 +311,10 @@ Cloudfield checks that the host has free disk and memory, and that the server is
 not stalling on memory (its cgroup's `memory.pressure`, `some avg60` below
 10%). Otherwise the launch fails with `scheduler: insufficient disk headroom`,
 `scheduler: insufficient host memory headroom` or `scheduler: host capacity
-unavailable`. Cloudfield never stops a running agent to make room, and reopening
-a retained session needs no check. A refusal for low available memory first
+unavailable`. Cloudfield never stops a running agent to make room. Reopening a
+retained session whose container still runs needs no check; one whose
+container a sleep stopped is checked as a wake, on memory and for 1 GiB of
+free disk. A refusal for low available memory first
 saves idle session VMs to disk and checks once more. When the host runs out of
 memory, a session VM can be saved to disk while it works, with every process
 kept, and woken again once memory is back. [Recover from disk
@@ -392,18 +394,34 @@ What changes:
   wrote reads as written from the next open, shows in listings and `stat`
   within a second, and read-only mounts stay read-only.
 - `/tmp` is on the session's data disk. `/aether-cache` is a copy-on-write
-  layer over the member's newest caches, made when the session is created,
-  so sessions share those caches' blocks and each holds only what it wrote.
-  A session's caches become the member's newest when its VM stops for good:
-  it is stopped, or deleted while stopped or saved. A VM that holds its
-  session's checkout stays up for up to 10 minutes after a stop, so its
-  caches go back when it powers off, and a reopen before then keeps them on
-  the session. The server writes the member's new caches in the background,
-  and a VM that starts again before that is done first copies its own cache
-  disk. An idle sleep does not promote them. Caches over 20 GiB are dropped,
-  and so are a member's newest caches once no VM has used them for 7 days;
-  the next session then starts empty. An Isolated session's caches never go
-  back.
+  layer over the member's newest caches, made when the session is created
+  and at each start after a stop, so sessions share those caches' blocks and
+  each holds only what it wrote. The layer holds at most 32 GiB, and the VM
+  deletes the least recently used Go build cache files while it is more
+  than half full ([environment-home.md](environment-home.md#tool-caches)). A
+  session's caches become the member's newest when its VM stops for good:
+  it is stopped, or deleted while stopped
+  or saved. A VM that holds its session's checkout stays up for up to 10
+  minutes after a stop, so its caches go back when it powers off, and a
+  reopen before then keeps them on the session. The server writes the
+  member's new caches in the background. A stopped VM keeps no cache disk,
+  so a session that starts again finds the member's newest caches, not
+  always its own: they did not go back if the session added nothing to them
+  (the VM counts as many free blocks and inodes on them as when it first
+  started on them), if another session's went back after this one started,
+  if the stop had to kill the VM, or if the start or a server restart came
+  before the write finished. Nor did they if writing them could leave
+  the data filesystem with less free than its reserve (`--min-free-disk`)
+  plus 4 GiB, the level below which the server starts deleting stopped
+  sessions' state: the member's newest caches stay as they were, and the
+  server log gives the sizes. The session's tools then download and build
+  again. A sleeping session's VM keeps its cache disk and promotes nothing
+  until it is stopped: when the session is closed, or when its saved memory
+  is deleted because disk space was low
+  ([failure-handling.md](failure-handling.md#recover-from-disk-pressure)).
+  Caches over 20 GiB are dropped, and so are a member's newest caches once
+  no VM has used them for 7 days; the next session then starts empty. An
+  Isolated session's caches never go back.
 - The agent's program loads from a read-only disk the server builds for
   each version the home holds ([vm-guest.md](vm-guest.md#agent-programs)).
   omp (296 MB), Claude Code (377 MB) and its ACP adapter (299 MB) take
@@ -520,7 +538,7 @@ What changes:
 - An idle session's VM is paused in memory, and saved to disk when the
   host needs that memory or after an hour, with every process
   ([Sessions in VMs](failure-handling.md#sessions-in-vms)), and closing a
-  session stops its VM, which keeps its disks
+  session stops its VM, which keeps its disks except the cache disk
   ([Relaunching a closed session](failure-handling.md#relaunching-a-closed-session)). Closing a
   session while it is asleep wakes it first, so its final commit has its
   uncommitted changes.

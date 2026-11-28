@@ -16,6 +16,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/codexapp"
 	"github.com/3xDevOps/cloudfield/internal/codexapp/codexmock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/events"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
 
@@ -86,12 +87,15 @@ func dialed(t *testing.T, srv *codexmock.Server, n int) {
 	waitFor(t, "the client to connect", func() bool { return len(srv.Requests("thread/loaded/list")) >= n })
 }
 
-func newCodexEnv(t *testing.T) (*testEnv, *codexRuntime, *fakeCoordinator) {
+func newCodexEnv(t *testing.T, opts ...func(*Config)) (*testEnv, *codexRuntime, *fakeCoordinator) {
 	t.Helper()
 	rt := &codexRuntime{fakeRuntime: newFakeRuntime(), servers: make(map[runtime.ID]*codexmock.Server)}
 	e := newTestEnv(t, func(cfg *Config) {
 		cfg.ServerBinary = fakeServerBinary(t, "#!/bin/sh\necho aether\n")
 		cfg.Runtime = rt
+		for _, opt := range opts {
+			opt(cfg)
+		}
 	})
 	e.rt = rt.fakeRuntime
 	coord, _ := withCoordination(t, e)
@@ -227,7 +231,7 @@ func TestStandardCodexKeepsAQuestionThroughAMailTurn(t *testing.T) {
 		defer e.sched.mu.Unlock()
 		return e.sched.runs[run.ID].agentReport.State == agentstatus.Working
 	})
-	srv.EndTurn("thread-1")
+	srv.EndTurn("thread-1", "completed")
 	waitFor(t, "the mail turn's end", func() bool {
 		e.sched.mu.Lock()
 		defer e.sched.mu.Unlock()
@@ -243,6 +247,212 @@ func TestStandardCodexKeepsAQuestionThroughAMailTurn(t *testing.T) {
 	e.waitStoreStatus(t, run.ID, domain.RunRunning)
 	if reason := e.idleReason(run.ID); reason != "" {
 		t.Fatalf("idle reason %q after the answer reached Codex, want none", reason)
+	}
+}
+
+// A Standard Codex subsession's finished turn forwards the last agent
+// message of its thread. A turn cut off with Esc forwards nothing.
+func TestStandardCodexChildForwardsItsLastMessage(t *testing.T) {
+	shortProvisionalGrace(t)
+	e, rt, coord := newCodexEnv(t)
+	parent, _ := e.launchFake(t, "parent")
+	child := launchChildRun(t, e, parent, "codex", domain.LaunchTUI)
+	srv, _ := rt.bridge(t, 1)
+	dialed(t, srv, 1)
+	srv.StartThread("thread-1", false, "")
+	waitFor(t, "the connected client", func() bool { return e.sched.Wakeable(child.ID) })
+	prompt := func() {
+		t.Helper()
+		if _, err := e.sched.Inject(t.Context(), child.ID, e.member.ID, domain.AgentPrompt{Text: "say pong"}, false, nil); err != nil {
+			t.Fatal(err)
+		}
+		e.waitAgentWorking(t, child.ID)
+	}
+	prompt()
+	srv.EndTurn("thread-1", "interrupted", "looking")
+	e.waitStoreStatus(t, child.ID, domain.RunNeedsAttention)
+	time.Sleep(provisionalGrace * 3 / 2)
+	if calls := coord.provisionalReports(); len(calls) != 0 {
+		t.Fatalf("provisional reports %+v after a turn cut off, want none", calls)
+	}
+	prompt()
+	srv.EndTurn("thread-1", "completed", "pong")
+	waitFor(t, "the thread's last message at the parent", func() bool {
+		calls := coord.provisionalReports()
+		return len(calls) == 1 && calls[0].run == child.ID && calls[0].message == "pong"
+	})
+}
+
+// A Standard Codex turn cut off with Esc is not asked for a report, nor is one
+// with no agent message, as a !command or /compact lists. A turn the agent
+// answered without a report is asked once, in a turn its app-server starts,
+// and a parent gets the asked turn's message.
+func TestStandardCodexTurnWithoutAReportIsAskedOnce(t *testing.T) {
+	shortProvisionalGrace(t)
+	e, rt, coord := newCodexEnv(t)
+	coord.remind = e.sched.Wake
+	parent, _ := e.launchFake(t, "parent")
+	child := launchChildRun(t, e, parent, "codex", domain.LaunchTUI)
+	srv, _ := rt.bridge(t, 1)
+	dialed(t, srv, 1)
+	srv.StartThread("thread-1", false, "")
+	waitFor(t, "the connected client", func() bool { return e.sched.Wakeable(child.ID) })
+	prompt := func() *domain.Run {
+		t.Helper()
+		if _, err := e.sched.Inject(t.Context(), child.ID, e.member.ID, domain.AgentPrompt{Text: "say pong"}, false, nil); err != nil {
+			t.Fatal(err)
+		}
+		e.waitAgentWorking(t, child.ID)
+		return e.waitStoreStatus(t, child.ID, domain.RunRunning)
+	}
+
+	prompt()
+	srv.EndTurn("thread-1", "interrupted", "looking")
+	e.waitStoreStatus(t, child.ID, domain.RunNeedsAttention)
+	prompt()
+	srv.EndTurn("thread-1", "completed")
+	e.waitStoreStatus(t, child.ID, domain.RunNeedsAttention)
+
+	working := prompt()
+	srv.EndTurn("thread-1", "completed", "pong")
+	waitFor(t, "the reminder's turn", func() bool { return len(srv.Requests("turn/start")) == 4 })
+	if r := e.waitStoreStatus(t, child.ID, domain.RunRunning); r.StatusSeq != working.StatusSeq {
+		t.Fatalf("status seq %d once reminded, want %d: the asked turn's end is not shown", r.StatusSeq, working.StatusSeq)
+	}
+	srv.EndTurn("thread-1", "completed", "reported")
+	e.waitStoreStatus(t, child.ID, domain.RunNeedsAttention)
+	want := []string{"say pong", "say pong", "say pong", reminderPrefix + " (answered, waiting, needs-input, blocked, success or failure) before ending the turn."}
+	if got := promptTexts(t, srv.Requests("turn/start")); !slices.Equal(got, want) {
+		t.Fatalf("turn/start inputs = %q, want %q", got, want)
+	}
+	waitFor(t, "the asked turn's message at the parent", func() bool {
+		calls := coord.provisionalReports()
+		return len(calls) > 0 && calls[len(calls)-1].run == child.ID && calls[len(calls)-1].message == "pong"
+	})
+}
+
+// The asked turn completed, so a parent gets its message even when the
+// reminder's turn is cut off with Esc or fails.
+func TestStandardCodexAskedTurnForwardsWhenItsReminderDoesNotFinish(t *testing.T) {
+	shortProvisionalGrace(t)
+	for name, end := range map[string]func(*codexmock.Server){
+		"cut off": func(srv *codexmock.Server) { srv.EndTurn("thread-1", "interrupted") },
+		"failed":  func(srv *codexmock.Server) { srv.SetStatus("thread-1", "systemError") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			e, rt, coord := newCodexEnv(t)
+			coord.remind = e.sched.Wake
+			parent, _ := e.launchFake(t, "parent")
+			child := launchChildRun(t, e, parent, "codex", domain.LaunchTUI)
+			srv, _ := rt.bridge(t, 1)
+			dialed(t, srv, 1)
+			srv.StartThread("thread-1", false, "")
+			waitFor(t, "the connected client", func() bool { return e.sched.Wakeable(child.ID) })
+			if _, err := e.sched.Inject(t.Context(), child.ID, e.member.ID, domain.AgentPrompt{Text: "say pong"}, false, nil); err != nil {
+				t.Fatal(err)
+			}
+			e.waitAgentWorking(t, child.ID)
+			srv.EndTurn("thread-1", "completed", "pong")
+			waitFor(t, "the reminder's turn", func() bool { return len(srv.Requests("turn/start")) == 2 })
+			end(srv)
+			e.waitStoreStatus(t, child.ID, domain.RunNeedsAttention)
+			waitFor(t, "the asked turn's message at the parent", func() bool {
+				calls := coord.provisionalReports()
+				return len(calls) == 1 && calls[0].run == child.ID && calls[0].message == "pong"
+			})
+		})
+	}
+}
+
+// A turn that starts before the reminder is sent, as a follow-up queued in the
+// terminal does, is not asked about the turn before it: that turn's end is
+// shown, and the new turn is asked for its own report at its end.
+func TestStandardCodexReminderJoinsNoLaterTurn(t *testing.T) {
+	shortProvisionalGrace(t)
+	e, rt, coord := newCodexEnv(t)
+	parent, _ := e.launchFake(t, "parent")
+	child := launchChildRun(t, e, parent, "codex", domain.LaunchTUI)
+	srv, _ := rt.bridge(t, 1)
+	dialed(t, srv, 1)
+	srv.StartThread("thread-1", false, "")
+	waitFor(t, "the connected client", func() bool { return e.sched.Wakeable(child.ID) })
+	var followUp sync.Once
+	reminded := make(chan error, 2)
+	coord.remind = func(ctx context.Context, run domain.RunID, reminder string) error {
+		followUp.Do(func() {
+			if _, err := e.sched.Inject(ctx, run, e.member.ID, domain.AgentPrompt{Text: "say ping"}, false, nil); err != nil {
+				t.Errorf("Inject: %v", err)
+			}
+		})
+		err := e.sched.Wake(ctx, run, reminder)
+		reminded <- err
+		return err
+	}
+	if _, err := e.sched.Inject(t.Context(), child.ID, e.member.ID, domain.AgentPrompt{Text: "say pong"}, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	e.waitAgentWorking(t, child.ID)
+
+	srv.EndTurn("thread-1", "completed", "pong")
+	waitFor(t, "the asked turn's reminder", func() bool { return len(reminded) == 1 })
+	if err := <-reminded; err == nil {
+		t.Fatalf("the reminder was sent into the follow-up's turn: turn/steer = %s", srv.Requests("turn/steer"))
+	}
+	srv.EndTurn("thread-1", "completed", "ping")
+	waitFor(t, "the follow-up's reminder", func() bool { return len(reminded) == 1 })
+	if err := <-reminded; err != nil {
+		t.Fatalf("the follow-up's reminder: %v", err)
+	}
+	srv.EndTurn("thread-1", "completed", "reported")
+	e.waitStoreStatus(t, child.ID, domain.RunNeedsAttention)
+	want := []string{"say pong", "say ping", reminderPrefix + " (answered, waiting, needs-input, blocked, success or failure) before ending the turn."}
+	if got := promptTexts(t, srv.Requests("turn/start")); !slices.Equal(got, want) {
+		t.Fatalf("turn/start inputs = %q, want %q", got, want)
+	}
+	waitFor(t, "the follow-up's message at the parent", func() bool {
+		calls := coord.provisionalReports()
+		return len(calls) > 0 && calls[len(calls)-1].run == child.ID && calls[len(calls)-1].message == "ping"
+	})
+}
+
+// A restarted server finds a Standard Codex thread idle after a turn nobody
+// reported. No turn ends there, so the session is not asked.
+func TestRecoveredStandardCodexIsNotAskedForAnOldTurn(t *testing.T) {
+	t.Parallel()
+	e, rt, coord := newCodexEnv(t)
+	run, _ := e.launchOn(t, "codex")
+	srv, _ := rt.bridge(t, 1)
+	dialed(t, srv, 1)
+	srv.StartThread("thread-1", false, "")
+	waitFor(t, "the connected client", func() bool { return e.sched.Wakeable(run.ID) })
+	if _, err := e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "say pong"}, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	e.waitAgentWorking(t, run.ID)
+	srv.EndTurn("thread-1", "completed", "pong")
+	waitFor(t, "the turn's end", func() bool { return len(coord.idleWakeRuns()) == 2 })
+	reads := len(srv.Requests("thread/turns/list"))
+	binDir := e.sched.coordinationSeam().binDir
+	if err := e.sched.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	cfg := e.cfg
+	cfg.PTY = newFakePTY()
+	s2, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s2.Close() })
+	s2.UseCoordination(coord, binDir)
+	coord.remind = s2.Wake
+	startScheduler(t, s2)
+	waitFor(t, "the idle thread's report", func() bool { return len(coord.idleWakeRuns()) == 3 })
+	if starts := srv.Requests("turn/start"); len(starts) != 1 {
+		t.Fatalf("turn/start = %s, want the member's prompt only", starts)
+	}
+	if got := len(srv.Requests("thread/turns/list")); got != reads {
+		t.Fatalf("thread/turns/list read %d times after the restart, want no read of a thread no turn ended on", got-reads)
 	}
 }
 
@@ -305,6 +515,137 @@ func TestStandardCodexWithoutItsAppServerShowsWhy(t *testing.T) {
 	if len(e.pty.injects) != 1 || e.pty.injects[0].message != "hello" {
 		t.Fatalf("terminal injects = %+v, want the message typed into the terminal", e.pty.injects)
 	}
+}
+
+func TestInterruptStopsAStandardCodexTurnAndTypesNoKeyElsewhere(t *testing.T) {
+	t.Parallel()
+	e, rt, _ := newCodexEnv(t)
+	run, _ := e.launchOn(t, "codex")
+	srv, _ := rt.bridge(t, 1)
+	dialed(t, srv, 1)
+	srv.StartThread("thread-1", false, "")
+	waitFor(t, "the connected client", func() bool { return e.sched.Wakeable(run.ID) })
+	if _, err := e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "add a test"}, false, nil); err != nil {
+		t.Fatalf("Inject: %v", err)
+	}
+	e.waitStoreStatus(t, run.ID, domain.RunRunning)
+	sub := e.subscribe(t)
+	if err := e.interrupt(t, run); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	if ev := waitTimelineEvent(t, sub, run.ID, events.TimelineNote); ev.ActorID != e.member.ID || ev.Payload.(events.TimelinePayload).Message != "sent an interrupt" {
+		t.Fatalf("timeline note = %+v, want the interrupt recorded with who sent it", ev)
+	}
+	interrupts := srv.Requests("turn/interrupt")
+	if len(interrupts) != 1 || string(interrupts[0]) != `{"threadId":"thread-1","turnId":"turn-1"}` {
+		t.Fatalf("turn/interrupt = %s, want one for turn-1 of thread-1", interrupts)
+	}
+	e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
+
+	other, _ := e.launchOn(t, "claude")
+	err := e.interrupt(t, other)
+	if !errors.Is(err, ErrNoInterrupt) || !strings.Contains(err.Error(), "cloudfield attach "+string(other.ID)) {
+		t.Fatalf("Interrupt of a Standard Claude Code session = %v, want ErrNoInterrupt naming cloudfield attach", err)
+	}
+	e.pty.mu.Lock()
+	defer e.pty.mu.Unlock()
+	if len(e.pty.injects) != 0 {
+		t.Fatalf("terminal injects = %+v, want no key typed into a terminal", e.pty.injects)
+	}
+}
+
+func TestInterruptOfAStandardCodexSessionItCannotReachGivesTheRealReason(t *testing.T) {
+	t.Parallel()
+	e, rt, _ := newCodexEnv(t)
+	rt.startErr = errors.New("no such container")
+	run, _ := e.launchOn(t, "codex")
+	e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
+	sub := e.subscribe(t)
+	if err := e.interrupt(t, run); !errors.Is(err, ErrAppServerUnavailable) {
+		t.Fatalf("Interrupt with no app-server client = %v, want ErrAppServerUnavailable", err)
+	}
+	if err := e.sched.Pause(t.Context(), run.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.interrupt(t, run); !errors.Is(err, ErrInvalidTransition) || !strings.Contains(err.Error(), "the session is paused") {
+		t.Fatalf("Interrupt of a paused session = %v, want it refused as paused", err)
+	}
+	e.sched.mu.Lock()
+	e.sched.runs[run.ID].asleepSince = time.Now().UTC()
+	e.sched.mu.Unlock()
+	if err := e.interrupt(t, run); err != nil {
+		t.Fatalf("Interrupt of a sleeping session = %v, want no turn to stop", err)
+	}
+	e.sched.mu.Lock()
+	e.sched.runs[run.ID].memorySaved = 1
+	e.sched.mu.Unlock()
+	if err := e.interrupt(t, run); !errors.Is(err, ErrInvalidTransition) || !strings.Contains(err.Error(), "cloudfield resume "+string(run.ID)) {
+		t.Fatalf("Interrupt of a session saved while it worked = %v, want it refused naming cloudfield resume", err)
+	}
+	e.sched.mu.Lock()
+	e.sched.runs[run.ID].memorySaved, e.sched.runs[run.ID].activity = 0, domain.ActivityWorking
+	e.sched.mu.Unlock()
+	if err := e.interrupt(t, run); !errors.Is(err, ErrInvalidTransition) || !strings.Contains(err.Error(), "cloudfield resume "+string(run.ID)) {
+		t.Fatalf("Interrupt of a working session whose failed wake dropped the guard's mark = %v, want it refused naming cloudfield resume", err)
+	}
+	for _, status := range []domain.RunStatus{domain.RunProvisioning, domain.RunCompleted} {
+		gone := *run
+		gone.Status = status
+		if err := e.interrupt(t, &gone); !errors.Is(err, ErrNoLiveEnvironment) || !strings.Contains(err.Error(), "the session is "+string(status)) {
+			t.Fatalf("Interrupt of a %s session = %v, want ErrNoLiveEnvironment naming its status", status, err)
+		}
+	}
+	marker, err := e.bus.Publish(t.Context(), events.Event{
+		WorkspaceID: e.ws.ID, RunID: run.ID,
+		Payload: events.TimelinePayload{Kind: events.TimelineNote, Message: "end of interrupts"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded := 0
+	for ev := waitTimelineEvent(t, sub, run.ID, events.TimelineNote); ev.ID != marker.ID; ev = waitTimelineEvent(t, sub, run.ID, events.TimelineNote) {
+		if ev.Payload.(events.TimelinePayload).Message == "sent an interrupt" {
+			recorded++
+		}
+	}
+	if recorded != 1 {
+		t.Fatalf("interrupts on the timeline = %d, want only the one that was not refused", recorded)
+	}
+}
+
+func TestInterruptOfAStandardCodexVMTheMemoryBrakeFrozeIsRefusedUnasked(t *testing.T) {
+	t.Parallel()
+	fr := &frozenVMs{}
+	e, rt, _ := newCodexEnv(t, func(cfg *Config) {
+		cfg.Runtime = struct {
+			*codexRuntime
+			*frozenVMs
+		}{cfg.Runtime.(*codexRuntime), fr}
+		cfg.hostMemory = func() (total, available uint64, err error) { return 32 << 30, 24 << 30, nil }
+	})
+	run, c := e.launchOn(t, "codex")
+	srv, _ := rt.bridge(t, 1)
+	dialed(t, srv, 1)
+	srv.StartThread("thread-1", false, "")
+	waitFor(t, "the connected client", func() bool { return e.sched.Wakeable(run.ID) })
+	fr.mu.Lock()
+	fr.frozen = []runtime.ID{c.id}
+	fr.mu.Unlock()
+	if err := e.interrupt(t, run); !errors.Is(err, ErrInvalidTransition) || !strings.Contains(err.Error(), "froze the session's VM") {
+		t.Fatalf("Interrupt of a session whose VM the memory brake froze = %v, want it refused as frozen", err)
+	}
+	if asked := srv.Requests("thread/turns/list"); len(asked) != 0 {
+		t.Fatalf("requests to the frozen app-server = %s, want none", asked)
+	}
+}
+
+func (e *testEnv) interrupt(t *testing.T, run *domain.Run) error {
+	t.Helper()
+	stopped, err := e.sched.Interrupt(t.Context(), run, e.member.ID)
+	if err != nil {
+		return err
+	}
+	return stopped()
 }
 
 func promptTexts(t *testing.T, params []json.RawMessage) []string {

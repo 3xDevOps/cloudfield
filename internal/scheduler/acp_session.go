@@ -41,8 +41,12 @@ type ACPStream struct {
 	// that opened with no live session: the next session started, or the
 	// closing session it found has ended.
 	Started <-chan struct{}
-	State   *acphost.State
-	Cancel  func()
+	// Starting is a stream with no live session yet because the launch's
+	// open of the first one is still running; a prompt sent now is held
+	// for it.
+	Starting bool
+	State    *acphost.State
+	Cancel   func()
 }
 
 func (s *Scheduler) ACPSubscribe(run domain.RunID, afterSeq int64) (ACPStream, error) {
@@ -60,7 +64,7 @@ func (s *Scheduler) ACPSubscribe(run domain.RunID, afterSeq int64) (ACPStream, e
 		// The session is closing: the viewer resubscribes once it is gone.
 		started = sess.Done()
 	}
-	out := ACPStream{Started: started, Cancel: release}
+	out := ACPStream{Started: started, Cancel: release, Starting: s.acp.starting(run)}
 	log, err := s.openItemLog(run)
 	if err != nil {
 		release()
@@ -163,7 +167,7 @@ func (s *Scheduler) ACPAnswer(run domain.RunID, requestID, optionID string, valu
 		return err
 	}
 	defer awake()
-	sess, err := s.acp.live(context.Background(), run)
+	sess, err := s.acp.liveStarted(context.Background(), run)
 	if err != nil {
 		return err
 	}
@@ -179,11 +183,70 @@ func (s *Scheduler) ACPCancel(ctx context.Context, run domain.RunID) error {
 		return err
 	}
 	defer awake()
-	sess, err := s.acp.live(ctx, run)
+	sess, err := s.acp.liveStarted(ctx, run)
 	if err != nil {
 		return err
 	}
 	return sess.Cancel(ctx)
+}
+
+// ErrNoInterrupt refuses an agent that stops a turn only on a key pressed
+// in its own terminal: typing a guessed key there could quit it instead.
+var ErrNoInterrupt = errors.New("scheduler: the session's agent takes an interrupt only in its own terminal")
+
+// Interrupt asks run's agent to stop the turn it is in: an Enhanced
+// session's over ACP, a Standard Codex terminal's through its app-server.
+// stopped waits for that app-server's answer, for the caller to take
+// outside control admission. A session that fell asleep idle has no turn to
+// stop.
+func (s *Scheduler) Interrupt(ctx context.Context, run *domain.Run, actor domain.MemberID) (stopped func() error, err error) {
+	defer func() {
+		if err != nil {
+			return
+		}
+		// The interrupt is accepted, so recording who sent it must not
+		// depend on the caller staying connected.
+		recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), steerRecordTimeout)
+		defer cancel()
+		s.publishTimeline(recordCtx, run.WorkspaceID, run.ID, actor, events.TimelineNote, "sent an interrupt")
+	}()
+	s.mu.Lock()
+	var appServer, sleeping, asleep, midTurn, paused bool
+	var cid runtime.ID
+	if entry := s.runs[run.ID]; entry != nil {
+		appServer, sleeping, paused, cid = entry.appServer, entry.sleeping, entry.paused, entry.containerID
+		asleep = !entry.asleepSince.IsZero()
+		// A failed wake drops the memory guard's mark and saves a working
+		// VM again with its turn.
+		midTurn = asleep && (entry.memorySaved > 0 || entry.activity == domain.ActivityWorking)
+	}
+	s.mu.Unlock()
+	stopped = func() error { return nil }
+	switch {
+	case !run.ACP && run.Status != domain.RunRunning && run.Status != domain.RunNeedsAttention:
+		return nil, fmt.Errorf("%w: the session is %s", ErrNoLiveEnvironment, run.Status)
+	case !run.ACP && !appServer:
+		return nil, fmt.Errorf("%w: run cloudfield attach %s and press the agent's own interrupt key", ErrNoInterrupt, run.ID)
+	case midTurn:
+		return nil, fmt.Errorf("%w: the session was saved to disk under memory pressure, and any turn it was in carries on when it wakes: run cloudfield resume %s first", ErrInvalidTransition, run.ID)
+	case run.ACP:
+		return stopped, s.ACPCancel(ctx, run.ID)
+	case sleeping:
+		return nil, errFallingAsleep
+	case asleep:
+		return stopped, nil
+	case paused:
+		return nil, fmt.Errorf("%w: the session is paused: run cloudfield resume %s first", ErrInvalidTransition, run.ID)
+	case s.vmFrozen(cid):
+		// A frozen app-server answers nothing, and the caller holds control
+		// admission until this returns.
+		return nil, fmt.Errorf("%w: the server froze the session's VM while it is short of memory, and it carries on by itself once memory is free again: interrupt it then", ErrInvalidTransition)
+	}
+	client := s.appServer.connected(run.ID)
+	if client == nil {
+		return nil, ErrAppServerUnavailable
+	}
+	return client.Interrupt(ctx)
 }
 
 func (s *Scheduler) ACPSetOption(ctx context.Context, run domain.RunID, optionID string, value any) error {
@@ -192,6 +255,9 @@ func (s *Scheduler) ACPSetOption(ctx context.Context, run domain.RunID, optionID
 		return err
 	}
 	defer awake()
+	if err = s.optionsAnswered(run); err != nil {
+		return err
+	}
 	sess, err := s.acp.live(ctx, run)
 	if err != nil {
 		return err
@@ -250,6 +316,83 @@ func (s *Scheduler) ACPSetOption(ctx context.Context, run domain.RunID, optionID
 	return nil
 }
 
+// optionsAnswered refuses a session that is paused or whose VM is frozen:
+// its agent answers nothing, and the caller holds control admission until
+// its call returns. It goes before the live session, which a session paused
+// across a server restart lacks until its resume.
+func (s *Scheduler) optionsAnswered(run domain.RunID) error {
+	s.mu.Lock()
+	var paused bool
+	var cid runtime.ID
+	if entry := s.runs[run]; entry != nil {
+		paused, cid = entry.paused, entry.containerID
+	}
+	s.mu.Unlock()
+	switch {
+	case paused:
+		return fmt.Errorf("%w: the session is paused: run cloudfield resume %s first", ErrInvalidTransition, run)
+	case s.vmFrozen(cid):
+		return fmt.Errorf("%w: the server froze the session's VM while it is short of memory, and it carries on by itself once memory is free again: change it then", ErrInvalidTransition)
+	}
+	return nil
+}
+
+// ErrNoSuchOption refuses a model or an effort for a session whose agent
+// offers no option that sets it.
+var ErrNoSuchOption = errors.New("scheduler: the session's agent offers no such option")
+
+// ACPSetModelEffort is ACPSetOption for a caller that names a model, an
+// effort or both and has no option ids; an empty one is left as it is. It
+// returns the two as the agent reports them afterwards, which can differ
+// from the values asked for, and records what it set on the timeline with
+// actor.
+func (s *Scheduler) ACPSetModelEffort(ctx context.Context, run *domain.Run, actor domain.MemberID, model, effort string) (nowModel, nowEffort string, err error) {
+	awake, err := s.holdAwakeNow(run.ID)
+	if err != nil {
+		return "", "", err
+	}
+	defer awake()
+	if err = s.optionsAnswered(run.ID); err != nil {
+		return "", "", err
+	}
+	sess, err := s.acp.live(ctx, run.ID)
+	if err != nil {
+		return "", "", err
+	}
+	var set []string
+	defer func() {
+		if len(set) == 0 {
+			return
+		}
+		if err != nil {
+			err = fmt.Errorf("%w; the session is now set to %s", err, strings.Join(set, ", "))
+		}
+		// The agent already has the change, so recording who made it must
+		// not depend on the caller staying connected.
+		recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), steerRecordTimeout)
+		defer cancel()
+		s.publishTimeline(recordCtx, run.WorkspaceID, run.ID, actor, events.TimelineNote, "set "+strings.Join(set, ", "))
+	}()
+	// The model goes first: the levels an agent offers can depend on it.
+	for _, option := range []struct {
+		name, value string
+		id, now     func() string
+	}{{"model", model, sess.ModelOptionID, sess.Model}, {"effort", effort, sess.EffortOptionID, sess.Effort}} {
+		if option.value == "" {
+			continue
+		}
+		id := option.id()
+		if id == "" {
+			return "", "", fmt.Errorf("%w: %s", ErrNoSuchOption, option.name)
+		}
+		if err = s.ACPSetOption(ctx, run.ID, id, option.value); err != nil {
+			return "", "", fmt.Errorf("set the session's %s: %w", option.name, err)
+		}
+		set = append(set, option.name+" "+option.now())
+	}
+	return sess.Model(), sess.Effort(), nil
+}
+
 var errACPBusy = errors.New("scheduler: the Enhanced agent is busy")
 
 // Wakeable reports whether the server can prompt run's agent session: an
@@ -269,7 +412,8 @@ func (s *Scheduler) Wakeable(run domain.RunID) bool {
 // command its container has. The turn-end report reminder keeps the old
 // name: released dashboards recognise it by its lead.
 func (s *Scheduler) Wake(ctx context.Context, run domain.RunID, prompt string) error {
-	if !strings.HasPrefix(prompt, coordhooks.ReportReminderLead) {
+	reminder := strings.HasPrefix(prompt, coordhooks.ReportReminderLead)
+	if !reminder {
 		s.mu.Lock()
 		var cid runtime.ID
 		if entry := s.runs[run]; entry != nil {
@@ -291,7 +435,7 @@ func (s *Scheduler) Wake(ctx context.Context, run domain.RunID, prompt string) e
 	if !s.attachedAppServer(run) {
 		return s.WakeEnhanced(ctx, run, prompt)
 	}
-	return s.appServer.wake(ctx, run, prompt)
+	return s.appServer.wake(ctx, run, prompt, reminder)
 }
 
 // asleepStandardVM reports an open Standard session whose VM is saved or
@@ -331,9 +475,15 @@ func (s *Scheduler) attachedAppServer(run domain.RunID) bool {
 func (s *Scheduler) IdleEnhanced(run domain.RunID) bool {
 	s.mu.Lock()
 	entry := s.runs[run]
+	// A move stops the agent it replaces, and its continuation goes first;
+	// its turn's end wakes again.
+	owed := entry != nil && (entry.moving || entry.accountSwap != nil && entry.accountSwap.Continuation != "")
 	asleep := entry != nil && entry.launchMode == domain.LaunchACP && !entry.retained && (entry.sleeping || !entry.asleepSince.IsZero())
 	enhanced := entry != nil && entry.launchMode == domain.LaunchACP && !entry.paused && entry.switching == ""
 	s.mu.Unlock()
+	if owed {
+		return false
+	}
 	if asleep {
 		return true
 	}

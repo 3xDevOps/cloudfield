@@ -119,6 +119,8 @@ func main() {
 		exitOn(dictationCmd(args))
 	case "vm":
 		exitOn(vmCmd(args))
+	case "status":
+		exitOn(statusCmd(args))
 	default:
 		_, _ = fmt.Fprintf(os.Stderr, "aether-server: unknown command %q\n", cmd)
 		usage(os.Stderr)
@@ -142,6 +144,19 @@ show or change the options file serve reads; set and edit need root
 
 example:
   sudo cloudfield-server config set edge-access approved-devices
+`,
+	"status": `usage: cloudfield-server status [--config <file>]
+
+print the machine as the server measures it before it starts or wakes a
+session: memory against the floor, the memory stall, the data filesystem
+against its reserve, the session VMs, the last refused launch and wake with
+admission's refusal, and the counts of the last 24 hours and 14 days. It
+measures memory, the stall and the data filesystem itself and never changes
+the database, so it prints those while the server cannot answer
+(docs/failure-handling.md)
+
+example:
+  sudo cloudfield-server status
 `,
 	"device": `usage: cloudfield-server device approve <code> [--config <file>]
        cloudfield-server device review [--config <file>]
@@ -244,6 +259,7 @@ commands:
   slack    setup | remove: store or remove the Slack bot's tokens (docs/slack.md)
   dictation install [--gpu] | status | remove: speech-to-text for the dashboard (docs/dictation.md)
   vm       install: what sessions in VMs need (session-runtime vm)
+  status   memory, disk and session VMs against their limits, and what was refused for want of them
   version  print the version (also --version)
 
 serve and install options, which are also the config file keys:
@@ -254,6 +270,8 @@ run "cloudfield-server serve -h" for what each one does, or keep them in %s
 }
 
 type serveOptions struct {
+	// config is the config file as loadOptions read it, before flags.
+	config               map[string]string
 	dataDir              *string
 	addr                 *string
 	webPort              *int
@@ -333,7 +351,7 @@ func serveFlags(fs *flag.FlagSet) *serveOptions {
 		"how long an idle Enhanced session of an agent that can resume its conversation keeps its container running before it is stopped until its next use (0 = never); "+
 			"unset, an idle session VM is saved to disk after "+scheduler.DefaultVMSleepAfter.String()+" instead")
 	o.minFreeDisk = fs.Int64("min-free-disk", 0,
-		"free-byte reserve on data/runtime filesystems (0 = automatic 5-20GiB, negative = disable disk admission)")
+		"free-byte reserve on data/runtime filesystems (0 = automatic 5-20GiB, negative = disable disk admission and the free-space check on cache promotions)")
 	o.runCPUs = new(runCPUValue)
 	fs.Var(o.runCPUs, "run-cpus", "CPU ceiling per session/member environment (0 = automatic, up to 8 host CPUs)")
 	o.runMemory = new(runCountValue)
@@ -363,7 +381,7 @@ func serve(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	from, configErr := applyConfigFile(fs, *configPath, *configPath == serversetup.DefaultConfigPath)
+	_, from, configErr := applyConfigFile(fs, *configPath, *configPath == serversetup.DefaultConfigPath)
 	if configErr != nil {
 		return configErr
 	}
@@ -415,6 +433,7 @@ func serve(args []string) error {
 		EdgeURL:      string(*o.edgeURL),
 		EdgeAccess:   edgeproto.AccessPolicy(*o.edgeAccess),
 		EdgeReviewer: *o.edgeReviewer,
+		ConfigPath:   *configPath,
 
 		CoordinationDisabled: !*o.conflictCoordination,
 
@@ -524,21 +543,21 @@ func commitWhenServing(ctx context.Context, srv *server.Server, trial *serverupd
 // flag always wins. optional tolerates a missing file, which is the case for
 // the default path - the shipped unit names it, and an install that never
 // wrote a config runs on the flag defaults. Anywhere else a missing file is
-// a typo worth stopping for. It returns the suffix the startup line uses to
-// name the file that is live.
-func applyConfigFile(fs *flag.FlagSet, path string, optional bool) (string, error) {
+// a typo worth stopping for. It returns the values it read and the suffix
+// the startup line uses to name the file that is live.
+func applyConfigFile(fs *flag.FlagSet, path string, optional bool) (map[string]string, string, error) {
 	if !optional {
 		if _, err := os.Stat(path); err != nil {
-			return "", fmt.Errorf("--config: %w", err)
+			return nil, "", fmt.Errorf("--config: %w", err)
 		}
 	}
 	values, err := serversetup.Load(path)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	retired, err := serversetup.Apply(fs, values)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	// A key left over from a removed feature is worth saying out loud once
 	// - the operator set it deliberately and it is no longer doing
@@ -547,9 +566,9 @@ func applyConfigFile(fs *flag.FlagSet, path string, optional bool) (string, erro
 		slog.Warn("config: option no longer exists and is ignored", "option", key, "file", path)
 	}
 	if len(values) == 0 {
-		return "", nil
+		return values, "", nil
 	}
-	return " from " + path, nil
+	return values, " from " + path, nil
 }
 
 // linkSecondNames gives this binary, the aether beside it and, as root,

@@ -881,7 +881,9 @@ describe('the Enhanced session view', () => {
     expect(await screen.findByText(/stderr: boom/, { selector: 'pre' })).toBeDefined()
     expect(screen.getByRole('button', { name: 'Retry Enhanced' })).toBeDefined()
     await userEvent.click(screen.getByRole('button', { name: 'Open in Standard' }))
-    await userEvent.click(await screen.findByRole('button', { name: 'Start a Standard session' }))
+    const start = await screen.findByRole<HTMLButtonElement>('button', { name: 'Start a Standard session' })
+    await waitFor(() => expect(start.disabled).toBe(false))
+    await userEvent.click(start)
     await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ mode: 'tui', model: 'opus', effort: 'high' })))
   })
 })
@@ -909,6 +911,37 @@ describe('the Enhanced composer draft', () => {
     acpSocket().open(lease)
     return view
   }
+
+  it('keeps the focused box and what is typed when the session falls asleep and wakes, whichever of the stream and the event comes first', async () => {
+    const ack = (live: boolean) => act(() => useStore.getState().acpAck('run_1', { ok: true, seq: 0, replay: 0, epoch: 0, live, has_control: true, state: live ? state() : undefined }))
+    const asleep = (since?: string) => act(() => useStore.getState().patchRun('run_1', { asleep_since: since }))
+    open()
+    acpSocket().open(lease)
+    const field = await box()
+    await userEvent.type(field, 'Round')
+    const steps = [
+      () => ack(false),
+      () => asleep('2026-11-11T09:00:00Z'),
+      () => asleep(),
+      () => drop('reconnecting'),
+      () => ack(true),
+      () => drop('live'),
+      () => drop('reconnecting'),
+      () => ack(false),
+      () => drop('live'),
+    ]
+    for (const [at, step] of steps.entries()) {
+      step()
+      expect(document.activeElement).toBe(field)
+      await userEvent.keyboard(String(at))
+    }
+    expect(field).toHaveProperty('value', 'Round012345678')
+    const refusal = 'scheduler: the Enhanced agent is not running'
+    vi.mocked(api.runInject).mockClear().mockRejectedValueOnce(new Error(refusal))
+    await userEvent.keyboard('{Enter}')
+    expect((await screen.findByRole('alert')).textContent).toContain(refusal)
+    expect(field).toHaveProperty('value', 'Round012345678')
+  })
 
   it('keeps each run\'s unsent prompt and images while another run or page is shown, until the prompt is sent', async () => {
     let uploaded = (_: { path: string }) => {}
@@ -980,6 +1013,26 @@ describe('the Enhanced composer draft', () => {
     act(() => settle.reject(new Error('acphost: agent connection closed')))
     expect((await screen.findByRole('alert')).textContent).toContain('acphost: agent connection closed')
     expect(await box()).toMatchObject({ value: 'Update the docs', readOnly: false })
+  })
+
+  it('refuses an image only when a live agent says it takes none', async () => {
+    const ack = (live: boolean) => act(() => useStore.getState().acpAck('run_1', { ok: true, seq: 0, replay: 0, epoch: 0, live, has_control: true, state: live ? state() : undefined }))
+    const unsupported = 'This agent does not support image prompts.'
+    open()
+    acpSocket().open(lease)
+    await userEvent.type(await box(), 'Round the totals')
+    await userEvent.upload(screen.getByLabelText('Choose files to attach'), new File(['png'], 'totals.png', { type: 'image/png' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', false))
+    ack(false)
+    expect(screen.queryByText(unsupported)).toBeNull()
+    const refusal = 'scheduler: the Enhanced agent is not running'
+    vi.mocked(api.runInject).mockClear().mockRejectedValueOnce(new Error(refusal))
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect((await screen.findByRole('alert')).textContent).toContain(refusal)
+    expect(vi.mocked(api.runInject).mock.calls[0]![3]).toMatchObject({ attachments: ['/home/alice/.aether/uploads/image.png'] })
+    ack(true)
+    expect(screen.getByText(unsupported)).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true)
   })
 
   it('waits for an upload that outlives its composer, so a resent prompt keeps its attachment and key', async () => {
@@ -1091,6 +1144,9 @@ describe('the Enhanced composer draft', () => {
     expect(waits()).toHaveLength(1)
     expect(waits()[0]!.className).toBe('sr-only')
     expect(footer.contains(waits()[0]!)).toBe(false)
+    const why = document.getElementById(field.getAttribute('aria-describedby')!)!
+    expect(why.textContent).toBe(reconnecting)
+    expect(why.className).not.toContain('sr-only')
     expect(footer.querySelectorAll('*')).toHaveLength(footerElements)
     expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true)
     await userEvent.hover(screen.getByRole('button', { name: 'Send' }).parentElement!)
@@ -1102,6 +1158,7 @@ describe('the Enhanced composer draft', () => {
     expect(field).toHaveProperty('value', 'Round the totals')
     act(() => useStore.getState().acpStream('run_1', 'live'))
     expect(waits()).toHaveLength(0)
+    expect(why.className).toBe('sr-only')
     expect(field.getAttribute('placeholder')).toBe(placeholder)
     await userEvent.keyboard('{Enter}')
     await waitFor(() => expect(api.runInject).toHaveBeenCalledWith('run_1', 'Round the totals', expect.any(String), expect.anything()))
@@ -1114,6 +1171,7 @@ describe('the Enhanced composer draft', () => {
     const field = await box()
     drop('reconnecting')
     expect(waits()).toHaveLength(1)
+    expect(document.getElementById(field.getAttribute('aria-describedby')!)!.className).toBe('sr-only')
     expect(screen.getByRole('button', { name: 'Interrupt the agent' })).toHaveProperty('disabled', true)
     await userEvent.type(field, '   ')
     expect(waits()).toHaveLength(1)

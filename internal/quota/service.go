@@ -98,7 +98,10 @@ type cacheState struct {
 }
 
 type readFlight struct {
-	done      chan struct{}
+	done    chan struct{}
+	refresh bool
+	// cached: a provider's row came from the cache, not the vendor.
+	cached    bool
 	providers []Provider
 	err       error
 }
@@ -136,8 +139,9 @@ type credentials struct {
 
 // Read returns both supported provider rows, including explicit rows for
 // missing, unsupported, unavailable, or malformed credentials. Calls for an
-// account are coalesced, and every caller, the first included, returns when
-// its ctx is done without cancelling the shared read.
+// account are coalesced, a fresh one only with another fresh one, and
+// every caller, the first included, returns when its ctx is done without
+// cancelling the shared read.
 func (s *Service) Read(ctx context.Context, account domain.MemberID, refresh bool) ([]Provider, error) {
 	return s.read(ctx, domain.AccountOf(account), refresh)
 }
@@ -169,10 +173,27 @@ func (s *Service) read(ctx context.Context, account domain.Account, refresh bool
 
 	s.mu.Lock()
 	flight := s.flight[key]
-	if flight == nil {
-		flight = &readFlight{done: make(chan struct{})}
+	var waited *readFlight
+	if refresh && flight != nil && !flight.refresh {
+		// A vendor read it makes starts the request floor, which would
+		// answer this one from the cache; this one takes that read, or
+		// reads after one the cache answered.
+		s.mu.Unlock()
+		select {
+		case <-flight.done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		s.mu.Lock()
+		waited, flight = flight, s.flight[key]
+	}
+	switch {
+	case waited != nil && !waited.cached:
+		flight = waited
+	case flight == nil || (refresh && !flight.refresh):
+		flight = &readFlight{done: make(chan struct{}), refresh: refresh}
 		s.flight[key] = flight
-		go s.lead(key, account, refresh, flight)
+		go s.lead(key, account, flight)
 	}
 	s.mu.Unlock()
 	select {
@@ -191,13 +212,13 @@ func (s *Service) read(ctx context.Context, account domain.Account, refresh bool
 
 // lead performs one coalesced read on its own deadline, so a caller that
 // stops waiting never cancels it and its result still fills the cache.
-func (s *Service) lead(key string, account domain.Account, refresh bool, flight *readFlight) {
+func (s *Service) lead(key string, account domain.Account, flight *readFlight) {
 	requestCtx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
 	creds, readErr := s.readCredentials(requestCtx, account)
 	var providers []Provider
 	if readErr == nil {
-		providers, readErr = s.readLeader(requestCtx, account, creds, refresh)
+		providers, readErr = s.readLeader(requestCtx, account, creds, flight)
 	}
 	if readErr == nil {
 		latest, latestErr := s.readCredentials(requestCtx, account)
@@ -210,17 +231,19 @@ func (s *Service) lead(key string, account domain.Account, refresh bool, flight 
 	flight.providers = cloneProviders(providers)
 	flight.err = readErr
 	s.mu.Lock()
-	delete(s.flight, key)
+	if s.flight[key] == flight {
+		delete(s.flight, key)
+	}
 	s.mu.Unlock()
 	close(flight.done)
 }
 
-func (s *Service) readLeader(ctx context.Context, account domain.Account, creds credentials, refresh bool) ([]Provider, error) {
-	claude, err := s.readProvider(ctx, account, creds.claude, "claude", refresh)
+func (s *Service) readLeader(ctx context.Context, account domain.Account, creds credentials, flight *readFlight) ([]Provider, error) {
+	claude, err := s.readProvider(ctx, account, creds.claude, "claude", flight)
 	if err != nil {
 		return nil, err
 	}
-	codex, err := s.readProvider(ctx, account, creds.codex, "codex", refresh)
+	codex, err := s.readProvider(ctx, account, creds.codex, "codex", flight)
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +315,7 @@ func (c credentials) fingerprints() [2]string {
 	return [2]string{c.claude.fingerprint, c.codex.fingerprint}
 }
 
-func (s *Service) readProvider(ctx context.Context, account domain.Account, cred credential, provider string, refresh bool) (Provider, error) {
+func (s *Service) readProvider(ctx context.Context, account domain.Account, cred credential, provider string, flight *readFlight) (Provider, error) {
 	now := s.now().UTC()
 	key := cacheKey{account: account.String(), provider: provider}
 	state := s.prepareState(key, cred.fingerprint)
@@ -300,13 +323,13 @@ func (s *Service) readProvider(ctx context.Context, account domain.Account, cred
 		s.clearState(key, cred.fingerprint)
 		return credentialProvider(provider, cred, now), nil
 	}
-
 	if state.success && !state.retryAt.IsZero() {
 		if now.Before(state.retryAt) {
 			return staleProvider(state.provider, now, state.failureError, state.retryAt), nil
 		}
 	}
-	if state.success && state.retryAt.IsZero() && !refresh && now.Sub(state.fetchedAt) < cacheTTL && !windowsExpired(state.provider.Windows, now) {
+	if state.success && state.retryAt.IsZero() && !flight.refresh && now.Sub(state.fetchedAt) < cacheTTL && !windowsExpired(state.provider.Windows, now) {
+		flight.cached = true
 		return cloneProvider(state.provider), nil
 	}
 	if state.success && windowsExpired(state.provider.Windows, now) && now.Sub(state.lastAttempt) < requestFloor {
@@ -456,6 +479,13 @@ func cachedOrUnavailable(state cacheState, provider string, cred credential, now
 		return staleProvider(state.provider, now, reason, retryAt)
 	}
 	return failedProvider(provider, cred.plan, "unavailable", now, retryAt, reason)
+}
+
+// Recent reports whether p holds what the vendor reported less than the
+// request floor before now, which a fresh read within the floor is answered
+// with as a stale row.
+func Recent(p Provider, now time.Time) bool {
+	return p.Status == "ok" || p.Status == "stale" && p.UpdatedAt != nil && now.Sub(*p.UpdatedAt) < requestFloor
 }
 
 func staleProvider(cached Provider, now time.Time, reason string, retryAt time.Time) Provider {

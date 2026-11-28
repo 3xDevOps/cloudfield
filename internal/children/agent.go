@@ -158,7 +158,7 @@ func (s *Service) start(ctx context.Context, run domain.RunID, req protocol.Chil
 	}
 	c := &domain.ChildReservation{
 		ParentRunID: p.parent.ID, RootRunID: p.root, TreeKey: p.treeKey, WorkspaceID: p.parent.WorkspaceID,
-		OwnerID: p.owner, AccountID: spec.account, Harness: spec.harness, Mode: spec.mode, Model: spec.model,
+		OwnerID: p.owner, AccountID: spec.account, AccountLogin: spec.login, Harness: spec.harness, Mode: spec.mode, Model: spec.model,
 		Purpose: req.Purpose, Task: req.Task, BaseCommit: base, BaseBranch: p.parent.Branch,
 		Fallback: spec.fallback, IdempotencyKey: req.IdempotencyKey, RequestHash: requestHash(req),
 	}
@@ -217,7 +217,10 @@ func (s *Service) receipt(ctx context.Context, c *domain.ChildReservation, err e
 		return protocol.ChildReceipt{}, rpcErr(protocol.MethodChildStart, err)
 	}
 	next := startNext
-	if child.State == protocol.ChildQueued {
+	switch {
+	case child.State == protocol.ChildQueued && child.Error != "":
+		next = "Waiting to start, which it does by itself when the server has room. " + next + " The server's refusal: " + child.Error
+	case child.State == protocol.ChildQueued:
 		next = "Queued until one of this session's subsessions finishes (aether-internal subsession options shows the limits). " + next
 	}
 	return protocol.ChildReceipt{Child: child, Next: next}, nil
@@ -226,7 +229,9 @@ func (s *Service) receipt(ctx context.Context, c *domain.ChildReservation, err e
 // admit checks the owner may launch on account and the budget admits them,
 // as every launch does.
 func (s *Service) admit(ctx context.Context, p *policy, account domain.MemberID) error {
-	s.cfg.AuthorizationMu.Lock()
+	if err := s.lockAdmission(ctx); err != nil {
+		return err
+	}
 	_, err := s.cfg.Authorize(ctx, s.cfg.Store, p.owner, string(account), p.workspaces())
 	s.cfg.AuthorizationMu.Unlock()
 	if err != nil {
@@ -280,21 +285,45 @@ func (s *Service) ownChild(ctx context.Context, run domain.RunID, id, method str
 }
 
 func (s *Service) cancelChild(ctx context.Context, c *domain.ChildReservation) (protocol.Child, error) {
-	// A handoff detaches under this lock, so the relation read here is the
-	// one the kill acts on.
-	s.cfg.AuthorizationMu.Lock()
-	defer s.cfg.AuthorizationMu.Unlock()
-	fresh, err := s.cfg.Store.GetChild(ctx, c.RunID)
-	if err != nil {
+	// The child's own admission holds this lock until the scheduler knows
+	// the run, so a cancel that waits for it cannot be lost to a launch in
+	// between. The lock is released before the stop, which can wait long for
+	// the child's lifecycle lock and reads the relation again there: a
+	// handoff is excluded up to that read, not through the kill after it.
+	if err := s.lockAdmission(ctx); err != nil {
 		return protocol.Child{}, rpcErr(protocol.MethodChildCancel, err)
 	}
-	if fresh.Detached {
-		return protocol.Child{}, &protocol.Error{Code: protocol.CodeDenied, Message: fmt.Sprintf("%s: subsession %s is detached and runs on its own", protocol.MethodChildCancel, c.RunID)}
+	fresh, err := s.attached(ctx, c.RunID)
+	s.cfg.AuthorizationMu.Unlock()
+	if err != nil {
+		return protocol.Child{}, rpcErr(protocol.MethodChildCancel, err)
 	}
 	if err := s.stop(ctx, fresh); err != nil {
 		return protocol.Child{}, rpcErr(protocol.MethodChildCancel, err)
 	}
 	return s.wireOrErr(ctx, c.RunID, protocol.MethodChildCancel)
+}
+
+// lockAdmission takes the server's admission lock for an agent's call,
+// which stops waiting when the agent does.
+func (s *Service) lockAdmission(ctx context.Context) error {
+	if err := s.cfg.AuthorizationMu.LockContext(ctx); err != nil {
+		return fmt.Errorf("wait for a session admission in progress: %w", err)
+	}
+	return nil
+}
+
+// attached is the child's reservation, or the refusal of one a handoff
+// detached from its parent.
+func (s *Service) attached(ctx context.Context, id domain.RunID) (*domain.ChildReservation, error) {
+	c, err := s.cfg.Store.GetChild(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if c.Detached {
+		return nil, denied("subsession %s is detached and runs on its own", id)
+	}
+	return c, nil
 }
 
 // stop cancels a queued child or stops a started one on its parent's say-so.
@@ -303,6 +332,7 @@ func (s *Service) stop(ctx context.Context, c *domain.ChildReservation) error {
 	case domain.ChildQueued:
 		err := s.cfg.Store.SetChildState(ctx, c.RunID, domain.ChildCancelled, "cancelled before it started", domain.ChildQueued)
 		if err == nil {
+			s.countWaitEnd(ctx, c, "cancelled", s.cfg.Now())
 			s.publish(ctx, c.ParentRunID, "")
 		}
 		if !errors.Is(err, store.ErrConflict) {
@@ -324,7 +354,10 @@ func (s *Service) stop(ctx context.Context, c *domain.ChildReservation) error {
 		if err != nil {
 			return err
 		}
-		return s.cfg.Runs.StopForParent(ctx, c.RunID, c.ParentRunID)
+		return s.cfg.Runs.StopForParent(ctx, c.RunID, c.ParentRunID, func() error {
+			_, err := s.attached(ctx, c.RunID)
+			return err
+		})
 	}
 	return nil
 }

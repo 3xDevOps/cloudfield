@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net/url"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
@@ -152,29 +154,135 @@ func connectorCodeHash(code string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// connectorURLFor is the URL member adds as a connector: the universal
-// one while the edge speaks it and member has a GitHub account bound,
-// since the edge offers a server there only to the accounts it lists for
-// it, and the server's own URL otherwise.
-func (s *Server) connectorURLFor(ctx context.Context, member domain.MemberID) (string, error) {
-	universal := s.UniversalConnectorURL()
-	if universal == "" {
-		return s.ConnectorURL(), nil
+// edgeNotices are the verified notices of the server's edge by the relay
+// origin each is about, and the relay origins the edge takes connectors
+// at now (EdgeOwner.ConnectorOrigins).
+type edgeNotices struct {
+	byOrigin map[string]edgeproto.Notice
+	firstUse bool
+	// relays maps each announced origin's canonical form to its spelling
+	// as announced, which the relay forwards and publishes.
+	relays map[string]string
+}
+
+// edgeNotices reads the edge's notices. One that cannot be read is
+// logged, and connectors are then shown as if there were none.
+func (s *Server) edgeNotices() edgeNotices {
+	edge := s.currentEdgeOwner()
+	if edge == nil {
+		return edgeNotices{}
 	}
+	stored, err := edge.Notices()
+	if err != nil {
+		msg := err.Error()
+		if last := s.connectorNoticesErr.Swap(&msg); last == nil || *last != msg {
+			slog.Warn("sshd: connectors shown without the edge's notices", "error", err)
+		}
+		return edgeNotices{}
+	}
+	s.connectorNoticesErr.Store(nil)
+	if len(stored.Notices) == 0 {
+		return edgeNotices{}
+	}
+	out := edgeNotices{byOrigin: make(map[string]edgeproto.Notice, len(stored.Notices)), firstUse: stored.FirstUse, relays: map[string]string{}}
+	for _, n := range stored.Notices {
+		if o, err := edgeclient.Canonical(n.Origin); err == nil {
+			out.byOrigin[o] = n
+		}
+	}
+	for _, relay := range edge.ConnectorOrigins() {
+		if o, err := edgeclient.Canonical(relay); err == nil {
+			out.relays[o] = relay
+		}
+	}
+	return out
+}
+
+// noticeFor is what notices say about the connector URL u of this
+// server, nil when they say nothing. Origins compare in their canonical
+// form, as a resource keeps the spelling of the origin it was added at.
+// Its URL, u's path at the replacement as the edge announced it, is set
+// only while the edge takes connectors there and the notices did not
+// come with the pin, which nothing vouches for.
+func (s *Server) noticeFor(notices edgeNotices, u string) *protocol.ConnectorNotice {
+	if len(notices.byOrigin) == 0 {
+		return nil
+	}
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return nil
+	}
+	origin, err := edgeclient.Canonical(parsed.Scheme + "://" + parsed.Host)
+	n, ok := notices.byOrigin[origin]
+	path := parsed.Path
+	if err != nil || !ok || parsed.RawQuery != "" || parsed.Fragment != "" ||
+		(path != edgeproto.PathUniversalMCP && path != edgeproto.MCPPath(edgeproto.ServerID(s.hostKey.PublicKey()))) {
+		return nil
+	}
+	out := &protocol.ConnectorNotice{State: n.State, Date: n.Date}
+	if replacement, err := edgeclient.Canonical(n.Replacement); err == nil && !notices.firstUse && notices.relays[replacement] != "" {
+		out.URL = notices.relays[replacement] + path
+	}
+	return out
+}
+
+// ConnectorNotice is what the edge's verified notices say about the
+// connector URL u of this server, nil when they say nothing.
+func (s *Server) ConnectorNotice(u string) *protocol.ConnectorNotice {
+	return s.noticeFor(s.edgeNotices(), u)
+}
+
+// offered is the connector URL u at the address notices name instead of
+// u's when noticeFor names it, and u otherwise.
+func (s *Server) offered(notices edgeNotices, u string) string {
+	if n := s.noticeFor(notices, u); n != nil && n.URL != "" {
+		return n.URL
+	}
+	return u
+}
+
+// OnUniversal reports whether member adds connectors at the universal
+// URL: the edge speaks it and member has a GitHub account bound.
+func (s *Server) OnUniversal(ctx context.Context, member domain.MemberID) (bool, error) {
+	if s.UniversalConnectorURL() == "" {
+		return false, nil
+	}
+	return s.githubLinked(ctx, member)
+}
+
+// githubLinked reports whether member has a GitHub account bound, which
+// the edge needs to offer the server at the universal URL.
+func (s *Server) githubLinked(ctx context.Context, member domain.MemberID) (bool, error) {
 	ids, err := s.identityStore()
 	if err != nil {
-		return "", err
+		return false, err
 	}
 	all, err := ids.ListIdentities(ctx)
 	if err != nil {
-		return "", fmt.Errorf("sshd: connector url: %w", err)
+		return false, fmt.Errorf("sshd: connector url: %w", err)
 	}
-	if slices.ContainsFunc(all, func(id *domain.Identity) bool {
+	return slices.ContainsFunc(all, func(id *domain.Identity) bool {
 		return id.Member == member && id.Provider == edgeproto.ProviderGitHub
-	}) {
-		return universal, nil
+	}), nil
+}
+
+// connectorURLFor is the URL member adds as a connector, and whether it is
+// the universal one: universal, UniversalConnectorURL as the caller read
+// it, while not empty and member has a GitHub account bound, the server's
+// own URL otherwise; either at the address notices name instead of a
+// retiring or retired one.
+func (s *Server) connectorURLFor(ctx context.Context, member domain.MemberID, universal string, notices edgeNotices) (string, bool, error) {
+	if universal == "" {
+		return s.offered(notices, s.ConnectorURL()), false, nil
 	}
-	return s.ConnectorURL(), nil
+	linked, err := s.githubLinked(ctx, member)
+	if err != nil {
+		return "", false, err
+	}
+	if linked {
+		return s.offered(notices, universal), true, nil
+	}
+	return s.offered(notices, s.ConnectorURL()), false, nil
 }
 
 // refuseEdgeSignIn refuses method to a connector authorized by signing
@@ -220,7 +328,7 @@ func (s *Server) connectorCode(ctx context.Context, member domain.MemberID, _ js
 			"%s: edge %s speaks edge protocol %d and cannot forward connectors; its operator upgrades it",
 			method, edge.Origin(), version)}
 	}
-	connectorURL, err := s.connectorURLFor(ctx, member)
+	connectorURL, _, err := s.connectorURLFor(ctx, member, s.UniversalConnectorURL(), s.edgeNotices())
 	if err != nil {
 		return nil, rpcError(err)
 	}
@@ -326,11 +434,16 @@ func (s *Server) connectorList(ctx context.Context, member domain.MemberID, _ js
 	if err != nil {
 		return nil, rpcError(err)
 	}
-	connectorURL, err := s.connectorURLFor(ctx, member)
+	notices := s.edgeNotices()
+	universal := s.UniversalConnectorURL()
+	connectorURL, onUniversal, err := s.connectorURLFor(ctx, member, universal, notices)
 	if err != nil {
 		return nil, rpcError(err)
 	}
-	universal := s.UniversalConnectorURL()
+	// The universal URL moves only for a member the edge offers it to.
+	if onUniversal {
+		universal = s.offered(notices, universal)
+	}
 	out := protocol.ConnectorListResult{Connectors: make([]protocol.Connector, 0, len(list)), URL: connectorURL, UniversalURL: universal,
 		SignIn: universal != "" && connectorURL == universal && s.cfg.EdgeAccess == edgeproto.PolicyAccount}
 	if edge := s.currentEdgeOwner(); universal != "" && edge != nil {
@@ -339,7 +452,14 @@ func (s *Server) connectorList(ctx context.Context, member domain.MemberID, _ js
 		}
 	}
 	for _, c := range list {
-		out.Connectors = append(out.Connectors, connectorToWire(c))
+		wire := connectorToWire(c)
+		wire.Notice = s.noticeFor(notices, c.Resource)
+		// The edge offers the universal URL only to an account it lists
+		// for this server.
+		if wire.Notice != nil && !onUniversal && strings.HasSuffix(wire.Notice.URL, edgeproto.PathUniversalMCP) {
+			wire.Notice.URL = ""
+		}
+		out.Connectors = append(out.Connectors, wire)
 	}
 	return out, nil
 }

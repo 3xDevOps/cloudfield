@@ -77,7 +77,6 @@ describe('the Enhanced composer gate', () => {
     maySteer: true,
     canReopen: true,
     refused: undefined,
-    sessionLive: true,
     pending: 0,
     hasLease: true,
   }

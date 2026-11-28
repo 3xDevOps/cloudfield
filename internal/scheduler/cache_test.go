@@ -165,7 +165,7 @@ func TestProtectedCacheTrimsOldestGoBuildEntriesToMemberCap(t *testing.T) {
 	oldest := write(filepath.Join(runs, "go-build", "ab", "oldest-d"), entry, 5*time.Hour)
 	older := write(filepath.Join(terminal, "go-build", "cd", "older-a"), entry, 4*time.Hour)
 	newer := write(filepath.Join(runs, "go-build", "ab", "newer-d"), entry, 3*time.Hour)
-	inUse := write(filepath.Join(runs, "go-build", "ab", "in-use-a"), entry, goBuildCacheInUseAge-time.Minute)
+	inUse := write(filepath.Join(runs, "go-build", "ab", "in-use-a"), entry, disk.GoBuildInUseAge-time.Minute)
 	other := write(filepath.Join(runs, "go-build", "ab", "other"), 0, 6*time.Hour)
 	e.sched.sweepCaches(t.Context(), false)
 	requireCacheExists(t, oldest, false)
@@ -752,5 +752,22 @@ func TestSweepKeepsPinnedBrowserImageRepo(t *testing.T) {
 		if !e.rt.hasImage(old) || !e.rt.hasImage(def) {
 			t.Fatalf("sweep removed a browser tag while %s is pinned", pinned)
 		}
+	}
+}
+
+// Disk reclaim removes what closed and sleeping sessions keep, so a launch
+// the server tries again by itself measures once and reclaims nothing.
+func TestALaunchTriedAgainUnaskedReclaimsNoDisk(t *testing.T) {
+	e := newTestEnv(t, nil)
+	calls := 0
+	e.sched.cfg.filesystemCapacity = func(string) (disk.Usage, error) {
+		calls++
+		return disk.Usage{TotalBytes: 100 << 30, FreeBytes: 1}, nil
+	}
+	if _, err := e.sched.reserveLaunch(t.Context(), "", true); !errors.Is(err, ErrDiskFull) {
+		t.Fatalf("a retry under disk pressure = %v, want the refusal", err)
+	}
+	if calls != 1 {
+		t.Fatalf("a retry measured the disk %d times, want once and no reclaim pass", calls)
 	}
 }

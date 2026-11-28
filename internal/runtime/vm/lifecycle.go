@@ -93,14 +93,14 @@ func (e *engine) stop(ctx context.Context, key string, grace time.Duration) erro
 			return err
 		}
 		if !up {
-			e.promoteCache(rec)
+			e.retireCache(rec)
 			return errors.Join(e.releasePrograms(rec), e.store(rec))
 		}
 	}
 	_ = e.thaw(key)
 	api := newCHAPI(e.path(key, apiSocket))
 	if state, stateErr := api.state(ctx); stateErr == nil && state == "Paused" {
-		if err = api.resume(ctx); err != nil {
+		if err = e.resumeGuest(ctx, rec); err != nil {
 			return fmt.Errorf("vm runtime: resume before stop: %w", err)
 		}
 	}
@@ -173,22 +173,20 @@ func (e *engine) finish(ctx context.Context, rec *record, code int) error {
 	return nil
 }
 
-// shutDown powers the VM off, lets go of its program disks and, when it
-// went down clean and promote is set, makes its cache its pool's newest.
-func (e *engine) shutDown(ctx context.Context, rec *record, promote bool) error {
+// shutDown powers the VM off, lets go of its program disks and, when retire
+// is set, of its cache disk, which becomes its pool's newest cache if the
+// VM went down clean.
+func (e *engine) shutDown(ctx context.Context, rec *record, retire bool) error {
 	clean, err := e.powerOff(ctx, rec)
 	if err != nil {
 		return err
 	}
-	if err = e.releasePrograms(rec); err != nil || !clean {
-		return errors.Join(err, e.store(rec))
-	}
-	rec.CacheSynced = true
-	if err = e.store(rec); err != nil {
+	rec.CacheSynced = clean
+	if err = errors.Join(e.releasePrograms(rec), e.store(rec)); err != nil {
 		return err
 	}
-	if promote {
-		e.promoteCache(rec)
+	if retire {
+		e.retireCache(rec)
 	}
 	return nil
 }
@@ -208,22 +206,34 @@ func (e *engine) endLinger(key string, boot int, d time.Duration) {
 	})
 }
 
-// lingering schedules the end of every VM that was lingering when the
-// server stopped.
-func (e *engine) lingering(ctx context.Context) {
+// settle schedules the end of every VM that was lingering when the server
+// stopped, and removes the cache disk an earlier server left with a stopped
+// one. It promotes none: a server start must not copy every such disk at
+// once, nor put one that stopped long ago over its pool's newest cache.
+func (e *engine) settle(ctx context.Context) {
 	keys, err := e.keys()
 	if err != nil {
 		slog.Warn("vm runtime: list VMs", "error", err)
 		return
 	}
 	for _, key := range keys {
-		rec, err := e.load(key)
-		if err != nil || !rec.Exited || rec.Saved {
-			continue
-		}
-		if up, err := e.running(ctx, key); err == nil && up {
-			e.endLinger(key, rec.Boots, max(0, lingerTimeout-time.Since(rec.ExitedAt)))
-		}
+		e.settleVM(ctx, key)
+	}
+}
+
+func (e *engine) settleVM(ctx context.Context, key string) {
+	unlock := e.lock(key)
+	defer unlock()
+	rec, err := e.load(key)
+	if err != nil || !rec.Exited || rec.Saved {
+		return
+	}
+	switch up, err := e.running(ctx, key); {
+	case err != nil:
+	case up:
+		e.endLinger(key, rec.Boots, max(0, lingerTimeout-time.Since(rec.ExitedAt)))
+	default:
+		e.dropCache(rec)
 	}
 }
 
@@ -236,6 +246,9 @@ func (e *engine) powerOff(ctx context.Context, rec *record) (bool, error) {
 	h, err := e.helper(rec.Key)
 	if err == nil {
 		offCtx, offCancel := context.WithTimeout(ctx, helperCallTimeout)
+		if rec.Cache.Path != "" {
+			rec.CacheUse = e.cacheUse(offCtx, rec.Key)
+		}
 		err = h.PowerOff(offCtx)
 		offCancel()
 	}
@@ -445,7 +458,7 @@ func (e *engine) destroy(ctx context.Context, key string) error {
 		return err
 	}
 	if loadErr == nil && !up {
-		e.promoteCache(rec)
+		e.retireCache(rec)
 	}
 	if err = os.RemoveAll(e.dir(key)); err != nil {
 		return fmt.Errorf("vm runtime: remove VM %s: %w", key, err)
@@ -474,7 +487,8 @@ func (e *engine) pause(ctx context.Context, key string) error {
 		return err
 	}
 	if len(rec.CheckoutDisks) == 0 {
-		err = newCHAPI(e.path(key, apiSocket)).pause(ctx)
+		// As in save: a pause that lands is not left behind an error.
+		err = newCHAPI(e.path(key, apiSocket)).pause(context.WithoutCancel(ctx))
 	} else {
 		err = e.freezeSession(ctx, rec)
 	}
@@ -491,8 +505,15 @@ func (e *engine) pause(ctx context.Context, key string) error {
 func (e *engine) park(ctx context.Context, key string) error {
 	unlock := e.lock(key)
 	rec, err := e.requireRunning(ctx, key, "pause")
-	if err == nil && e.syncGuest(ctx, key) && len(rec.CheckoutDisks) == 0 {
-		e.awaitReported(ctx, key)
+	if err == nil {
+		if e.syncGuest(ctx, key) && len(rec.CheckoutDisks) == 0 {
+			e.awaitReported(ctx, key)
+		}
+		// As in save: the guest still runs, so a caller that gave up loses
+		// nothing.
+		if ctx.Err() != nil {
+			err = fmt.Errorf("vm runtime: pause VM %s: %w", key, ctx.Err())
+		}
 	}
 	unlock()
 	if err != nil {
@@ -510,7 +531,7 @@ func (e *engine) resume(ctx context.Context, key string) error {
 	}
 	// A frozen VM can also be halted, as after a failed save.
 	if !rec.Frozen || e.halted(ctx, key) {
-		err = newCHAPI(e.path(key, apiSocket)).resume(ctx)
+		err = e.resumeGuest(ctx, rec)
 	}
 	if err == nil && rec.Frozen {
 		err = e.thawSession(ctx, rec)

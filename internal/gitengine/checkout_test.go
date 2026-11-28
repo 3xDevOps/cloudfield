@@ -273,6 +273,41 @@ func TestCreateRunCheckoutPointsOriginAtTheWorkspaceUpstream(t *testing.T) {
 
 // CreateRunCheckoutAt pins the captured commit even if the workspace branch
 // moves before provisioning reaches the checkout.
+// A failure to set the origin remote becomes the session's failure reason,
+// which every reader of the workspace sees: it must keep git's own error and
+// leave out the origin, which git repeats and which may hold a credential.
+func TestCreateRunCheckoutLeavesTheOriginOutOfItsError(t *testing.T) {
+	e := newUnitEngine(t)
+	ctx := t.Context()
+	if _, err := e.InitWorkspaceRepo(ctx, "ws1"); err != nil {
+		t.Fatalf("InitWorkspaceRepo: %v", err)
+	}
+	seedBareMain(t, e, "ws1")
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapper := filepath.Join(t.TempDir(), "git-wrapper")
+	script := "#!/bin/sh\ncase \"$*\" in *'remote set-url'*) for last; do :; done; echo \"fatal: could not set 'remote.origin.url' to '$last'\" >&2; exit 128;; esac\n" +
+		"exec " + shellQuoteMirror(realGit) + " \"$@\"\n"
+	if err = os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.cfg.GitPath = wrapper
+
+	const origin = "https://ada:not-a-real-value@git.example.test/acme/app.git"
+	_, _, err = e.CreateRunCheckout(ctx, "ws1", "run-origin", "main", "push me", origin)
+	if err == nil {
+		t.Fatal("CreateRunCheckout succeeded with a failing remote set-url")
+	}
+	if strings.Contains(err.Error(), "not-a-real-value") || strings.Contains(err.Error(), "git.example.test") {
+		t.Fatalf("error names the origin: %v", err)
+	}
+	if !strings.Contains(err.Error(), "could not set 'remote.origin.url' to '<origin>'") || !strings.Contains(err.Error(), "exit status 128") {
+		t.Fatalf("error lost git's own message: %v", err)
+	}
+}
+
 func TestCreateRunCheckoutAtPinsCapturedCommit(t *testing.T) {
 	e := newUnitEngine(t)
 	ctx := t.Context()

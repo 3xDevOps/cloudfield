@@ -44,9 +44,9 @@ type Manager struct {
 
 	mu     sync.Mutex
 	active map[domain.RunID]io.Closer
-	// tapped is the account each run was on when its output was last
-	// tapped, kept after that tap ends until the run does.
-	tapped map[domain.RunID]domain.MemberID
+	// tapped is the account and login each run was on when its output was
+	// last tapped, kept after that tap ends until the run does.
+	tapped map[domain.RunID]domain.Account
 	closed bool
 
 	sub events.Subscription
@@ -56,7 +56,7 @@ type Manager struct {
 // NewManager builds a Manager; call Start to begin consuming events.
 func NewManager(bus events.Bus, runs RunLookup, pty OutputTap, results ResultSink) *Manager {
 	return &Manager{bus: bus, runs: runs, pty: pty, results: results,
-		active: make(map[domain.RunID]io.Closer), tapped: make(map[domain.RunID]domain.MemberID)}
+		active: make(map[domain.RunID]io.Closer), tapped: make(map[domain.RunID]domain.Account)}
 }
 
 // Start subscribes to run-status events, attaches taps to already-running
@@ -95,7 +95,7 @@ func (m *Manager) scan(ctx context.Context) {
 		m.mu.Lock()
 		account, known := m.tapped[r.ID]
 		m.mu.Unlock()
-		m.attach(r.WorkspaceID, r.ID, known && account != r.AccountMember())
+		m.attach(r.WorkspaceID, r.ID, known && account != r.Account())
 	}
 }
 
@@ -175,7 +175,7 @@ func (m *Manager) attach(workspace domain.WorkspaceID, run domain.RunID, replace
 	if !ok {
 		return // no adapter for this harness: graceful degradation
 	}
-	account := r.AccountMember()
+	account := r.Account()
 	tap, err := m.pty.TapOutput(run)
 	if err != nil {
 		m.mu.Lock()
@@ -204,12 +204,13 @@ func (m *Manager) attach(workspace domain.WorkspaceID, run domain.RunID, replace
 	}
 
 	m.wg.Add(1)
-	go m.pump(workspace, run, a, tap)
+	go m.pump(workspace, run, account, a, tap)
 }
 
 // pump reads the tap to EOF (the PTY session ending), normalizing chunks
-// into lines and publishing what the adapter makes of them.
-func (m *Manager) pump(workspace domain.WorkspaceID, run domain.RunID, a Adapter, tap io.ReadCloser) {
+// into lines and publishing what the adapter makes of them. account is the
+// account and login the tapped session ran on.
+func (m *Manager) pump(workspace domain.WorkspaceID, run domain.RunID, account domain.Account, a Adapter, tap io.ReadCloser) {
 	defer m.wg.Done()
 	defer func() {
 		m.mu.Lock()
@@ -225,13 +226,13 @@ func (m *Manager) pump(workspace domain.WorkspaceID, run domain.RunID, a Adapter
 		n, err := tap.Read(buf)
 		if n > 0 {
 			for _, line := range norm.Feed(buf[:n]) {
-				m.consume(workspace, run, a, line)
+				m.consume(workspace, run, account, a, line)
 			}
 		}
 		if err != nil {
 			// The final line of a run may lack a terminator.
 			if line, ok := norm.Flush(); ok {
-				m.consume(workspace, run, a, line)
+				m.consume(workspace, run, account, a, line)
 			}
 			return
 		}
@@ -240,9 +241,17 @@ func (m *Manager) pump(workspace domain.WorkspaceID, run domain.RunID, a Adapter
 
 // consume publishes what the adapter makes of line and hands a result it
 // ended a turn with to results: a supervisor that persists keeps the PTY
-// open after the agent exits.
-func (m *Manager) consume(workspace domain.WorkspaceID, run domain.RunID, a Adapter, line string) {
-	m.publish(workspace, run, a.ConsumeLine(line))
+// open after the agent exits. A usage limit names the account it was
+// reported on, so a move drops one its replaced container reported late.
+func (m *Manager) consume(workspace domain.WorkspaceID, run domain.RunID, account domain.Account, a Adapter, line string) {
+	payloads := a.ConsumeLine(line)
+	for i, p := range payloads {
+		if limit, ok := p.(events.RunUsageLimitPayload); ok {
+			limit.Account, limit.Login = account.Member, account.Login
+			payloads[i] = limit
+		}
+	}
+	m.publish(workspace, run, payloads)
 	if text, ok := a.TakeResult(); ok {
 		m.results.TurnEnded(run, text)
 	}

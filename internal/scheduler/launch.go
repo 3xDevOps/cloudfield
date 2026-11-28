@@ -15,6 +15,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/coordtransport"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/envname"
+	"github.com/3xDevOps/cloudfield/internal/fallback"
 	"github.com/3xDevOps/cloudfield/internal/gitengine"
 	"github.com/3xDevOps/cloudfield/internal/harness"
 	"github.com/3xDevOps/cloudfield/internal/mirror"
@@ -302,7 +303,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 		if getErr == nil {
 			requested := &domain.Run{
 				ID: reservedID, WorkspaceID: workspace,
-				MemberID: member, AccountMemberID: account, Task: task,
+				MemberID: member, AccountMemberID: account, AccountLogin: opts.AccountLogin, Task: task,
 				Harness: harness, Mode: mode, Model: opts.Model, Effort: opts.Effort,
 			}
 			if !sameReservedRun(existing, requested) || (opts.CachedBase != "" && opts.CachedBase != existing.BaseCommit) {
@@ -314,14 +315,32 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 			return nil, getErr
 		}
 	}
-	if err = s.checkLogin(ctx, workspace, member, account, harness, profile, mode); err != nil {
-		return nil, err
+	if opts.AccountLogin.Added() {
+		err = s.checkAddedLogin(ctx, member, domain.Account{Member: account, Login: opts.AccountLogin}, harness, opts.Permission == domain.PermissionIsolated)
+		if err == nil {
+			var payer string
+			if payer, err = s.loginPayer(ctx, workspace, member, harness, profile, mode); err == nil && payer != "" {
+				err = EnvironmentPays(opts.AccountLogin, payer)
+			}
+		}
+	} else if err = s.checkDefaultLoginShared(ctx, member, account, harness); err == nil {
+		err = s.checkLogin(ctx, workspace, member, account, harness, profile, mode)
 	}
-	release, err := s.reserveCapacity(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer release()
+	perUse, err := s.LoginPerUse(ctx, member, domain.Account{Member: account, Login: opts.AccountLogin}, harness)
+	if err != nil {
+		return nil, err
+	}
+	release, err := s.reserveLaunch(ctx, reservedID, opts.Retry)
+	if err != nil {
+		return nil, err
+	}
+	// An Enhanced launch returns before its agent has started, and the claim
+	// covers that start too.
+	var launched domain.RunID
+	defer func() { s.acp.afterOpening(launched, release) }()
 	runtime.Step(ctx, "admission")
 	s.mu.Lock()
 	bases := s.cfg.Bases
@@ -393,9 +412,11 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 		BaseSource:      source,
 		BaseCheckedAt:   base.CheckedAt,
 		Fallback:        opts.Fallback,
+		AccountLogin:    opts.AccountLogin,
 		Extras:          extras.repos,
 		LinearIssueURL:  opts.LinearIssueURL,
 	}
+	run.AccountLoginPerUse = perUse
 	if opts.RequestedAccount != account {
 		run.RequestedAccountMemberID = opts.RequestedAccount
 	}
@@ -414,6 +435,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	if opts.Created != nil {
 		opts.Created(run.ID)
 	}
+	launched = run.ID
 	pending := s.beginPending(run.ID)
 	defer s.finishPending(run.ID, pending)
 	if opts.Admitted != nil {
@@ -511,6 +533,9 @@ func (s *Scheduler) provisionSteps(ctx context.Context, entry *supervised, run *
 		if err = s.resolveRunAccount(ctx, run); err != nil {
 			return fmt.Errorf("check the account share: %w", err)
 		}
+		if err = fallback.ResolveLoginUse(ctx, s.cfg.Store, run.HomeMember(), run.Account(), run.Harness, runWorkspaces(run)); err != nil {
+			return fmt.Errorf("check the account share: %w", err)
+		}
 	}
 	s.updateHarness(run, plan, profile)
 	// Recorded before coordination is provisioned, because the co-author
@@ -521,6 +546,10 @@ func (s *Scheduler) provisionSteps(ctx context.Context, entry *supervised, run *
 	entry.gitAuthorEmail = actor.GitIdentity().Email
 	entry.egress = plan.Egress
 	s.mu.Unlock()
+	billed, perUse := s.billedPerUse(ctx, run.HomeMember(), run.Account(), run.Harness)
+	if perUse && run.ACP {
+		s.acp.switchNotice(run.ID, "info", "Billed per use", billed)
+	}
 	driver, err := s.startRunContainer(ctx, entry, run, actor, argv, profile, plan, unlockCaches)
 	if err != nil {
 		canRetry := func() bool {
@@ -569,6 +598,9 @@ func (s *Scheduler) provisionSteps(ctx context.Context, entry *supervised, run *
 	}
 	run.Status = domain.RunRunning
 	s.startSupervision(entry)
+	if perUse {
+		s.notePerUse(ctx, run, billed)
+	}
 	s.leaveIfRevoked(ctx, entry, run)
 	return nil
 }
@@ -604,7 +636,7 @@ func (s *Scheduler) runPlan(ctx context.Context, entry *supervised, run *domain.
 	}
 	s.mu.Lock()
 	entry.home = plan.Home
-	entry.loginMember = plan.LoginMember
+	entry.loginMember, entry.loginID, entry.account = plan.LoginMember, plan.LoginID, run.Account()
 	s.mu.Unlock()
 	if reserveErr := s.reserveRunUser(ctx, entry, plan.User, len(plan.Mounts) > 0); reserveErr != nil {
 		return nil, reserveErr
@@ -684,6 +716,13 @@ func (s *Scheduler) startRunContainer(ctx context.Context, entry *supervised, ru
 	s.mu.Lock()
 	entry.appServer, entry.idleWake = appServer, native.IdleWake
 	s.mu.Unlock()
+	stored, err := s.cfg.Store.GetRun(ctx, run.ID)
+	if err != nil {
+		return nil, fmt.Errorf("read the session's parent: %w", err)
+	}
+	if stored.ParentRunID != "" {
+		plan.Env[coordtransport.SubsessionEnv] = "1"
+	}
 	limits, err := s.runLimits(ctx, run.Limits)
 	if err != nil {
 		return nil, err
@@ -707,7 +746,7 @@ func (s *Scheduler) startRunContainer(ctx context.Context, entry *supervised, ru
 		return nil, s.failContainer(ctx, entry, cid, "start container", serr)
 	}
 	s.mu.Lock()
-	if login := domain.AccountOf(entry.loginMember); entry.loginMember != "" && !slices.Contains(entry.verifiedLogins, login) {
+	if login := (domain.Account{Member: entry.loginMember, Login: entry.loginID}); entry.loginMember != "" && !slices.Contains(entry.verifiedLogins, login) {
 		entry.verifiedLogins = append(entry.verifiedLogins, login)
 	}
 	sc := entry.sidecar()
@@ -902,7 +941,7 @@ func sameReservedRun(existing, requested *domain.Run) bool {
 		existing.ID == requested.ID &&
 		existing.WorkspaceID == requested.WorkspaceID &&
 		existing.MemberID == requested.MemberID &&
-		existing.AccountMember() == requested.AccountMember() &&
+		existing.Account() == requested.Account() &&
 		existing.Task == requested.Task &&
 		existing.Harness == requested.Harness &&
 		existing.Mode == requested.Mode &&

@@ -345,5 +345,18 @@ func Free(path string) (uint64, error) {
 	return u.FreeBytes, nil
 }
 
+// Reserve is the free space a filesystem of total bytes keeps: override when
+// positive, else a twentieth of it, at least 5 GiB and at most 20 GiB.
+func Reserve(total uint64, override int64) uint64 {
+	if override > 0 {
+		return uint64(override)
+	}
+	return max(uint64(5<<30), min(total/20, uint64(20<<30)))
+}
+
+// ReclaimHeadroom is how far above its reserve disk reclaim keeps a
+// filesystem's free space, so admission rarely meets a refusal.
+const ReclaimHeadroom uint64 = 4 << 30
+
 // Filesystem reads only headroom, without walking Docker's private data root.
 func Filesystem(path string) (Usage, error) { return filesystem(path) }

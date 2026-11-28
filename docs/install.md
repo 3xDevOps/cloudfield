@@ -87,19 +87,48 @@ The old names keep working, with no end date.
 With `session-runtime vm`, each session runs in its own Cloud Hypervisor
 virtual machine ([environments.md](environments.md#sessions-in-virtual-machines)).
 The host must be x86-64 and expose `/dev/kvm`: bare metal, or a cloud VM with
-nested virtualization. Install a server for it with:
+nested virtualization. It needs Linux 6.8 or newer: Cloud Hypervisor v55.0
+exits on a kernel whose KVM lacks `KVM_CAP_USER_MEMORY2`, which 6.8 added.
+`uname -r` prints the version. Ubuntu 24.04 ships 6.8; the 6.1 Debian 12
+ships is too old.
+
+Before installing, put the data directory on a filesystem that can share
+blocks between files: XFS made with `reflink=1`, the `mkfs.xfs` default, or
+Btrfs. The server copies VM disks with `cp --reflink=auto --sparse=always`.
+On such a filesystem Save environment, a stopped session's caches becoming
+the member's newest, and a VM copying its own cache disk
+([environments.md](environments.md#sessions-in-virtual-machines)) share
+blocks with the disk they are made from, and take new space only for what
+the session wrote. ext4 works, but each of them takes longer and copies in
+full: the first two need free disk for up to all the data of the disk the
+session started from plus twice what the session wrote, the third for all
+the data of the cache disk. VM disks, checkouts and the image store must
+share one filesystem, because they hard-link each other. To check a data
+directory:
+
+```sh
+findmnt -no FSTYPE,TARGET -T /var/lib/aether   # filesystem type and mount point
+xfs_info <mount point> | grep -o 'reflink=[01]'   # only when the type is xfs
+```
+
+`btrfs` always shares blocks, `xfs` does with `reflink=1`, and `ext4` never
+does.
+
+Install a server for it with:
 
 ```sh
 sudo cloudfield-server install --session-runtime vm   # a new server
 sudo cloudfield-server vm install                     # a server already installed
 ```
 
-Both first open `/dev/kvm` and stop with the error when they cannot, such as
-`session VMs need KVM: open /dev/kvm: no such file or directory`; `install`
-then writes nothing. They install `qemu-img`, `mkfs.ext4`,
+Both first open `/dev/kvm` and ask it for `KVM_CAP_USER_MEMORY2`, and stop
+with the error when either fails, such as
+`session VMs need KVM: open /dev/kvm: no such file or directory` or
+`session VMs need Linux 6.8 or newer: /dev/kvm has no KVM_CAP_USER_MEMORY2, which Cloud Hypervisor v55.0 requires`;
+`install` then writes nothing. They install `qemu-img`, `mkfs.ext4`,
 `/usr/libexec/virtiofsd`, `iptables`, `nft` and `ip` with `apt-get` when
-missing (Debian 12 or Ubuntu 24.04 and newer ship `virtiofsd` at that path), Cloud Hypervisor
-v54.1 at `/usr/local/bin/cloud-hypervisor` after checking its SHA-256, the
+missing (Ubuntu 24.04 and newer ship `virtiofsd` at that path), Cloud Hypervisor
+v55.0 at `/usr/local/bin/cloud-hypervisor` after checking its SHA-256, the
 oh-my-pi release whose auth broker holds session VMs' omp logins at
 `/usr/local/libexec/aether/omp` after checking its SHA-256
 ([harnesses.md](harnesses.md#oh-my-pi-in-session-vms)), and the
@@ -150,13 +179,9 @@ On AWS:
   sudo mount /dev/nvme1n1 /var/lib/aether
   ```
 
-  On XFS, Save environment and a member's next package cache share blocks
-  with the disk they are made from, and take new space only for what the
-  session wrote; ext4 copies the whole disk. VM disks,
-  checkouts and the image store must share one filesystem, because they
-  hard-link each other. Instance storage is lost when the instance stops or
-  fails, so keep the [backups](#what-lives-in-the-data-directory) current, or
-  keep the data directory on EBS and accept slower wakes.
+  Instance storage is lost when the instance stops or fails, so keep the
+  [backups](#what-lives-in-the-data-directory) current, or keep the data
+  directory on EBS and accept slower wakes.
 
 [Nitro Sandboxes](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/amazon-ec2-nitro-sandboxes.html)
 do not fit: they cannot snapshot, pause or resume, which saving an idle
@@ -566,7 +591,7 @@ after the key and value of `config set`.
 | `tailnet-auto-join` | off | Tailnet logins join as approved members instead of pending. |
 | `tailnet-require-key` | off | Tailnet connections must also present a registered SSH key. Cannot be combined with `web-port`. |
 | `run-cpus`, `run-memory`, `run-pids` | 8 CPUs (at most the host's), 8 GiB, 4096 | Ceilings per session and member environment, not reservations. |
-| `min-free-disk` | `0` (5% of the filesystem, 5 to 20 GiB) | Free-space reserve below which new sessions are refused. Negative turns the check off. |
+| `min-free-disk` | `0` (5% of the filesystem, 5 to 20 GiB) | Free-space reserve below which new sessions are refused, and which a stopped session VM's cache write-back must leave free with 4 GiB more. Negative turns both checks off. |
 | `checkout-ttl` | `72h` | How long a finished session's checkout is kept after the session ends. It also stays while the session's container is kept. Negative keeps it forever. |
 | `run-container-ttl` | `720h`; `168h` for a container that stays frozen in memory | How long a closed session's container or VM disks are kept so the session can be relaunched ([Relaunching a closed session](failure-handling.md#relaunching-a-closed-session)). A relaunched session's clock restarts at its next close. |
 | `run-sleep-after` | `30m`; `5m` for session VMs | How long an idle Enhanced Claude Code session keeps its container running before Cloudfield stops it until its next use, and how long an idle session VM runs before Cloudfield pauses it in memory ([Idle sleep](failure-handling.md#idle-sleep)). A value you set applies to both. `0` keeps every session awake. |
@@ -801,14 +826,23 @@ aether         /usr/local/bin/aether  v0.8.7-beta.13
 
 With `session-runtime vm`, `sudo cloudfield-server update` has the new binary run
 `cloudfield-server vm install` before the restart, and prints its steps, so new VMs
-boot the release's Cloud Hypervisor and guest kernel. Running VMs keep theirs,
-and their helper disk, until they stop; Ctrl-C during that step undoes the
-update. Before it starts any VM, a server started by its systemd unit also puts
+boot the release's Cloud Hypervisor and guest kernel; Ctrl-C during that step
+undoes the update. Running VMs keep theirs,
+and their helper disk, until they stop. A VM saved to disk wakes on the Cloud
+Hypervisor in place at its wake, and an older one may not load what a newer
+one saved: v54.1 exits on a VM saved by v55.0 with
+`Error deserialising: trailing characters`. After a rollback across such a
+change, each VM that the newer Cloud Hypervisor ran since the update fails
+its next restore from disk, and its session
+either starts again from its disk without its processes or stays asleep
+until the newer release is back
+([failure-handling.md](failure-handling.md#sessions-in-vms)). Before it starts any VM, a server started by its systemd unit also
+runs the `/dev/kvm` check and then puts
 its release's Cloud Hypervisor and kernel in place, downloading the kernel only
 when the one there came from another release. That covers an update from a
 client or the dashboard, and a rollback. If it cannot during an update's first
-start, the update rolls back; on any other start the server logs the error and
-keeps serving. `AETHER_NO_UPDATE_CHECK=1` turns that check off.
+start, the update rolls back with the old Cloud Hypervisor still in place; on
+any other start the server logs the error and keeps serving. `AETHER_NO_UPDATE_CHECK=1` turns that check off.
 
 `cloudfield server update --when idle` waits until no session is working, no terminal
 is attached and no SSH connection into a session is open; `--cancel` clears that

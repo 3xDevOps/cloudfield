@@ -69,6 +69,23 @@ first prompt. An agent with no ACP command is refused:
 scheduler: harness "custom" has no command for mode "acp"
 ```
 
+The launch returns once the session's sandbox runs, without waiting for the
+agent to start. A message sent while the agent starts is held: `run.inject`
+answers `outcome: "queued"`, the message reads **Queued**, and the agent gets
+the task first, then each held message in the order sent. If the agent does
+not start, each held message reads `not_sent` with the error that stopped it
+([Restarts and failures](#restarts-and-failures)). A stop or an option
+change in that window runs once the start has ended, a switch to Standard
+is refused until the agent has reported its session, and a turn cancel or an
+answer is refused with `scheduler: the Enhanced agent is not running: the
+agent is still starting`. A server that shuts
+down in that window waits for the start to end. One killed in that window
+turns held messages `not_sent` with `agent connection closed`; the next
+server process starts the agent again, sets its mode, model and effort, and
+sends it the task. Background
+sessions still wait for the agent, so their launch reports a start that
+failed.
+
 `--model` is set after the session opens, so the launch itself still
 succeeds. If the agent rejects it, the session runs on the agent's default
 model, or the one it already had, and says so: the session's `model` becomes
@@ -96,6 +113,46 @@ driven over ACP fails rather than run at the default. An effort you pick later
 from the composer menu becomes the session's recorded effort and survives a reopen
 and a switch to Standard, like the model.
 
+To change either on a running Enhanced session from a shell:
+
+```sh
+cloudfield session set <session-id> --model opus --effort high
+```
+
+Give one flag or both. Each value is one the agent offers, as in the composer
+menu, and is recorded like a pick there. `cloudfield agent models <agent>`
+lists models and `cloudfield agent list --json` each agent's `effort_levels`.
+The command prints what the agent reports afterwards, such as
+`session <session-id> set to model opus, effort high`, which can differ from
+what you typed: Claude Code's adapter takes `Sonnet` as `sonnet`.
+`cloudfield timeline <session-id>` then shows the note
+`set model opus, effort high` with the member who ran it. A value the agent
+refuses fails with its reason:
+
+```text
+aether: rpc error -32603: set the session's model: acphost: session/set_config_option: {"code":-32603,"message":"Internal error","data":{"details":"Invalid value for config option model: xyz"}}
+```
+
+The model is set first and stays changed if the effort then fails: the error
+then ends with `; the session is now set to model <model>`, and the timeline
+note names the model alone. The effort levels can depend on the model, and an
+agent with no option for one is refused:
+
+```text
+aether: rpc error -32602: scheduler: the session's agent offers no such option: effort
+```
+
+A paused session is refused, and the error names
+`cloudfield resume <session-id>`. A Standard session is refused too, because
+its model and effort change only inside the agent's own terminal:
+
+```text
+aether: rpc error -32002: run.option.set: session run-d6ay38tj8j is a Standard session, where the model and effort change only inside the agent's own terminal: run cloudfield attach run-d6ay38tj8j and change them there, or run cloudfield session switch run-d6ay38tj8j --mode enhanced first
+```
+
+The error names `cloudfield session switch` only when the session's agent can
+switch a running session ([Switching a running agent](#switching-a-running-agent)).
+
 The session's sandbox is the same as a Standard session's, with the same image, home,
 retention, Pause and Close. The agent's ACP server runs beside a login shell,
 and the **Terminal** tab is that shell: use it to log the agent in or inspect
@@ -104,6 +161,9 @@ the checkout ([terminal.md](terminal.md)).
 ## The Chat view
 
 An Enhanced session opens on **Chat**: one timeline, newest at the bottom.
+`cloudfield logs <session-id> --follow` prints the same conversation in a
+terminal as plain lines: messages, thoughts, plans, tool calls, requests and
+notices ([terminal.md](terminal.md#scrollback-and-history)).
 
 - Your messages are bubbles on the right. Everything the agent writes to
   you renders Markdown under them; its last message is the answer, with the
@@ -178,16 +238,38 @@ Reloading the page discards it. While the agent reconnects, the composer keeps
 its shape and Send stays disabled until it is back; an empty box and Send's
 tooltip say why.
 
+While a launched session's agent starts, the session's state reads
+**Starting** and the empty box reads **Message the agent while it starts**. If
+the start fails, the box and an unsent message stay, and the panel above the
+box shows the error and offers **Retry Enhanced**
+([Restarts and failures](#restarts-and-failures)). A message sent before the
+retry is refused with the server's error.
+
 Steering, answering, interrupting and changing options need control of the session.
 The owner's desktop tab takes it when it first shows Chat and nobody holds
 it. Without control you still get **Send**, and the message waits for the
 controller as in a Standard session ([Messages and
-notes](terminal.md#messages-and-notes)).
+notes](terminal.md#messages-and-notes)). From a shell,
+`cloudfield interrupt <session-id>` stops the turn and
+`cloudfield session set <session-id>` changes the model or effort
+([Launch an Enhanced session](#launch-an-enhanced-session)): they work while
+nobody holds control or you hold it in a tab, and while another member holds
+it they fail with that member's name.
 
 **Attach files** adds files to the composer, at most eight: images up to 8 MiB,
 other files up to 64 MiB. Images go to the agent as image content and other files
 as a path in the container. If the agent does not advertise image support, remove
 the image before sending.
+An image sent while the agent starts shows **Not sent** if the agent turns out
+not to take images.
+
+From the CLI, `cloudfield message` queues a message sent during a turn, and
+`cloudfield message --steer <session-id> "<text>"` is **Steer**. `--steer`
+changes nothing when no turn runs, when the agent cannot steer, and when the
+message waits for the controller. `--attach <path>` is **Attach files**; a
+message with an image is `not sent` to an agent without image support. Both
+flags go before the session id ([Messages and
+notes](terminal.md#messages-and-notes)).
 
 ## Permissions and input
 
@@ -391,7 +473,10 @@ cannot be restored starts a new one and says `Started a new agent
 conversation`. When another process attaches to the keeper, which only a
 second server on the same data directory or root in the container can do, the
 server logs **Agent connection taken over** and restores the conversation the
-same way.
+same way. A sandbox that does not answer the reattach within 1 minute is not
+such a case: the keeper and the agent keep running, the session reads
+**Enhanced agent failed** with the error, and **Retry Enhanced** reattaches
+once the sandbox answers.
 
 A session sandbox keeps the server binary it was created with. A session
 whose container a server without keepers created runs its adapter without
@@ -496,8 +581,9 @@ enhanced session ended: the agent's ACP server exited with code 1; stderr: ...
 Fix the cause (for a login, run the agent's login command in the Terminal tab).
 Then choose **Retry Enhanced** in the Chat view, or pause and resume the session,
 to start a fresh ACP server. **Open in Standard** switches the session when the agent
-can switch. Otherwise it starts a new Standard session with the same task and closes
-this one without merging, after asking.
+can switch and has reported a conversation, which it does on its first turn.
+Otherwise, as after a failed start, it starts a new Standard session with the
+same task and closes this one without merging, after asking.
 
 A turn that fails on the account's usage limit does not park with
 `enhanced turn failed:`. The session moves to another account

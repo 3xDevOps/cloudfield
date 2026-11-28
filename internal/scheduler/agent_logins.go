@@ -7,9 +7,6 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
-	"os"
-	"path"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -38,6 +35,10 @@ const (
 // keeps none.
 var ErrNoAddedLogins = errors.New("only Claude Code keeps added logins")
 
+// ErrNoStartLogin refuses a launch that names no login when none of the
+// launcher's own logins serves without being named.
+var ErrNoStartLogin = errors.New("none of your logins starts a session unless you name it")
+
 // loginSignIn is the sign-in of one new login. done closes once ended is
 // set, with login or err.
 type loginSignIn struct {
@@ -61,20 +62,34 @@ type loginSignIn struct {
 
 func loginSignInCreationKey(id domain.LoginID) string { return "login-signin-" + string(id) }
 
-// addedLoginProfile is agent's profile when it keeps added logins.
-func (s *Scheduler) addedLoginProfile(agent string) (harness.Profile, error) {
-	profile, ok := harness.Lookup(agent)
-	if s.cfg.Logins == nil || !ok || agent != "claude" || profile.AccountConfig == nil || profile.LoginCommand == "" {
+// addedLoginProfile is the profile member's sessions on account run agent
+// with, when it can carry an added login.
+func (s *Scheduler) addedLoginProfile(ctx context.Context, member, account domain.MemberID, agent string) (harness.Profile, error) {
+	if s.cfg.Logins == nil || agent != "claude" {
 		return harness.Profile{}, ErrNoAddedLogins
 	}
-	return profile, nil
+	profile, _, err := s.launchProfile(ctx, member, account, agent)
+	if err != nil {
+		return harness.Profile{}, err
+	}
+	return profile, carriesAddedLogin(profile)
+}
+
+// carriesAddedLogin refuses a profile with no place for an added login: an
+// agent definition that names its own executable has no account
+// configuration to copy and no sign-in command.
+func carriesAddedLogin(profile harness.Profile) error {
+	if profile.AccountConfig == nil || profile.LoginCommand == "" {
+		return fmt.Errorf("%w: this server runs %s from its --agent-definitions entry, whose executable leaves no place for an added login; use the default login, or the server's operator removes executable from that entry, or the entry, to use added logins", ErrNoAddedLogins, profile.Name)
+	}
+	return nil
 }
 
 // BeginLoginSignIn reserves a new login of agent named name for member and
 // returns its id; the terminal opened with that id runs the sign-in. A
 // member runs one sign-in at a time.
 func (s *Scheduler) BeginLoginSignIn(ctx context.Context, member domain.MemberID, agent, name string) (domain.LoginID, error) {
-	if _, err := s.addedLoginProfile(agent); err != nil {
+	if _, err := s.addedLoginProfile(ctx, member, member, agent); err != nil {
 		return "", err
 	}
 	if err := domain.ValidateLoginName(name); err != nil {
@@ -98,7 +113,7 @@ func (s *Scheduler) BeginLoginSignIn(ctx context.Context, member domain.MemberID
 	defer s.mu.Unlock()
 	for _, other := range s.loginSignIns {
 		if other.member == member && !other.ended {
-			return "", fmt.Errorf("%w: the sign-in of login %q is still running; finish it first", store.ErrConflict, other.name)
+			return "", fmt.Errorf("%w: the sign-in of login %q (%s) is still running; finish it first", store.ErrConflict, other.name, other.id)
 		}
 	}
 	if s.loginSignIns == nil {
@@ -180,7 +195,7 @@ func (s *Scheduler) StartLoginSignIn(ctx context.Context, member domain.MemberID
 func (s *Scheduler) startSignInContainer(ctx context.Context, sign *loginSignIn, cols, rows uint) (runtime.Attachment, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), loginSignInProvision)
 	defer cancel()
-	profile, err := s.addedLoginProfile(sign.agent)
+	profile, err := s.addedLoginProfile(ctx, sign.member, sign.member, sign.agent)
 	if err != nil {
 		return nil, err
 	}
@@ -323,8 +338,14 @@ func (s *Scheduler) endLoginSignIn(sign *loginSignIn, login domain.AgentLogin, e
 	if ended {
 		return
 	}
+	// A directory whose volume stays is left for the next start's reconcile,
+	// which finds the volume through it.
 	if err != nil && created {
-		if removeErr := s.cfg.Logins.Remove(sign.member, sign.agent, sign.id); removeErr != nil {
+		removeErr := s.RemoveLoginVolume(context.Background(), sign.member, sign.agent, sign.id)
+		if removeErr == nil {
+			removeErr = s.cfg.Logins.Remove(sign.member, sign.agent, sign.id)
+		}
+		if removeErr != nil {
 			slog.Warn("scheduler: remove a login that was not added", "login", sign.id, "error", removeErr)
 		}
 	}
@@ -516,90 +537,6 @@ func (r endingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// addedLoginMounts mounts run's added login from its directory over the
-// default login's three stores: the subscription sign-in file, the
-// Anthropic profile directory, and a copy of the member's configuration
-// without the account keys, as a session on a shared account gets. A
-// sign-in's copy is scratch in the login's directory, and Claude Code's
-// backups of it stay there too, out of the member's home.
-func (s *Scheduler) addedLoginMounts(run *domain.Run, profile harness.Profile, home string, env map[string]string, purpose EnvironmentPurpose) ([]runtime.Mount, error) {
-	if _, err := s.addedLoginProfile(profile.Name); err != nil {
-		return nil, fmt.Errorf("scheduler: %w", err)
-	}
-	if s.sessionVMs() {
-		return nil, errors.New("scheduler: session VMs cannot verify an added login's mounts yet, so they do not run on one; launch on your default login")
-	}
-	member := run.AccountMemberID
-	dir, err := s.cfg.Logins.Path(member, profile.Name, run.AccountLogin)
-	if err != nil {
-		return nil, err
-	}
-	if info, statErr := os.Lstat(dir); statErr != nil || !info.IsDir() {
-		return nil, fmt.Errorf("scheduler: login %s has no directory on this server; it was removed", run.AccountLogin)
-	}
-	paths, err := profile.LoginPaths()
-	if err != nil || len(paths) != 1 {
-		return nil, fmt.Errorf("scheduler: %s has no single login file to mount an added login over", profile.Name)
-	}
-	if err = s.cfg.Homes.PrepareLoginMountpoint(member, paths[0], false); err != nil {
-		return nil, fmt.Errorf("scheduler: %w", err)
-	}
-	if err = s.cfg.Homes.PrepareLoginMountpoint(member, memberhome.AnthropicProfileDir, true); err != nil {
-		return nil, fmt.Errorf("scheduler: %w", err)
-	}
-	// Subpath mounts: the runtime checks each one's inode in the container
-	// before the agent starts, so a dropped mount fails the launch instead of
-	// signing the agent in with the default login under this one's name.
-	mounts := []runtime.Mount{
-		{HostPath: dir, Subpath: memberhome.LoginCredentials, ContainerPath: path.Join(home, paths[0])},
-		{HostPath: dir, Subpath: memberhome.LoginAnthropic, ContainerPath: path.Join(home, memberhome.AnthropicProfileDir)},
-	}
-	configDir := filepath.Join(s.accountConfigRoot(), string(run.ID))
-	if purpose == EnvironmentPurposeLogin {
-		configDir = dir
-		backups := path.Join(profile.AccountConfig.Dir, memberhome.LoginBackups)
-		if err = os.Mkdir(filepath.Join(dir, memberhome.LoginBackups), 0o700); err != nil && !errors.Is(err, os.ErrExist) {
-			return nil, fmt.Errorf("scheduler: %w", err)
-		}
-		if err = s.cfg.Homes.PrepareLoginMountpoint(member, backups, true); err != nil {
-			return nil, fmt.Errorf("scheduler: %w", err)
-		}
-		mounts = append(mounts, runtime.Mount{HostPath: dir, Subpath: memberhome.LoginBackups, ContainerPath: path.Join(home, backups)})
-	}
-	config, err := s.accountConfigMounts(configDir, member, profile, home)
-	if err != nil {
-		return nil, err
-	}
-	for i, m := range config {
-		if !m.ReadOnly {
-			config[i].HostPath, config[i].Subpath = filepath.Dir(m.HostPath), filepath.Base(m.HostPath)
-		}
-	}
-	env[profile.AccountConfig.Env] = path.Join(home, profile.AccountConfig.Dir)
-	env["ANTHROPIC_CONFIG_DIR"] = path.Join(home, memberhome.AnthropicProfileDir)
-	return append(mounts, config...), nil
-}
-
-// addedLoginPath reports whether host is where an added login's mounts come
-// from: its directory, or the session's copy of the configuration. Only what
-// such a subpath mount exposes is handed to the container's user, never the
-// directory around it.
-func (s *Scheduler) addedLoginPath(host string) bool {
-	for _, root := range []string{s.accountConfigRoot(), loginsRoot(s.cfg.Logins)} {
-		if rel, err := filepath.Rel(root, host); root != "" && err == nil && rel != "." && filepath.IsLocal(rel) {
-			return true
-		}
-	}
-	return false
-}
-
-func loginsRoot(l *memberhome.Logins) string {
-	if l == nil {
-		return ""
-	}
-	return l.Root()
-}
-
 // ReconcileLogins makes the login directories match the rows: a directory
 // a merge gave another member moves to them, and one with no row, a
 // sign-in that ended or that the server stopped during, goes with its
@@ -632,12 +569,37 @@ func (s *Scheduler) ReconcileLogins(ctx context.Context, member domain.MemberID)
 			if s.cfg.PTY != nil {
 				errs = append(errs, s.cfg.PTY.RemoveSessionTranscript(ctx, ptyhost.LoginSignInSession(l.Member, l.ID)))
 			}
+			if volumeErr := s.RemoveLoginVolume(ctx, l.Member, l.Agent, l.ID); volumeErr != nil {
+				errs = append(errs, volumeErr)
+				continue
+			}
 			errs = append(errs, s.cfg.Logins.Remove(l.Member, l.Agent, l.ID))
 		case err != nil:
 			errs = append(errs, fmt.Errorf("login %s: %w", l.ID, err))
 		case owner != l.Member:
+			// Moved, the directory no longer names the volume of its old
+			// path, so it stays until that volume goes.
+			if volumeErr := s.RemoveLoginVolume(ctx, l.Member, l.Agent, l.ID); volumeErr != nil {
+				errs = append(errs, volumeErr)
+				continue
+			}
 			errs = append(errs, s.cfg.Logins.Move(l.Member, owner, l.Agent, l.ID))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// RemoveLoginVolume removes the volume the subpath mounts of member's login
+// id of agent come from, which removing their containers leaves; the
+// runtime refuses it while a container still uses it.
+func (s *Scheduler) RemoveLoginVolume(ctx context.Context, member domain.MemberID, agent string, id domain.LoginID) error {
+	remover, ok := s.cfg.Runtime.(subpathVolumeRemover)
+	if !ok {
+		return nil
+	}
+	dir, err := s.cfg.Logins.Path(member, agent, id)
+	if err != nil {
+		return err
+	}
+	return remover.RemoveSubpathVolume(ctx, dir)
 }

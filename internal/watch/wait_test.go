@@ -831,7 +831,9 @@ func TestAPromptDropsAWakeNotYetWritten(t *testing.T) {
 	h.inbox.fail.Store(true)
 	h.mustReport(owner, finished(target.ID))
 	h.status(target, domain.RunCompleted, "", "")
-	h.eventually("a failed attempt", func() bool { return h.only(owner.ID).DeliveryAttempts >= 1 })
+	// The attempt is counted when it claims the wake, before it writes; one
+	// still in flight would write once the inbox works again.
+	h.eventually("a failed attempt", func() bool { return h.only(owner.ID).LastDeliveryError == "inbox unavailable" })
 	if err := h.svc.EndRunWaits(h.ctx, owner.ID, "a person sent a new prompt", h.clock.now()); err != nil {
 		t.Fatal(err)
 	}

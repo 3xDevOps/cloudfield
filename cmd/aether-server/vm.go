@@ -146,16 +146,20 @@ func splitInstalled(files []serversetup.Pinned) (installed, missing []serversetu
 	return installed, missing, nil
 }
 
-// ensureVMFiles puts the Cloud Hypervisor and guest kernel this binary was
-// released with in place before the server starts any VM, so an update
-// from a client or the dashboard, or the rollback of one, runs VMs on the
-// files the running server expects. It reaches the network only when the
+// ensureVMFiles checks for KVM, then puts the Cloud Hypervisor and guest
+// kernel this binary was released with in place before the server starts
+// any VM, so an update from a client or the dashboard, or the rollback of
+// one, runs VMs on the files the running server expects, and one this host
+// cannot run replaces nothing. It reaches the network only when the
 // kernel in place came from another release. The pinned omp downloads in
 // the background, outside an update's startup check: a broker refuses to
 // start until it is in place.
 func ensureVMFiles(ctx context.Context, kernel string) error {
 	if vmHostSupported() != nil || envname.Getenv(selfupdate.OptOutEnv) != "" {
 		return nil
+	}
+	if err := serversetup.CheckKVM(kvmDevice); err != nil {
+		return err
 	}
 	go installOMPBroker()
 	files := []serversetup.Pinned{serversetup.CloudHypervisor}

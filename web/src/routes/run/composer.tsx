@@ -24,10 +24,10 @@ import { hasImages, useComposerImages, type ComposerImageState } from '@/routes/
 import { ContextWindow } from '@/routes/run/context-window'
 import { usePromptHistory } from '@/routes/run/composer-history'
 import { commandSuggestions, currentChoice, OptionPills, SuggestionList, triggerAt, useFileSuggestions, type Suggestion } from '@/routes/run/composer-menus'
-import { beginDraftRequest, composerBlock, composerDraft, draftSendKey, enhancedBlock, pillFor, pillHint, saveComposerDraft, sentDraft, useComposerDraft, type ComposerDraft, type Pill } from '@/routes/run/composer-state'
+import { beginDraftRequest, composerBlock, composerDraft, draftSendKey, enhancedBlock, pillFor, pillHint, saveComposerDraft, sentDraft, startingHint, useComposerDraft, type ComposerDraft, type Pill } from '@/routes/run/composer-state'
 import { TemplateInsert } from '@/routes/run/composer-templates'
 import type { RunRoom } from '@/routes/run/room'
-import { TypingIndicator, useTypingSignal } from '@/routes/run/typing'
+import { TypingIndicator, useTypingSignal, useWakeOnTyping } from '@/routes/run/typing'
 import { sessionColumn } from '@/routes/run/session-rows'
 import { sameIdentity, useStore } from '@/store'
 import { useCapability, useSelf } from '@/store/hooks'
@@ -255,10 +255,10 @@ function ComposerBox({ textarea, autoFocus, collapsed, value, onChange, onCaret,
   )
 }
 
-function ComposerHint({ id, uploading, description }: { id: string; uploading: boolean; description: string }) {
+function ComposerHint({ id, uploading, shown, description }: { id: string; uploading: boolean; shown?: boolean; description: string }) {
   return uploading
     ? <p id={id} role="status" className="line-clamp-2 px-4 text-ui-sm text-muted">Uploading…</p>
-    : <p id={id} className="sr-only">{description}</p>
+    : <p id={id} className={shown ? 'line-clamp-2 px-4 text-ui-sm text-muted' : 'sr-only'}>{description}</p>
 }
 
 function SendActions({ pill, label, hint, description, disabled, onClick, onCancel, dictation }: {
@@ -317,6 +317,7 @@ function StandardComposer({ run, agent, room, textarea, autoFocus, onFocusChange
   const dictating = useDictationState(textarea).active
   const hintID = useId()
   const maySteer = allowed('steer', self, { owner: run.member_id, protected: run.protected, steerOthers })
+  const wakeOnTyping = useWakeOnTyping(run, maySteer)
   const block = composerBlock(run, maySteer, maySteer && cap.hasMethod('run.relaunch') && canReopenRun(run))
   const images = useComposerImages(run.id, !block && cap.hasMethod('terminal.file'))
   const attachOff = busy || !cap.hasMethod('terminal.file')
@@ -364,7 +365,10 @@ function StandardComposer({ run, agent, room, textarea, autoFocus, onFocusChange
         autoFocus={autoFocus}
         value={body}
         readOnly={Boolean(draft.busy)}
-        onChange={(next) => saveComposerDraft(run.id, { body: next })}
+        onChange={(next) => {
+          saveComposerDraft(run.id, { body: next })
+          wakeOnTyping(next)
+        }}
         onFocusChange={onFocusChange}
         onSend={send}
         onEscape={onEscape}
@@ -442,6 +446,8 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
   const queueHeld = useQueueHeld(focused)
 
   const maySteer = allowed('steer', self, { owner: run.member_id, protected: run.protected, steerOthers })
+  // A docked composer unmounts while a wake resubscribes the agent stream, which would take the field from under the member.
+  const wakeOnTyping = useWakeOnTyping(run, maySteer && !docked)
   const state = session?.state
   const stream = session?.stream
   const connecting = stream === 'live' || stream === 'refused' ? undefined : stream === 'reconnecting' || stream === 'offline' ? 'Reconnecting to the agent…' : 'Connecting to the agent…'
@@ -449,12 +455,12 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
   const lastLive = useRef<{ canAct: boolean; waiting: boolean }>(undefined)
   if (stream === 'live') lastLive.current = { canAct: control.canAct, waiting: backgroundWait(run, session) !== null }
   const shape = lastLive.current
+  const starting = session?.starting ?? false
   const gate = enhancedBlock({
     run,
     maySteer,
     canReopen: maySteer && cap.hasMethod('run.relaunch') && canReopenRun(run),
     refused: stream === 'refused' ? session?.streamError ?? 'The agent stream was refused.' : undefined,
-    sessionLive: shape ? session?.live ?? false : true,
     pending: session?.pending.length ?? 0,
     hasLease: shape?.canAct ?? true,
   })
@@ -462,8 +468,8 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
   const turnRunning = state?.turn_in_flight ?? false
   const waiting = shape?.waiting ?? false
   const blocked = Boolean(gate || connecting)
-  // A sleeping session's agent reports its prompt types once a wake starts it.
-  const supportsImages = state?.prompt_images === true || Boolean(run.asleep_since)
+  // Only a live agent has reported its prompt types; the server refuses the rest.
+  const supportsImages = !state || state.prompt_images === true || starting
   const images = useComposerImages(run.id, !blocked && cap.hasMethod('terminal.file'))
   const attachOff = busy || blocked || !cap.hasMethod('terminal.file')
   const drop = dropRoom(images, attachOff)
@@ -604,7 +610,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
 
   const stops = pill === 'interrupt' || pill === 'stop-waiting'
   const pillDisabled = busy || Boolean(connecting) || images.uploading || (!stops && pill !== 'resume' && (!images.ready || !hasContent || refusedImages || dictating))
-  const hintText = connecting ?? (moderated ? (control.waits ? 'Delivers in 45 s unless the controller decides sooner.' : '') : turnRunning || pill === 'stop-waiting' || pill === 'resume' ? pillHint[pill] : '')
+  const hintText = connecting ?? (moderated ? (control.waits ? 'Delivers in 45 s unless the controller decides sooner.' : '') : turnRunning || pill === 'stop-waiting' || pill === 'resume' ? pillHint[pill] : starting ? startingHint : '')
   const keyHint = coarse || stops ? undefined : pill === 'steer' ? `${shortcutLabel('composer-send')}; ${shortcutLabel('composer-queue')} queues` : shortcutLabel(pill === 'queue' && state?.steering ? 'composer-queue' : 'composer-send')
 
   return (
@@ -667,6 +673,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
         )}
         onChange={(value, at) => {
           setBody(value)
+          wakeOnTyping(value)
           setCaret(at)
           setActive(0)
           setDismissed(false)
@@ -683,7 +690,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
           if (hasContent) act(turnRunning ? 'queue' : 'send')
         }}
         onEscape={onEscape}
-        placeholder={connecting ?? (turnRunning || waiting ? 'Message the agent while it works' : notFinishedYet(run) ? 'Say what is left to do, / for commands, @ for files' : 'Message the agent, / for commands, @ for files')}
+        placeholder={connecting ?? (starting ? 'Message the agent while it starts' : turnRunning || waiting ? 'Message the agent while it works' : notFinishedYet(run) ? 'Say what is left to do, / for commands, @ for files' : 'Message the agent, / for commands, @ for files')}
         describedBy={hintID}
         combobox={{ expanded: suggestions.length > 0, controls: listID, active: suggestions.length ? `${listID}-${current}` : undefined }}
         menu={<SuggestionList id={listID} items={suggestions} active={current} onPick={pick} />}
@@ -706,7 +713,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
           }
         }}
       />
-      <ComposerHint id={hintID} uploading={images.uploading} description={hintText} />
+      <ComposerHint id={hintID} uploading={images.uploading} shown={Boolean(connecting) && hasContent} description={hintText} />
       <p role="status" className="sr-only">{connecting}</p>
     </ComposerFrame>
   )

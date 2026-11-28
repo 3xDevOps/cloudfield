@@ -17,6 +17,7 @@ import (
 
 	"github.com/3xDevOps/cloudfield/internal/attribution"
 	"github.com/3xDevOps/cloudfield/internal/control"
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	edgeclient "github.com/3xDevOps/cloudfield/internal/edge/client"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
@@ -122,6 +123,9 @@ type Config struct {
 	// and admitted; under PolicyApprovedDevices, which empty selects, it
 	// waits until a person approves it.
 	EdgeAccess edgeproto.AccessPolicy
+	// ConfigPath is the server's options file, read again by server.edge
+	// for an edge-url set since the start; empty reads none.
+	ConfigPath string
 	// EdgeReviewer lets an admin bind the edge's reviewer account to a
 	// member who is no admin, and a connector authorized by signing in
 	// with it act as that member. False refuses both.
@@ -138,7 +142,7 @@ type Config struct {
 	Config ConfigBackend
 	// AuthorizationMu is shared with child run admission so account and role
 	// revocation cannot race a run launch. New allocates one when omitted.
-	AuthorizationMu *sync.Mutex
+	AuthorizationMu *ctxlock.Mutex
 	// Services carries the team-feature service seams; see services.go.
 	// Each nil field disables its methods with CodeUnavailable.
 	Services Services
@@ -180,6 +184,15 @@ type Server struct {
 	// edgeOwner records ownership at the edge; nil while no edge agent
 	// runs. Guarded by mu.
 	edgeOwner EdgeOwner
+	// noticesErr is the last error reading the edge's stored notices,
+	// empty after a read that succeeded, so server.edge logs each once.
+	noticesErr atomic.Pointer[string]
+	// configErr is the same for reading the options file's edge-url.
+	configErr atomic.Pointer[string]
+	// connectorNoticesErr is the last error reading the edge's stored
+	// notices for connectors, empty after a read that succeeded, so each
+	// is logged once.
+	connectorNoticesErr atomic.Pointer[string]
 	// tailnetDashboardURL and tailnetDashboardErr are what server.info
 	// reports as dashboard_url and tailnet_dashboard_error. Guarded by mu.
 	tailnetDashboardURL string
@@ -203,7 +216,7 @@ type Server struct {
 	// makes either admission or revocation the linearization point. Handlers
 	// that also need registerMu acquire registerMu first; authorizationMu
 	// paths never acquire registerMu or mu, so the lock order cannot cycle.
-	authorizationMu *sync.Mutex
+	authorizationMu *ctxlock.Mutex
 	handoffSeq      atomic.Uint64
 	// accessGen counts workspace access changes; see accessChanged.
 	accessGen atomic.Uint64
@@ -273,7 +286,7 @@ func New(cfg Config) (*Server, error) {
 		return nil, errors.New("sshd: config requires Store, Bus, Git, PTY, and Runs")
 	}
 	if cfg.AuthorizationMu == nil {
-		cfg.AuthorizationMu = &sync.Mutex{}
+		cfg.AuthorizationMu = &ctxlock.Mutex{}
 	}
 	policy, err := edgeproto.ParseAccessPolicy(string(cfg.EdgeAccess))
 	if err != nil {

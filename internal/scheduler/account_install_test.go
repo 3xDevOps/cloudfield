@@ -226,7 +226,7 @@ func TestFallbackLaunchableRefusesABorrowedInstallation(t *testing.T) {
 	writeHomeFiles(t, linHome, ".claude/.credentials.json")
 	launchable := func(requested, account domain.MemberID) bool {
 		t.Helper()
-		ok, err := e.sched.FallbackLaunchable(t.Context(), e.member.ID, requested, account, "claude", domain.LaunchTUI)
+		ok, err := e.sched.FallbackLaunchable(t.Context(), e.member.ID, requested, domain.AccountOf(account), "claude", domain.LaunchTUI, "")
 		if err != nil {
 			t.Fatalf("FallbackLaunchable: %v", err)
 		}
@@ -269,13 +269,13 @@ func TestFallbackLaunchableRefusesALoginHeldUnderAnotherUser(t *testing.T) {
 	e.sched.credentialUsers[held] = struct{}{}
 	e.sched.credentialUsers[own] = struct{}{}
 	e.sched.mu.Unlock()
-	if ok, err := e.sched.FallbackLaunchable(t.Context(), e.member.ID, e.member.ID, e.owner.ID, "claude", domain.LaunchTUI); ok || err != nil {
+	if ok, err := e.sched.FallbackLaunchable(t.Context(), e.member.ID, e.member.ID, domain.AccountOf(e.owner.ID), "claude", domain.LaunchTUI, ""); ok || err != nil {
 		t.Fatalf("FallbackLaunchable = %v, %v; want the held login refused", ok, err)
 	}
 	e.sched.mu.Lock()
 	delete(e.sched.credentialUsers, held)
 	e.sched.mu.Unlock()
-	if ok, err := e.sched.FallbackLaunchable(t.Context(), e.member.ID, e.member.ID, e.owner.ID, "claude", domain.LaunchTUI); !ok || err != nil {
+	if ok, err := e.sched.FallbackLaunchable(t.Context(), e.member.ID, e.member.ID, domain.AccountOf(e.owner.ID), "claude", domain.LaunchTUI, ""); !ok || err != nil {
 		t.Fatalf("FallbackLaunchable = %v, %v; want the free login a fallback", ok, err)
 	}
 }
