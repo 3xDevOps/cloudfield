@@ -2686,7 +2686,12 @@ CREATE TABLE agent_logins (
 );
 CREATE UNIQUE INDEX idx_agent_logins_id ON agent_logins (agent, id) WHERE id <> 'default';
 `,
-	// v116: the added login of its account a run, an account segment and a
+	// v116: the body a success, failure or blocked report carries beside
+	// its summary, such as a review's findings; empty for none.
+	`
+ALTER TABLE coord_reports ADD COLUMN body TEXT NOT NULL DEFAULT '';
+`,
+	// v117: the added login of its account a run, an account segment and a
 	// queued subsession spend, empty for the default login, so every
 	// existing row keeps meaning what it meant; and whether the run's login
 	// is billed per use.

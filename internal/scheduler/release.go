@@ -102,7 +102,9 @@ func (s *Scheduler) Release(ctx context.Context, run domain.RunID, _ domain.Memb
 		}
 		s.mu.Unlock()
 
-		entry.lifecycleMu.Lock()
+		if err := entry.lockLifecycle(ctx); err != nil {
+			return err
+		}
 		s.mu.Lock()
 		if s.runs[run] != entry {
 			s.mu.Unlock()

@@ -27,6 +27,12 @@ func (s *Scheduler) TurnEnded(run domain.RunID, message string) {
 	}
 	started := entry.turnStartedAt
 	s.mu.Unlock()
+	s.forwardTurnEnd(entry, started, message)
+}
+
+// forwardTurnEnd is TurnEnded for the turn of entry that started at started.
+func (s *Scheduler) forwardTurnEnd(entry *supervised, started time.Time, message string) {
+	run := entry.runID
 	if !s.hasParent(run) {
 		return
 	}

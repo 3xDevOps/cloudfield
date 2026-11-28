@@ -17,6 +17,7 @@ import (
 
 	"github.com/3xDevOps/cloudfield/internal/acphost/acpmock"
 	"github.com/3xDevOps/cloudfield/internal/agentstatus"
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
 	"github.com/3xDevOps/cloudfield/internal/fallback"
@@ -88,7 +89,7 @@ func newLoginMoveEnv(t *testing.T, mutate func(*Config)) (*loginShareEnv, *acpRu
 	le := &loginShareEnv{shareEnv: e, logins: logins}
 	second := le.addLogin(t, e.member.ID, "lgn-second0000", "second", workLogin)
 	usage := newLoginUsage()
-	e.sched.UseUsageFallback(UsageFallback{Usage: usage, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	e.sched.UseUsageFallback(UsageFallback{Usage: usage, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 	return le, rt, notes, usage, second
 }
 
@@ -264,7 +265,7 @@ func TestAnIsolatedSessionDoesNotMoveToAConsoleLogin(t *testing.T) {
 	})
 	e := &loginShareEnv{shareEnv: fe, logins: logins}
 	e.addLogin(t, e.member.ID, "lgn-console000", "console", "")
-	e.sched.UseUsageFallback(UsageFallback{Usage: newLoginUsage(), AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	e.sched.UseUsageFallback(UsageFallback{Usage: newLoginUsage(), AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 	run, err := e.launchOn(t, domain.AccountOf(e.member.ID), domain.PermissionIsolated)
 	if err != nil {
 		t.Fatal(err)
@@ -392,7 +393,7 @@ func TestATeammatesSignalTrustsAReadJustBefore(t *testing.T) {
 			e.share(t)
 			work := e.addLogin(t, e.owner.ID, "lgn-work000000", "work", workLogin)
 			usage.set(work, 100)
-			e.sched.UseUsageFallback(UsageFallback{Usage: cooledUsage{loginUsage: usage, age: age}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+			e.sched.UseUsageFallback(UsageFallback{Usage: cooledUsage{loginUsage: usage, age: age}, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 			run, err := e.sched.LaunchWithOptions(t.Context(), e.ws.ID, e.member.ID, e.owner.ID, "", "claude", domain.LaunchACP, domain.LaunchOptions{AccountLogin: work.Login})
 			if err != nil {
 				t.Fatal(err)
@@ -437,7 +438,7 @@ func TestALoginBilledPerUseIsSaidSo(t *testing.T) {
 			})
 			e := &loginShareEnv{shareEnv: fe, logins: logins}
 			console := e.addLogin(t, e.member.ID, "lgn-console000", "console", "")
-			e.sched.UseUsageFallback(UsageFallback{Usage: newLoginUsage(), AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+			e.sched.UseUsageFallback(UsageFallback{Usage: newLoginUsage(), AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 			sub, err := e.bus.Subscribe(t.Context(), events.SubscribeOptions{Filter: events.Filter{Types: []events.Type{events.TypeRunAccount}}})
 			if err != nil {
 				t.Fatal(err)
@@ -791,7 +792,7 @@ func TestARunOutIsNotedWhenTheSessionCannotMove(t *testing.T) {
 	e, _, notes, usage, _ := newLoginMoveEnv(t, enhancedClaude)
 	console := e.addLogin(t, e.member.ID, "lgn-console000", "console", "")
 	reader := unreadableLogin{loginUsage: usage, login: console}
-	e.sched.UseUsageFallback(UsageFallback{Usage: reader, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	e.sched.UseUsageFallback(UsageFallback{Usage: reader, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 	t.Cleanup(func() { fallback.ForgetRunOuts(e.member.ID, "claude") })
 	run, err := e.sched.LaunchWithOptions(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP,
 		domain.LaunchOptions{AccountLogin: console.Login, Fallback: domain.AccountFallback{Disabled: true}})
@@ -833,7 +834,7 @@ func TestAMovesUsageReadIsBounded(t *testing.T) {
 	e, _, notes, usage, _ := newLoginMoveEnv(t, enhancedClaude)
 	e.share(t)
 	work := e.addLogin(t, e.owner.ID, "lgn-work000000", "work", workLogin)
-	e.sched.UseUsageFallback(UsageFallback{Usage: hangingFreshReads{usage}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	e.sched.UseUsageFallback(UsageFallback{Usage: hangingFreshReads{usage}, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 	run, err := e.sched.LaunchWithOptions(t.Context(), e.ws.ID, e.member.ID, e.owner.ID, "", "claude", domain.LaunchACP, domain.LaunchOptions{AccountLogin: work.Login})
 	if err != nil {
 		t.Fatal(err)

@@ -19,6 +19,7 @@ import (
 
 	"github.com/3xDevOps/cloudfield/internal/acphost/acpmock"
 	"github.com/3xDevOps/cloudfield/internal/agentstatus"
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/disk"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
@@ -90,7 +91,7 @@ func newFallbackEnv(t *testing.T, mutate func(*Config)) (*shareEnv, *acpRuntime,
 	notes := &roomNotes{}
 	e.sched.UseUsageFallback(UsageFallback{
 		Usage:           claudeUsage{e.owner.ID: 10},
-		AuthorizationMu: &sync.Mutex{},
+		AuthorizationMu: &ctxlock.Mutex{},
 		Note:            notes.post,
 	})
 	return e, rt, notes
@@ -186,7 +187,7 @@ func (unreadableUsage) Read(context.Context, domain.MemberID, bool) ([]quota.Pro
 func TestEnhancedRunContinuesOnAnAccountWithUnknownUsage(t *testing.T) {
 	t.Parallel()
 	e, _, notes := newFallbackEnv(t, enhancedClaude)
-	e.sched.UseUsageFallback(UsageFallback{Usage: unreadableUsage{}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	e.sched.UseUsageFallback(UsageFallback{Usage: unreadableUsage{}, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 	e.share(t)
 	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
 	if err != nil {
@@ -223,7 +224,7 @@ func TestUnknownUsageOwnAccountNeedsALoginOrKey(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			e, rt, notes := newFallbackEnv(t, enhancedClaude)
-			e.sched.UseUsageFallback(UsageFallback{Usage: unreadableUsage{}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+			e.sched.UseUsageFallback(UsageFallback{Usage: unreadableUsage{}, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 			// An empty workspace value masks a key the test process exports.
 			secrets := map[string]string{"ANTHROPIC_API_KEY": ""}
 			maps.Copy(secrets, tc.secrets)
@@ -302,7 +303,7 @@ func TestUnknownUsageCodexIgnoresKeysItDoesNotSignInWith(t *testing.T) {
 				cfg.Harnesses["codex"] = HarnessSpec{HeadlessArgs: []string{"fake-agent", "-p", "{task}"}, ACPArgs: []string{"acp-mock"}}
 			})
 			writeHomeFiles(t, e.ownerHome, ".codex/auth.json")
-			e.sched.UseUsageFallback(UsageFallback{Usage: unreadableUsage{}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+			e.sched.UseUsageFallback(UsageFallback{Usage: unreadableUsage{}, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 			e.sched.cfg.Secrets = secretstore.New(t.TempDir())
 			if err := e.sched.cfg.Secrets.Put(e.ws.ID, map[string]string{key: "sk-test"}); err != nil {
 				t.Fatal(err)
@@ -467,7 +468,7 @@ func TestRunThatExitsDuringAFailedMoveIsFinalizedAfterAProbeError(t *testing.T) 
 func testExitDuringFailedMove(t *testing.T, probeFails bool) {
 	t.Helper()
 	e, _, _ := newFallbackEnv(t, enhancedClaude)
-	mu := &sync.Mutex{}
+	mu := &ctxlock.Mutex{}
 	e.sched.UseUsageFallback(UsageFallback{Usage: claudeUsage{}, AuthorizationMu: mu})
 	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
 	if err != nil {
@@ -542,7 +543,7 @@ func TestEnhancedRunMovesAgainOnASecondLimit(t *testing.T) {
 	if _, err = e.db.ShareAccount(t.Context(), lin.ID, e.member.ID); err != nil {
 		t.Fatal(err)
 	}
-	e.sched.UseUsageFallback(UsageFallback{Usage: claudeUsage{e.owner.ID: 10, lin.ID: 20}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	e.sched.UseUsageFallback(UsageFallback{Usage: claudeUsage{e.owner.ID: 10, lin.ID: 20}, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
 	if err != nil {
 		t.Fatal(err)
@@ -583,7 +584,7 @@ func TestUnconfirmedSharedLoginDoesNotUseUpTheAccount(t *testing.T) {
 	if _, err = e.db.ShareAccount(t.Context(), lin.ID, e.member.ID); err != nil {
 		t.Fatal(err)
 	}
-	e.sched.UseUsageFallback(UsageFallback{Usage: claudeUsage{e.owner.ID: 10, lin.ID: 20}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	e.sched.UseUsageFallback(UsageFallback{Usage: claudeUsage{e.owner.ID: 10, lin.ID: 20}, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
 	if err != nil {
 		t.Fatal(err)
@@ -651,7 +652,7 @@ func TestHeadlessRunContinuesOnAFallbackAccount(t *testing.T) {
 			t.Parallel()
 			e, _, notes := newFallbackEnv(t, func(cfg *Config) { delete(cfg.Harnesses, "claude") })
 			e.share(t)
-			mu := &sync.Mutex{}
+			mu := &ctxlock.Mutex{}
 			seam := UsageFallback{Usage: claudeUsage{e.owner.ID: 10}, AuthorizationMu: mu, Note: notes.post}
 			e.sched.UseUsageFallback(seam)
 			var locked atomic.Bool
@@ -869,7 +870,7 @@ func TestBackgroundRunMovedToAnAccountThatRefusesItsModelEnds(t *testing.T) {
 	})
 	e.share(t)
 	writeHomeFiles(t, e.ownerHome, ".codex/auth.json")
-	e.sched.UseUsageFallback(UsageFallback{Usage: codexUsage{}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	e.sched.UseUsageFallback(UsageFallback{Usage: codexUsage{}, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 	e.rt.execHandler = func(id runtime.ID, argv []string) (int, string, error) {
 		c, err := e.rt.get(id)
 		if err != nil {
@@ -1025,7 +1026,7 @@ func TestMoveDecidesOnTheRunAsItIsWhenItRecords(t *testing.T) {
 					panic(err)
 				}
 			}}
-			e.sched.UseUsageFallback(UsageFallback{Usage: usage, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+			e.sched.UseUsageFallback(UsageFallback{Usage: usage, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 			_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
 
 			want := domain.RunNeedsAttention
@@ -1061,7 +1062,7 @@ func TestShutdownDuringAMoveLeavesTheRunForRecovery(t *testing.T) {
 				}()
 				<-e.sched.superCtx.Done()
 			}}
-			e.sched.UseUsageFallback(UsageFallback{Usage: usage, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+			e.sched.UseUsageFallback(UsageFallback{Usage: usage, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 			startScheduler(t, e.sched)
 			run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "fix it", "claude", domain.LaunchHeadless)
 			if err != nil {
@@ -1096,7 +1097,7 @@ func TestShutdownDuringAMoveLeavesTheRunForRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = s2.Close() })
-			s2.UseUsageFallback(UsageFallback{Usage: claudeUsage{e.owner.ID: 10}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+			s2.UseUsageFallback(UsageFallback{Usage: claudeUsage{e.owner.ID: 10}, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 			startScheduler(t, s2)
 			e.assertMovedToOwner(t, run.ID, notes)
 		})
@@ -1154,7 +1155,7 @@ func TestRestartResumesALiveRunsMove(t *testing.T) {
 					close(stopped)
 				}()
 				<-e.sched.superCtx.Done()
-			}}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+			}}, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 			startScheduler(t, e.sched)
 			var run *domain.Run
 			var err error
@@ -1199,7 +1200,7 @@ func TestRestartResumesALiveRunsMove(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = s2.Close() })
-			s2.UseUsageFallback(UsageFallback{Usage: claudeUsage{e.owner.ID: 10}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+			s2.UseUsageFallback(UsageFallback{Usage: claudeUsage{e.owner.ID: 10}, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 			startScheduler(t, s2)
 			e.assertMovedToOwner(t, run.ID, notes)
 		})
@@ -1308,7 +1309,7 @@ func TestDuplicateLimitDuringAMoveKeepsTheMark(t *testing.T) {
 			close(stopped)
 		}()
 		<-e.sched.superCtx.Done()
-	}}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	}}, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 	startScheduler(t, e.sched)
 	var err error
 	run, err = e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "fix it", "claude", domain.LaunchTUI)
@@ -1561,7 +1562,7 @@ func TestAMoveOntoAnUnreadableDefaultLoginIsRecorded(t *testing.T) {
 	t.Parallel()
 	e, _, notes := newFallbackEnv(t, enhancedClaude)
 	e.share(t)
-	e.sched.UseUsageFallback(UsageFallback{Usage: claudeUsage{e.owner.ID: 100}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	e.sched.UseUsageFallback(UsageFallback{Usage: claudeUsage{e.owner.ID: 100}, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 	if _, err := e.db.AddAgentLogin(t.Context(), domain.AgentLogin{MemberID: e.member.ID, Agent: "claude", ID: "lgn-work000000", Name: "work", CreatedAt: time.Now()}, ""); err != nil {
 		t.Fatal(err)
 	}

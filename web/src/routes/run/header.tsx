@@ -129,7 +129,7 @@ function WaitLine({ run }: { run: RunRecord }) {
  * `compact` is a row whose views show as icons, where the per-use badge names who pays instead of the account line.
  * `squeeze` is a run that names a login or is billed per use, whose row folds the label and keeps the mode to make room for it.
  */
-function StateLine({ run, agentName, narrow, compact, squeeze, controls, chip }: { run: RunRecord; agentName: string; narrow: boolean; compact: boolean; squeeze: boolean; controls: boolean; chip?: React.ReactNode }) {
+export function StateLine({ run, agentName, narrow, compact, squeeze, controls, chip }: { run: RunRecord; agentName: string; narrow: boolean; compact: boolean; squeeze: boolean; controls: boolean; chip?: React.ReactNode }) {
   const presented = useRunPresentation(run)
   const asks = useNeedsYouRuns([run.id]).has(run.id)
   const presentation = run.switching

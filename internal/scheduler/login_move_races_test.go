@@ -14,6 +14,7 @@ import (
 
 	"github.com/3xDevOps/cloudfield/internal/acphost/acpmock"
 	"github.com/3xDevOps/cloudfield/internal/agentstatus"
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
 	"github.com/3xDevOps/cloudfield/internal/fallback"
@@ -189,7 +190,7 @@ func TestASecondLimitDuringALoginMoveIsTheSameMove(t *testing.T) {
 // moveGap runs gap once, under the authorization mutex as an RPC would,
 // while a move of run holds its chosen login and has not recorded it: when
 // the old container is removed.
-func (e *loginShareEnv) moveGap(run domain.RunID, mu *sync.Mutex, gap func()) *atomic.Bool {
+func (e *loginShareEnv) moveGap(run domain.RunID, mu *ctxlock.Mutex, gap func()) *atomic.Bool {
 	old := e.rt.byName(string(run)).id
 	var ran atomic.Bool
 	e.rt.mu.Lock()
@@ -211,7 +212,7 @@ func (e *loginShareEnv) moveGap(run domain.RunID, mu *sync.Mutex, gap func()) *a
 func TestRemovingALoginAMoveChoseIsRefused(t *testing.T) {
 	t.Parallel()
 	e, _, notes, usage, second := newLoginMoveEnv(t, func(cfg *Config) { delete(cfg.Harnesses, "claude") })
-	mu := &sync.Mutex{}
+	mu := &ctxlock.Mutex{}
 	e.sched.UseUsageFallback(UsageFallback{Usage: usage, AuthorizationMu: mu, Note: notes.post})
 	startScheduler(t, e.sched)
 	<-e.sched.RecoveryReady()
@@ -235,7 +236,7 @@ func TestTurningAChosenLoginOffDuringAMove(t *testing.T) {
 	t.Run("automatic off", func(t *testing.T) {
 		t.Parallel()
 		e, _, notes, usage, second := newLoginMoveEnv(t, func(cfg *Config) { delete(cfg.Harnesses, "claude") })
-		mu := &sync.Mutex{}
+		mu := &ctxlock.Mutex{}
 		e.sched.UseUsageFallback(UsageFallback{Usage: usage, AuthorizationMu: mu, Note: notes.post})
 		startScheduler(t, e.sched)
 		<-e.sched.RecoveryReady()
@@ -254,7 +255,7 @@ func TestTurningAChosenLoginOffDuringAMove(t *testing.T) {
 	t.Run("automatic off on a teammate's login", func(t *testing.T) {
 		t.Parallel()
 		e, _, notes, usage, _ := newLoginMoveEnv(t, func(cfg *Config) { delete(cfg.Harnesses, "claude") })
-		mu := &sync.Mutex{}
+		mu := &ctxlock.Mutex{}
 		e.sched.UseUsageFallback(UsageFallback{Usage: usage, AuthorizationMu: mu, Note: notes.post})
 		e.share(t)
 		work := e.addLogin(t, e.owner.ID, "lgn-work000000", "work", workLogin)
@@ -292,7 +293,7 @@ func TestTurningAChosenLoginOffDuringAMove(t *testing.T) {
 	t.Run("off for shares", func(t *testing.T) {
 		t.Parallel()
 		e, _, notes, usage, _ := newLoginMoveEnv(t, func(cfg *Config) { delete(cfg.Harnesses, "claude") })
-		mu := &sync.Mutex{}
+		mu := &ctxlock.Mutex{}
 		e.sched.UseUsageFallback(UsageFallback{Usage: usage, AuthorizationMu: mu, Note: notes.post})
 		e.share(t)
 		work := e.addLogin(t, e.owner.ID, "lgn-work000000", "work", workLogin)
@@ -391,7 +392,7 @@ func TestRestartAtEachStepOfALoginMove(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = s2.Close() })
-			s2.UseUsageFallback(UsageFallback{Usage: usage, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+			s2.UseUsageFallback(UsageFallback{Usage: usage, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 			startScheduler(t, s2)
 
 			sent := func() (continuations, prompts int) {
@@ -537,7 +538,7 @@ func TestAPromptDuringAMoveIsRefused(t *testing.T) {
 	var injectErr error
 	e.sched.UseUsageFallback(UsageFallback{Usage: &hookedLoginUsage{loginUsage: usage, during: func() {
 		_, injectErr = e.sched.Inject(context.Background(), run.ID, e.member.ID, domain.AgentPrompt{Text: "run a long tool"}, false, nil)
-	}}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	}}, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 	_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
 	waitFor(t, "the session on the second login", func() bool {
 		row, rowErr := e.db.GetRun(t.Context(), run.ID)
@@ -797,7 +798,7 @@ func TestMailDuringAMoveIsNotDelivered(t *testing.T) {
 	var wakeErr error
 	e.sched.UseUsageFallback(UsageFallback{Usage: &hookedLoginUsage{loginUsage: usage, during: func() {
 		wakeErr = e.sched.WakeEnhanced(context.Background(), run.ID, "unread mail")
-	}}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	}}, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 	_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
 	waitFor(t, "the session on the second login", func() bool {
 		row, rowErr := e.db.GetRun(t.Context(), run.ID)
@@ -878,7 +879,7 @@ func TestARevokeRecheckThatKeepsTheSessionSendsItsContinuation(t *testing.T) {
 				usage = codexUsage{}
 			}
 			var once sync.Once
-			e.sched.UseUsageFallback(UsageFallback{Usage: usage, AuthorizationMu: &sync.Mutex{}, Note: func(ctx context.Context, run *domain.Run, body, key string) error {
+			e.sched.UseUsageFallback(UsageFallback{Usage: usage, AuthorizationMu: &ctxlock.Mutex{}, Note: func(ctx context.Context, run *domain.Run, body, key string) error {
 				once.Do(func() {
 					e.sched.mu.Lock()
 					entry := e.sched.runs[run.ID]
@@ -987,7 +988,7 @@ func TestAPromptDuringAMoveBetweenAccountsNamesNoLogin(t *testing.T) {
 	var injectErr error
 	e.sched.UseUsageFallback(UsageFallback{Usage: &hookedLoginUsage{loginUsage: newLoginUsage(), during: func() {
 		_, injectErr = e.sched.Inject(context.Background(), run.ID, e.member.ID, domain.AgentPrompt{Text: "run a long tool"}, false, nil)
-	}}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	}}, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
 	_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
 	waitFor(t, "the session on Grace's account", func() bool {
 		row, rowErr := e.db.GetRun(t.Context(), run.ID)

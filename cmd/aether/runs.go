@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -23,7 +24,7 @@ import (
 func init() {
 	register(command{
 		name:  "sessions",
-		short: "list sessions (--needs-you: sessions that need you; --archived: only archived), or show one: cloudfield sessions <session-id>",
+		short: "list sessions (--needs-you: sessions that need a member; --archived: only archived), or show one: cloudfield sessions <session-id>",
 		usage: "cloudfield sessions [--needs-you|--archived] [--json]\n" +
 			"cloudfield sessions <session-id> [--json]",
 		example: "cloudfield sessions --json\n" +
@@ -70,6 +71,21 @@ type runView struct {
 	AsleepSaved    bool    `json:"asleep_saved,omitempty"`
 	AsleepInMemory bool    `json:"asleep_in_memory,omitempty"`
 	WakeError      string  `json:"wake_error,omitempty"`
+	// Agent and Mode are the values --agent and --mode take, not the wire's
+	// harness and mode.
+	Agent              string                   `json:"agent"`
+	Mode               string                   `json:"mode"`
+	Model              string                   `json:"model,omitempty"`
+	Effort             string                   `json:"effort,omitempty"`
+	ParentRunID        string                   `json:"parent_run_id,omitempty"`
+	RootRunID          string                   `json:"root_run_id,omitempty"`
+	ChildPurpose       string                   `json:"child_purpose,omitempty"`
+	Detached           bool                     `json:"detached,omitempty"`
+	Children           string                   `json:"children,omitempty"`
+	UnackedMessages    int                      `json:"unacked_messages"`
+	OldestUnackedAt    *string                  `json:"oldest_unacked_at,omitempty"`
+	WaitConditions     []protocol.WaitCondition `json:"wait_conditions,omitempty"`
+	ControllerMemberID string                   `json:"controller_member_id,omitempty"`
 	// AccountLogin is the added login the session spends; empty on the
 	// default login, and AccountLoginName empty once the login is removed.
 	AccountLogin       string `json:"account_login,omitempty"`
@@ -95,6 +111,10 @@ func viewOf(r protocol.Run, workspace string, items []protocol.AttentionItem, re
 		ID: r.ID, WorkspaceID: r.WorkspaceID, Workspace: workspace, Status: displayStatus(r), State: r.Status,
 		Reason: r.Reason, Wait: r.Wait, WaitText: r.Wait.Text(time.Now()), Branch: r.Branch, PendingInputs: []pendingInput{},
 		AsleepSince: r.AsleepSince, AsleepSaved: r.AsleepSaved, AsleepInMemory: r.AsleepInMemory, WakeError: r.WakeError,
+		Agent: r.Harness, Mode: modeName(r.Mode), Model: r.Model, Effort: r.Effort,
+		ParentRunID: r.ParentRunID, RootRunID: r.RootRunID, ChildPurpose: r.ChildPurpose, Detached: r.Detached, Children: r.Children,
+		UnackedMessages: r.UnackedMessages, OldestUnackedAt: r.OldestUnackedAt,
+		WaitConditions: r.WaitConditions, ControllerMemberID: r.ControllerMemberID,
 		AccountLogin: r.AccountLogin, AccountLoginName: r.AccountLoginName, AccountLoginPerUse: r.AccountLoginPerUse,
 	}
 	offered := map[string][]protocol.AttentionOption{}
@@ -216,7 +236,7 @@ func statusLine(v runView) string {
 	return line
 }
 
-func printRunView(w io.Writer, v runView, items []protocol.AttentionItem) error {
+func printRunView(w io.Writer, v runView, items []protocol.AttentionItem, controller string) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintf(tw, "run\t%s\n", v.ID)
 	_, _ = fmt.Fprintf(tw, "status\t%s\n", v.Status)
@@ -246,6 +266,20 @@ func printRunView(w io.Writer, v runView, items []protocol.AttentionItem) error 
 	_, _ = fmt.Fprintf(tw, "workspace\t%s (%s)\n", v.Workspace, v.WorkspaceID)
 	_, _ = fmt.Fprintf(tw, "branch\t%s\n", v.Branch)
 	_, _ = fmt.Fprintf(tw, "state\t%s\n", v.State)
+	_, _ = fmt.Fprintf(tw, "agent\t%s\n", v.Agent)
+	_, _ = fmt.Fprintf(tw, "mode\t%s\n", v.Mode)
+	if v.ParentRunID != "" {
+		_, _ = fmt.Fprintf(tw, "parent\t%s\n", parentCell(v.ParentRunID, v.Detached))
+	}
+	if v.OldestUnackedAt != nil {
+		_, _ = fmt.Fprintf(tw, "mail\t%d not acknowledged, oldest sent %s\n", v.UnackedMessages, *v.OldestUnackedAt)
+	}
+	if controller != "" {
+		_, _ = fmt.Fprintf(tw, "controller\t%s\n", controller)
+	}
+	for _, wc := range v.WaitConditions {
+		_, _ = fmt.Fprintf(tw, "until\t%s %s %s\n", wc.ID, wc.Spec, cmp.Or(wc.Outcome, wc.State))
+	}
 	if v.AccountLogin != "" {
 		login := v.AccountLogin
 		if v.AccountLoginName != "" {
@@ -268,25 +302,42 @@ func printRunView(w io.Writer, v runView, items []protocol.AttentionItem) error 
 	return printNeeds(w, v.ID, items)
 }
 
-func runShow(runID string, asJSON bool) error {
-	return withControl(func(c *protocol.Client) error {
-		r, err := getRun(c, runID)
-		if err != nil {
-			return err
+func runShow(c *protocol.Client, w io.Writer, runID string, asJSON bool) error {
+	r, err := getRun(c, runID)
+	if err != nil {
+		return err
+	}
+	items, err := attentionItems(c, r.WorkspaceID)
+	if err != nil {
+		return err
+	}
+	v, err := runViewOf(c, r, items)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return writeJSON(w, v)
+	}
+	var controller string
+	if v.ControllerMemberID != "" {
+		names, nerr := memberNames(c)
+		if nerr != nil {
+			return nerr
 		}
-		items, err := attentionItems(c, r.WorkspaceID)
-		if err != nil {
-			return err
-		}
-		v, err := runViewOf(c, r, items)
-		if err != nil {
-			return err
-		}
-		if asJSON {
-			return writeJSON(os.Stdout, v)
-		}
-		return printRunView(os.Stdout, v, items)
-	})
+		controller = nameOrID(names, v.ControllerMemberID)
+	}
+	if err = printRunView(w, v, items, controller); err != nil {
+		return err
+	}
+	if waitsOnAnother(r, items) {
+		_, err = fmt.Fprintf(w, "%s waits on another member\n", r.ID)
+	}
+	return err
+}
+
+// attention.list leaves out a run only another member can answer.
+func waitsOnAnother(r protocol.Run, items []protocol.AttentionItem) bool {
+	return needsYou(r) && !slices.ContainsFunc(items, func(it protocol.AttentionItem) bool { return it.RunID == r.ID })
 }
 
 // needsYou selects the runs that need a member, by the rule push
@@ -312,12 +363,24 @@ func plural(n int, noun string) string {
 	return fmt.Sprintf("%d %ss are", n, noun)
 }
 
-// renderRuns writes the table, filtering archived runs independently of status.
-func renderRuns(w io.Writer, runs []protocol.Run, memberName func(string) string, overlapOf map[string]string, onlyNeedsYou, archived bool) error {
+// parentCell marks a detached subsession, whose outcome is its own member's
+// and no longer its parent's.
+func parentCell(parentID string, detached bool) string {
+	if detached {
+		return parentID + " (detached)"
+	}
+	return parentID
+}
+
+// renderRuns writes the table to w, filtering archived runs independently of
+// status. With onlyNeedsYou it then writes what each listed run needs to
+// stderr, so a pipeline reading the table sees the table alone.
+func renderRuns(w, stderr io.Writer, runs []protocol.Run, memberName func(string) string, overlapOf map[string]string, items []protocol.AttentionItem, onlyNeedsYou, archived bool) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "ID\tSTATUS\tAGENT\tMEMBER\tACCOUNT\tOVERLAP\tTITLE\tTASK"); err != nil {
+	if _, err := fmt.Fprintln(tw, "ID\tSTATUS\tAGENT\tMODE\tMEMBER\tACCOUNT\tPARENT\tMAIL\tOVERLAP\tTITLE\tTASK"); err != nil {
 		return err
 	}
+	var needs strings.Builder
 	for _, r := range runs {
 		if (r.ArchivedAt != nil) != archived {
 			continue
@@ -345,12 +408,32 @@ func renderRuns(w io.Writer, runs []protocol.Run, memberName func(string) string
 		if r.AsleepSince != nil {
 			status += " (asleep)"
 		}
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			r.ID, status, r.Harness, memberName(r.MemberID), account, overlapOf[r.ID], title, task); err != nil {
+		mail := ""
+		if r.UnackedMessages > 0 {
+			mail = strconv.Itoa(r.UnackedMessages)
+		}
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			r.ID, status, r.Harness, modeName(r.Mode), memberName(r.MemberID), account, parentCell(r.ParentRunID, r.Detached), mail, overlapOf[r.ID], title, task); err != nil {
 			return err
 		}
+		if !onlyNeedsYou {
+			continue
+		}
+		if err := printNeeds(&needs, r.ID, items); err != nil {
+			return err
+		}
+		if waitsOnAnother(r, items) {
+			_, _ = fmt.Fprintf(&needs, "%s waits on another member; aether sessions %s shows its state\n", r.ID, r.ID)
+		}
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	if needs.Len() == 0 {
+		return nil
+	}
+	_, err := fmt.Fprint(stderr, "\n", needs.String())
+	return err
 }
 
 // displayStatus is the dashboard's label for a live run's state, else for
@@ -410,9 +493,9 @@ var statusLabels = map[domain.RunStatus]string{
 
 func runRuns(args []string) error {
 	fs := newFlagSet("sessions")
-	onlyNeedsYou := fs.Bool("needs-you", false, "list only sessions that need you (state needs-you or disconnected, or an unseen failure; never paused, never a finished session awaiting review)")
+	onlyNeedsYou := fs.Bool("needs-you", false, "list only sessions that need a member (state needs-you or disconnected, or an unseen failure; never paused, never a finished session awaiting review), then on stderr what each needs from you with the command that answers it, or that it waits on another member")
 	archived := fs.Bool("archived", false, "list only archived sessions")
-	asJSON := fs.Bool("json", false, "print a JSON array, or with a session id one JSON object: id, workspace_id, workspace, status, state, reason, pending_inputs, branch, report, and on an added login account_login, account_login_name, account_login_per_use")
+	asJSON := fs.Bool("json", false, "print a JSON array, or with a session id one JSON object: id, workspace_id, workspace, status, state, reason, pending_inputs, branch, report, agent, mode, parent_run_id, unacked_messages, wait_conditions, controller_member_id, and on an added login account_login, account_login_name, account_login_per_use")
 	runID := ""
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		runID, args = args[0], args[1:]
@@ -432,71 +515,83 @@ func runRuns(args []string) error {
 		if *onlyNeedsYou || *archived {
 			return fmt.Errorf("aether sessions <session-id> shows one session: drop --needs-you and --archived")
 		}
-		return runShow(runID, *asJSON)
+		return withControl(func(c *protocol.Client) error { return runShow(c, os.Stdout, runID, *asJSON) })
 	}
 	return withControl(func(c *protocol.Client) error {
-		var rl protocol.RunListResult
-		if err := c.Call(protocol.MethodRunList, protocol.RunListParams{}, &rl); err != nil {
-			return err
-		}
-		if *asJSON {
-			listed := slices.DeleteFunc(rl.Runs, func(r protocol.Run) bool {
-				return (r.ArchivedAt != nil) != *archived || *onlyNeedsYou && !needsYou(r)
-			})
-			views, err := listRunViews(c, listed)
-			if err != nil {
-				return err
-			}
-			return writeJSON(os.Stdout, views)
-		}
-		var ml protocol.MemberListResult
-		if err := c.Call(protocol.MethodMemberList, struct{}{}, &ml); err != nil {
-			return err
-		}
-		var ol protocol.RunOverlapsResult
-		if err := c.Call(protocol.MethodRunOverlaps, struct{}{}, &ol); err != nil {
-			return err
-		}
-		colorOf := map[string]string{}
-		nameOf := map[string]string{}
-		for _, m := range ml.Members {
-			colorOf[m.ID] = m.Color
-			nameOf[m.ID] = m.DisplayName
-		}
-		color := term.IsTerminal(int(os.Stdout.Fd()))
-		memberName := func(id string) string {
-			name := nameOf[id]
-			if name == "" {
-				name = id
-			}
-			if color {
-				name = attribution.Sprint(colorOf[id], name)
-			}
-			return name
-		}
-		overlapOf := map[string]string{}
-		for _, o := range ol.Overlaps {
-			flags := make([]string, 0, len(o.With))
-			for _, p := range o.With {
-				flags = append(flags, strings.Join(p.Files, ",")+" with "+memberName(p.MemberID))
-			}
-			overlapOf[o.RunID] = strings.Join(flags, "; ")
-		}
-		waiting := 0
-		for _, r := range rl.Runs {
-			if needsYou(r) {
-				waiting++
-			}
-		}
-		if err := renderRuns(os.Stdout, rl.Runs, memberName, overlapOf, *onlyNeedsYou, *archived); err != nil {
-			return err
-		}
-		// The notice goes to stderr so it never lands in a pipeline reading
-		// the table, and it is skipped when the table already is the answer.
-		if waiting > 0 && !*onlyNeedsYou && !*archived {
-			_, _ = fmt.Fprintf(os.Stderr, "\n%s waiting for you: aether sessions --needs-you\n",
-				plural(waiting, "session"))
-		}
-		return nil
+		return listRuns(c, os.Stdout, os.Stderr, *onlyNeedsYou, *archived, *asJSON)
 	})
+}
+
+func listRuns(c *protocol.Client, stdout, stderr io.Writer, onlyNeedsYou, archived, asJSON bool) error {
+	var rl protocol.RunListResult
+	if err := c.Call(protocol.MethodRunList, protocol.RunListParams{}, &rl); err != nil {
+		return err
+	}
+	if asJSON {
+		listed := slices.DeleteFunc(rl.Runs, func(r protocol.Run) bool {
+			return (r.ArchivedAt != nil) != archived || onlyNeedsYou && !needsYou(r)
+		})
+		views, err := listRunViews(c, listed)
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, views)
+	}
+	var ml protocol.MemberListResult
+	if err := c.Call(protocol.MethodMemberList, struct{}{}, &ml); err != nil {
+		return err
+	}
+	var ol protocol.RunOverlapsResult
+	if err := c.Call(protocol.MethodRunOverlaps, struct{}{}, &ol); err != nil {
+		return err
+	}
+	colorOf := map[string]string{}
+	nameOf := map[string]string{}
+	for _, m := range ml.Members {
+		colorOf[m.ID] = m.Color
+		nameOf[m.ID] = m.DisplayName
+	}
+	f, isFile := stdout.(*os.File)
+	color := isFile && term.IsTerminal(int(f.Fd()))
+	memberName := func(id string) string {
+		name := nameOf[id]
+		if name == "" {
+			name = id
+		}
+		if color {
+			name = attribution.Sprint(colorOf[id], name)
+		}
+		return name
+	}
+	overlapOf := map[string]string{}
+	for _, o := range ol.Overlaps {
+		flags := make([]string, 0, len(o.With))
+		for _, p := range o.With {
+			flags = append(flags, strings.Join(p.Files, ",")+" with "+memberName(p.MemberID))
+		}
+		overlapOf[o.RunID] = strings.Join(flags, "; ")
+	}
+	waiting := 0
+	for _, r := range rl.Runs {
+		if needsYou(r) {
+			waiting++
+		}
+	}
+	var items []protocol.AttentionItem
+	if onlyNeedsYou {
+		var err error
+		if items, err = attentionItems(c, ""); err != nil {
+			return err
+		}
+	}
+	if err := renderRuns(stdout, stderr, rl.Runs, memberName, overlapOf, items, onlyNeedsYou, archived); err != nil {
+		return err
+	}
+	// The notice goes to stderr so it never lands in a pipeline reading
+	// the table, and it is skipped when the table already is the answer.
+	if waiting > 0 && !onlyNeedsYou && !archived {
+		_, _ = fmt.Fprintf(stderr, "\n%s waiting for a member: aether sessions --needs-you\n",
+			plural(waiting, "session"))
+	}
+	return nil
 }

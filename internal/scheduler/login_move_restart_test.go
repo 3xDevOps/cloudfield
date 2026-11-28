@@ -4,12 +4,12 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/acphost"
 	"github.com/3xDevOps/cloudfield/internal/acphost/acpmock"
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
 	acp "github.com/coder/acp-go-sdk"
@@ -71,7 +71,7 @@ func TestRestartNeverResendsAContinuationBeingSent(t *testing.T) {
 						close(stopped)
 					}()
 					<-e.sched.superCtx.Done()
-				}}, AuthorizationMu: &sync.Mutex{}})
+				}}, AuthorizationMu: &ctxlock.Mutex{}})
 				run, err = e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, acpmock.PromptUsageLimit, "codex", domain.LaunchHeadless)
 				if err != nil {
 					t.Fatal(err)

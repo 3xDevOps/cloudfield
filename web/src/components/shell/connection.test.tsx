@@ -98,3 +98,17 @@ it('names the servers the edge does see online when the linked one is not', () =
     'Server registration failed · edge.example.test has no live registration for server srv123 - compare with sudo aether-server edge status on that host; edge.example.test sees workstation (srv456) online, and this dashboard is linked to server srv123',
   )
 })
+
+it('shows the edge text of a refusal from a retired address', () => {
+  useStore.setState({
+    connection: 'reconnecting',
+    linkStatus: { ...linkStatus, addr: '', edge_url: 'https://old.example.test', server_id: 'srv123' },
+    unreachable: 'edge-refused',
+    retiredText: 'https://old.example.test is retired; this edge is at https://new.example.test',
+  })
+  expect(renderHook(useConnectionProblem).result.current).toBe(
+    'Authorization failed · old.example.test refused the connection to server srv123: https://old.example.test is retired; this edge is at https://new.example.test',
+  )
+  useStore.getState().setUnreachable(null)
+  expect(useStore.getState().retiredText).toBeNull()
+})
