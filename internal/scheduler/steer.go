@@ -675,6 +675,11 @@ func (s *Scheduler) Inject(ctx context.Context, run domain.RunID, actor domain.M
 		s.mu.Unlock()
 		return "", fmt.Errorf("%w: %w; send the message when it finishes", ptyhost.ErrNoSession, ErrSwitching)
 	}
+	// A terminal showing a dialog takes the typed message as its answer.
+	if entry != nil && !entry.acp && len(entry.pendingInputs) != 0 {
+		s.mu.Unlock()
+		return "", fmt.Errorf("%w: the agent is waiting for an answer in its terminal; answer it there, then send the message again", domain.ErrPromptNotSent)
+	}
 	if entry != nil && (entry.status == domain.RunRunning || entry.status == domain.RunNeedsAttention) {
 		workspace := entry.workspaceID
 		s.mu.Unlock()

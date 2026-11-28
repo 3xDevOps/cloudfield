@@ -455,8 +455,9 @@ func (s *Scheduler) goMove(move func()) {
 // continueTerminalRun takes a Standard run's report that its agent stopped
 // on the usage limit, and reports whether it did. The move runs behind the
 // agent's hook, which must return at once; when the run is not moved, the
-// report applies as it would have without fallback.
-func (s *Scheduler) continueTerminalRun(ctx context.Context, run domain.RunID, report agentstatus.Report) bool {
+// report applies as it would have without fallback. An error is the input
+// updates' alone: the move has started by then.
+func (s *Scheduler) continueTerminalRun(ctx context.Context, run domain.RunID, report agentstatus.Report) (bool, error) {
 	s.mu.Lock()
 	entry := s.runs[run]
 	if entry != nil && entry.moving {
@@ -472,7 +473,7 @@ func (s *Scheduler) continueTerminalRun(ctx context.Context, run domain.RunID, r
 		if newSession {
 			s.recordAgentSession(ctx, entry)
 		}
-		return true
+		return true, nil
 	}
 	movable := entry != nil && s.usageMovableLocked(entry, true) && !entry.finalizing && !entry.exitObserved
 	newSession := movable && s.recordReportedSessionLocked(entry, report.SessionID)
@@ -481,13 +482,18 @@ func (s *Scheduler) continueTerminalRun(ctx context.Context, run domain.RunID, r
 	}
 	s.mu.Unlock()
 	if !movable {
-		return false
+		return false, nil
 	}
 	if newSession {
 		s.recordAgentSession(ctx, entry)
 	}
+	// Only the execution report waits for the move.
+	var err error
+	if len(report.InputUpdates) != 0 {
+		_, err = s.applyAgentReport(ctx, run, agentstatus.Report{InputUpdates: report.InputUpdates})
+	}
 	s.goMove(func() { s.continueStandard(entry, report.Reason) })
-	return true
+	return true, err
 }
 
 // subscribeUsageLimits replays from after when asked to and the bus keeps a
@@ -907,11 +913,16 @@ func (s *Scheduler) replaceContainer(ctx context.Context, entry *supervised, f *
 		entry.userReservation = nil
 	}
 	entry.runUser = ""
-	// The exit and usage limit were the old container's; the sidecar that
-	// names the new one must not carry them.
+	// The exit, usage limit and input requests were the old container's; the
+	// sidecar that names the new one must not carry them.
 	entry.exitObserved, entry.exitCode, entry.usageLimit = false, 0, ""
+	entry.inputPublishPending = entry.inputPublishPending || len(entry.pendingInputs) != 0
+	entry.pendingInputs = nil
 	if werr := s.writeSidecar(entry.sidecar()); werr != nil {
 		slog.Warn("scheduler: persist the removed container", "run", run.ID, "error", werr)
+	}
+	if perr := s.publishPendingInputLocked(ctx, entry); perr != nil {
+		slog.Warn("scheduler: publish the removed agent's input", "run", run.ID, "error", perr)
 	}
 	s.mu.Unlock()
 	seq, err := s.commitMove(ctx, entry, f, m, run, to)
