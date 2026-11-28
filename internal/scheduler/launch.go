@@ -333,11 +333,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	if err != nil {
 		return nil, err
 	}
-	reserve := s.reserveCapacity
-	if opts.Retry {
-		reserve = s.reserveRetry
-	}
-	release, err := reserve(ctx)
+	release, err := s.reserveLaunch(ctx, reservedID, opts.Retry)
 	if err != nil {
 		return nil, err
 	}

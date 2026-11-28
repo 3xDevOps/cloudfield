@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -1377,6 +1378,21 @@ func TestSubsessionWithNoRoomWaitsAndStartsLater(t *testing.T) {
 	}
 	if len(h.runs.launched) != 3 {
 		t.Fatalf("started %d sessions, want 3", len(h.runs.launched))
+	}
+	// The second subsession never met a refusal of its own, so two waited.
+	counts, err := h.db.CapacityCounts(h.ctx, h.now.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	for _, c := range counts {
+		got[c.Kind+" "+c.Op+" "+c.Cause] += c.Count
+		if c.Kind == domain.CapacityWaitEnd && c.MaxWaited < capacityRetryEvery {
+			t.Fatalf("longest wait counted = %s, want at least a retry time", c.MaxWaited)
+		}
+	}
+	if want := map[string]int64{"wait subsession ": 2, "wait-end subsession started": 2}; !maps.Equal(got, want) {
+		t.Fatalf("counted waits = %v, want %v", got, want)
 	}
 }
 

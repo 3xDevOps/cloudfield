@@ -776,7 +776,7 @@ func TestABootToCommitAndAWakeCountEachOthersMemory(t *testing.T) {
 	mr.memMu.Unlock()
 	mr.setAvailable(memoryFloor(32<<30) + 7<<30)
 
-	release, err := e.sched.reserveBoot(t.Context(), booted)
+	release, err := e.sched.reserveBoot(t.Context(), run, booted)
 	if err != nil {
 		t.Fatalf("a boot to commit with room for its saved memory: %v", err)
 	}
@@ -787,7 +787,7 @@ func TestABootToCommitAndAWakeCountEachOthersMemory(t *testing.T) {
 	if err = e.sched.WakeRun(t.Context(), run, ""); err != nil {
 		t.Fatalf("a wake once the boot ended: %v", err)
 	}
-	if _, err = e.sched.reserveBoot(t.Context(), booted); !errors.Is(err, ErrMemoryPressure) {
+	if _, err = e.sched.reserveBoot(t.Context(), run, booted); !errors.Is(err, ErrMemoryPressure) {
 		t.Fatalf("a boot to commit while a woken VM has 6 GiB to load = %v, want the memory refusal", err)
 	}
 }
