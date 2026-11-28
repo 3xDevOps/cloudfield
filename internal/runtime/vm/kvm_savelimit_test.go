@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -25,7 +26,7 @@ func TestKVMSaveOfAFullVMNeverReachesTheUnitsMemoryLimit(t *testing.T) {
 	e := kvmEngine(t)
 	key := "run-save-full"
 	t.Cleanup(func() { _ = e.destroy(context.Background(), key) })
-	sum := fullSession(t, e, key)
+	sum := fullSession(t, e, key, 2)
 	held := guestRAMOnHost(t, key)
 	reached, err := saveCountingLimit(e, key)
 	if err != nil {
@@ -55,7 +56,7 @@ func TestKVMAResumeAfterASnapshotGivesTheUnitItsMemoryLimitBack(t *testing.T) {
 		}
 		_ = e.destroy(context.Background(), key)
 	})
-	sum := fullSession(t, e, key)
+	sum := fullSession(t, e, key, 2)
 	rec, err := e.load(key)
 	if err != nil {
 		t.Fatal(err)
@@ -95,13 +96,14 @@ func TestKVMAResumeAfterASnapshotGivesTheUnitItsMemoryLimitBack(t *testing.T) {
 }
 
 // TestKVMASaveKeepsItsLiftedMemoryLimitWhenSystemdAppliesTheUnitAgain makes
-// systemd apply the unit's settings while a full VM is saved: another unit
-// in the slice starts and stops with controllers the slice had off, and
-// where AETHER_VM_TEST_DAEMON_RELOAD is set, a daemon-reload. Written to
-// the cgroup file alone, the lifted limit was put back from systemd's own
-// record. The saved VM's unit ends with the limit lifted in that record, so
-// the units that follow it, after a wake and after a start, must hold the
-// limit again and inherit no setting.
+// systemd apply the unit's settings while a full VM is saved. The VM has no
+// CPU limit and no other unit in the slice has a CPU setting, so the start
+// of one that has turns the slice's cpu controller on and its stop turns
+// it off; where AETHER_VM_TEST_DAEMON_RELOAD is set, systemd also reloads.
+// Written to the cgroup file alone, the lifted limit was put back from
+// systemd's own record. The saved VM's unit ends with the limit lifted in
+// that record, so the units that follow it, after a wake and after a
+// start, must hold the limit again and inherit no setting.
 func TestKVMASaveKeepsItsLiftedMemoryLimitWhenSystemdAppliesTheUnitAgain(t *testing.T) {
 	e := kvmEngine(t)
 	key := "run-save-reapply"
@@ -113,10 +115,14 @@ func TestKVMASaveKeepsItsLiftedMemoryLimitWhenSystemdAppliesTheUnitAgain(t *test
 		_ = exec.Command("systemctl", "stop", sibling).Run()
 		_ = e.destroy(context.Background(), key)
 	})
-	fullSession(t, e, key)
+	fullSession(t, e, key, 0)
 	rec, err := e.load(key)
 	if err != nil {
 		t.Fatal(err)
+	}
+	slice := filepath.Join(e.cgroupRoot, runtime.SessionSlice, "cgroup.subtree_control")
+	if on, _ := os.ReadFile(slice); slices.Contains(strings.Fields(string(on)), "cpu") {
+		t.Fatalf("%s holds %q: a unit with a CPU setting runs in the slice, so the start of another applies no unit again", slice, on)
 	}
 	limit := strconv.FormatInt(unitMemoryMiB(rec)<<20, 10)
 	unit := unitName(key)
@@ -155,7 +161,7 @@ func TestKVMASaveKeepsItsLiftedMemoryLimitWhenSystemdAppliesTheUnitAgain(t *test
 	}
 	lifted := time.Now()
 	reapplies := [][]string{
-		{"systemd-run", "--unit=" + sibling, "--slice=" + runtime.SessionSlice, "--collect", "--quiet", "--property=IOWeight=50", "--property=AllowedCPUs=0", "sleep", "infinity"},
+		{"systemd-run", "--unit=" + sibling, "--slice=" + runtime.SessionSlice, "--collect", "--quiet", "--property=CPUWeight=50", "sleep", "infinity"},
 		{"systemctl", "stop", sibling},
 	}
 	if os.Getenv("AETHER_VM_TEST_DAEMON_RELOAD") != "" {
@@ -200,13 +206,13 @@ func TestKVMASaveKeepsItsLiftedMemoryLimitWhenSystemdAppliesTheUnitAgain(t *test
 	limited("after a start")
 }
 
-// fullSession starts a 2 GiB session VM that holds 1800 MiB in /dev/shm and
-// returns that file's checksum.
-func fullSession(t *testing.T, e *engine, key string) []string {
+// fullSession starts a 2 GiB session VM with a limit of cpus CPUs, or none
+// at 0, that holds 1800 MiB in /dev/shm, and returns that file's checksum.
+func fullSession(t *testing.T, e *engine, key string, cpus float64) []string {
 	t.Helper()
 	spec := runtime.Spec{
 		Image: "docker.io/library/ubuntu:24.04", CreationKey: key, Command: []string{"/bin/sh", "-c", "exec sleep infinity"},
-		Env: map[string]string{"AETHER_RUN_ID": key}, CPULimit: 2, MemoryLimitBytes: 2 << 30,
+		Env: map[string]string{"AETHER_RUN_ID": key}, CPULimit: cpus, MemoryLimitBytes: 2 << 30,
 	}
 	if _, err := e.create(t.Context(), key, spec, options{Offline: true}); err != nil {
 		t.Fatal(err)
