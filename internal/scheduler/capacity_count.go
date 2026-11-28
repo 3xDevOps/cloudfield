@@ -68,16 +68,12 @@ func (s *Scheduler) countCapacityEvents(ctx context.Context, counts store.Capaci
 		var c capacityCount
 		select {
 		case <-ctx.Done():
-			// What still waits is said, not lost in silence.
-			for {
-				select {
-				case c = <-s.capacityCounts:
-					slog.Warn("scheduler: capacity: not counted, the server is stopping", "kind", c.event.Kind, "op", c.event.Op, "cause", c.event.Cause, "run", c.event.Run, "text", c.event.Text)
-				default:
-					return
-				}
-			}
+			return
 		case c = <-s.capacityCounts:
+		}
+		if ctx.Err() != nil {
+			slog.Warn("scheduler: capacity: not counted, the server is stopping", "kind", c.event.Kind, "op", c.event.Op, "cause", c.event.Cause, "run", c.event.Run, "text", c.event.Text)
+			continue
 		}
 		e := c.event
 		if c.memory {

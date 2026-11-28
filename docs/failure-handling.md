@@ -834,9 +834,9 @@ What the counts are not:
   subsession that started as the server stopped, can go uncounted.
 
 Counting never holds up admission, the brake or the guard: their events go
-to the database from a queue of 256. One that finds the queue full, or that
-a stopping server has not written, is logged (`not counted, ...`) and not
-counted. A subsession's `wait` and `wait-end` are written by the subsession
+to the database from a queue of 256. One that finds the queue full is
+logged (`not counted, ...`) and not counted, and a server that stops can
+leave its last events uncounted. A subsession's `wait` and `wait-end` are written by the subsession
 service itself, after its state changed and outside the launch lock.
 
 ## Where a launch or a wake spends its time
