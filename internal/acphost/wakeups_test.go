@@ -48,6 +48,18 @@ func TestAgentWakeupsArePendingUntilTheyFire(t *testing.T) {
 	}
 }
 
+func TestOneShotCronWithABareZonePrefixSetsNoWakeup(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)
+	w := newAgentWakeups()
+	for _, spec := range []string{"TZ=UTC", "CRON_TZ=Europe/Berlin", "TZ=UTC\t0\t9\t*\t*\t*"} {
+		w.note(cronCall(spec, map[string]any{"cron": spec, "recurring": false}, "Scheduled one-shot job"), at)
+	}
+	if w.pending(at) {
+		t.Fatal("a one-shot CronCreate with a bare zone prefix set a wakeup")
+	}
+}
+
 func TestAgentWakeupsAreReadBackFromTheLog(t *testing.T) {
 	t.Parallel()
 	log, err := OpenLog(filepath.Join(t.TempDir(), "items.jsonl"))
