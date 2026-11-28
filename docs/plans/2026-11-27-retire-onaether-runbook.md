@@ -57,14 +57,15 @@ From step 5 until step 18, run no `aether-edge-update` command by hand
 either:
 
 - `--rollback` returns to the release in
-  `/var/lib/aether-edge-update/previous`, and the one before the release
-  of step 1 has no retirement code. Such an image ignores
+  `/var/lib/aether-edge-update/previous`, which can be one from before
+  the retirement code. Such an image ignores
   `AETHER_EDGE_RETIRING_PAIRS` and `AETHER_EDGE_RETIRED_PAIRS`, unknown
   variables to it. It records nothing, so every device token and browser
   session it issues, at either pair, has no recorded origin, and the
   start of step 17 deletes each of them that was not used again while the
   edge recorded. After step 17 it would also send servers no `retired`
-  notice and answer the old hosts `421`.
+  notice and answer the old hosts `421`, except to `GET /healthz` and
+  `OPTIONS *`.
 - `--check` is not read-only: it pulls the channel's image and the running
   one, and writes verified manifests and `release-check.err` under
   `/var/lib/aether-edge-update`. Nothing in these steps needs it.
@@ -194,8 +195,8 @@ not apply as written.
   sudo env -i PATH="$PATH" sh -c '
     . /etc/aether-edge-update.env
     for n in CHANNEL RELAY_URL COMPOSE_DIR DIGEST_FILE STATE; do
-      eval "v=\${CLOUDFIELD_EDGE_UPDATE_$n:-\${AETHER_EDGE_UPDATE_$n:-}}"
-      echo "$n = ${v:-(default)}"
+      eval "new=\${CLOUDFIELD_EDGE_UPDATE_$n:-} old=\${AETHER_EDGE_UPDATE_$n:-}"
+      echo "$n = ${new:-${old:-(default)}}${new:+  (from CLOUDFIELD_EDGE_UPDATE_$n)}"
     done'
   ```
 
@@ -206,7 +207,11 @@ not apply as written.
   `(default)`, `RELAY_URL` is `https://edge.onaether.dev`, and
   `COMPOSE_DIR`, `DIGEST_FILE` and `STATE` are `(default)`, which is
   `/opt/aether-edge`, `/opt/aether-edge/.env` and
-  `/var/lib/aether-edge-update`.
+  `/var/lib/aether-edge-update`. The updater uses
+  `CLOUDFIELD_EDGE_UPDATE_<NAME>` when it is not empty, else
+  `AETHER_EDGE_UPDATE_<NAME>`, and the command marks each value that
+  comes from the first. With a line marked `(from
+  CLOUDFIELD_EDGE_UPDATE_...)`, stop: step 11 edits the `AETHER_` name.
 - [ ] **The running settings.** Paste the function, then run the two
   commands:
 
@@ -214,7 +219,7 @@ not apply as written.
   # Values of the listed settings; of every other edge variable, the name only.
   edge_settings() {
     jq -r '
-      (map(capture("^(?<key>[^=]+)=(?<value>.*)$"; "s")) | from_entries) as $e
+      (map(capture("^(?<key>[^=]+)=(?<value>.*)$"; "p")) | from_entries) as $e
       | ("SIGNIN_ORIGIN RELAY_ORIGIN GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET_FILE ORIGIN_PAIRS RETIRING_PAIRS RETIRED_PAIRS DATA METRICS_LISTEN" / " ") as $allow
       | ($allow[] | . as $n | ($e["CLOUDFIELD_EDGE_" + $n] // "") as $new | ($e["AETHER_EDGE_" + $n] // "") as $old
          | "\($n) = \(if $new != "" then $new else $old end)"
@@ -297,11 +302,13 @@ Pull requests #1129 (records, `aether-edge retiring`), #1128
 `410` answers, the start-up deletion) must be in the running image. The
 edge follows `stable`, so this waits for a stable release that contains
 #1134 (`6b70f903c`) and its promotion
-([edge.md](../edge.md#promoting-an-edge-release-to-stable)). In a clone,
-`git tag --contains 6b70f903c` lists the releases with it. On 2026-11-28 those
-are `v0.10.0-nightly.6` and `v0.10.0-nightly.7`; `v0.10.0-beta.1` does not
-contain it, so the beta and the stable to wait for are later ones. The
-warning period cannot start before that release runs here.
+([edge.md](../edge.md#promoting-an-edge-release-to-stable)). In a clone
+with the tags fetched, `git tag --contains 6b70f903c` lists the releases
+with it. On 2026-11-28 those are `v0.10.0-nightly.6`, `v0.10.0-nightly.7`
+and `v0.10.0-nightly.8`; `v0.10.0-beta.1` does not contain it, so the
+beta and the stable to wait for are later ones. All this runbook needs of
+them is `6b70f903c` in the edge's image. The warning period cannot start
+before that release runs here.
 
 ```sh
 sudo docker exec aether-edge aether-edge version --json | jq -r .version,.commit
@@ -481,7 +488,9 @@ Expect `Aether-Edge-Retiring: https://edge.cloudfield.ai; date=2026-12-15`
 2026-12-15. Its new address is <code>https://auth.cloudfield.ai</code>: sign in
 there.</p>`. The same request to `https://edge.cloudfield.ai/v1/edge`
 carries no such header. Run the checks of step 4, and note `<time>`, this
-start, for step 15.
+start, for step 15. Note too the `since` in the first line of `sudo docker
+exec aether-edge aether-edge retiring`, for steps 6 and 15: the edge sets
+it when it begins to record, after `<time>`.
 
 A server enrolled at `https://edge.onaether.dev` whose build has #1132
 shows the warning and the move command once it has connected again
@@ -494,8 +503,9 @@ sign-in is issued at; for a token or session issued earlier, the sign-in
 origin of the pair it is next used at; and each claimed server's relay
 origin at each enrollment or claim
 ([edge.md](../edge.md#monitoring), [privacy.md](../privacy.md)). Any
-request that presents a token is such a use, a `cloudfield servers`
-included. A connector request records only its server and relay origin,
+request the edge checks a token on is such a use, a `cloudfield servers`
+included; `GET /v1/edge` checks none. A connector request records only
+its server and relay origin,
 at most once an hour, and gives no token an origin.
 
 - Undo: the kept file, as in the procedure; the updater stays off until
@@ -526,10 +536,10 @@ sudo docker exec aether-edge aether-edge retiring
 each row counts. What matters here:
 
 - The first line is the last known recording period. A `since` later than
-  step 5 says a new period began: after an unclean stop, or a start more
-  than 10 minutes after the last clean one. A `since` equal to step 5
-  does not prove the edge recorded all the time. The line does not filter
-  the counts.
+  the one noted in step 5 says a new period began: after an unclean stop,
+  or a start more than 10 minutes after the last clean one. A `since`
+  equal to it does not prove the edge recorded all the time. The line
+  does not filter the counts.
 - The server table lists the claimed servers whose last recorded
   enrollment or claim was at `https://edge.onaether.dev`, with the owner
   login, `-` for a server with no owner.
@@ -662,7 +672,7 @@ run that finds the edge up to date never does. A retired relay answers
 `410` there. With the old URL after step 17, an update waits
 `AETHER_EDGE_UPDATE_PUBLIC_WAIT` seconds (default 300) and exits 1 with
 `GET https://edge.onaether.dev/v1/edge failed; the running edge must
-answer before an update`, changing nothing. In
+answer before an update`, before it switches. In
 `/etc/aether-edge-update.env`, change the value of the assignment the
 file has, so that it reads:
 
@@ -770,8 +780,9 @@ Immediately before step 16, on the day:
    Expect `disabled` twice, `inactive`, and `ghcr.io/3xdevops/aether-edge@`
    with the digest noted in step 5. The time is that of step 5, or of a
    later start the owner made or a reboot.
-3. Read the report's first line as step 6 says. A `since` later than step
-   5 means a new period began; origins recorded before it are kept, and
+3. Read the report's first line as step 6 says. A `since` later than the
+   one noted in step 5 means a new period began; origins recorded before
+   it are kept, and
    whatever was issued while the edge did not record has no origin, which
    step 17 deletes unless it was used again while the edge recorded. With
    another digest in 2, or the updater on, an image without the code may
@@ -888,8 +899,9 @@ by the claimed servers still at the old pair, so compare the metric line
 noted above instead, for at most 5 minutes. It counts unclaimed servers
 too, and the edge closes an unclaimed server's connection after 30
 minutes, so it can differ for other reasons than this restart; the
-report's table of `https://edge.cloudfield.ai` names the claimed servers
-that are back. The step's own checks:
+report's table of `https://edge.cloudfield.ai` lists the claimed servers
+last enrolled there, offline ones too, and those with a `LAST ENROLLED OR
+CLAIMED` later than `<time>` are back. The step's own checks:
 
 ```sh
 sudo docker logs --since <time> aether-edge 2>&1 | grep -e 'edge: deleted the sign-ins' -e 'edge: keeping the sign-ins' -e 'aether-edge: retired' -e '^aether-edge:'
@@ -913,15 +925,18 @@ pending device sign-in whose recorded sign-in origin
 - is missing, at both pairs: the row was issued while the edge did not
   record and has not been used since at an edge that records.
 
-**What it keeps:** every row recorded at `https://auth.cloudfield.ai`,
-issued there or first seen there, used since or not. A token or session
+**What it keeps:** every device token and session recorded at
+`https://auth.cloudfield.ai`, issued there or first seen there, used
+since or not. A token or session
 issued while the edge did not record, at either pair, and used once on a
 cloudfield.ai host while it records, is recorded there and kept.
 
 The edge answers a retired host `410` before it reads any token, so a
-`410` proves nothing about a token. A device that may still hold a valid
-one is revoked on `https://auth.cloudfield.ai/devices`, never by sending
-its token to another host.
+`410` proves nothing about a token; never send one to another host to
+find out. `https://auth.cloudfield.ai/devices` lists an account's
+remaining tokens by label, key fingerprint, sign-in time and last use,
+without device ids: a person who signed in again there has a row for the
+new token, and nothing to revoke for one this start deleted.
 
 The deletion commits before its log line is written and before the edge
 answers a health check. A failed or timed-out `up`, or a missing `edge:
@@ -990,7 +1005,7 @@ undo:
   those of the old pair and those with no origin. It loses every
   account, device sign-in, claim and owner change made since.
 - Either backup under an image older than #1134, or with the option
-  removed, makes every token in it valid again at every served pair.
+  removed, has none of its tokens deleted, at either pair.
 - The backup taken after the checks does not hold the deleted rows.
 
 - Undo, partly: the step 16 file, as in the procedure. Both hosts are
@@ -1015,7 +1030,8 @@ undo:
 it is set the edge must run a release that contains `6b70f903c`. An older
 image ignores the variable: it sends servers no signed `retired` notice,
 so `edge move` from the old address stops working, it answers the old
-hosts `421` except on `/healthz`, and it issues sign-ins with no recorded
+hosts `421` except to `GET /healthz` and `OPTIONS *`, and it issues
+sign-ins with no recorded
 origin, which the next start of a release with the entry deletes, at the
 pair that stays too.
 
@@ -1056,8 +1072,9 @@ older release line. The owner promotes to `stable`
 any update by hand, and before `sudo aether-edge-update --rollback` on the
 release `sudo cut -d' ' -f2 /var/lib/aether-edge-update/previous` prints.
 Never add `--restore-backup` to a rollback across step 17: the third field
-of that file is the backup it would restore, and a database from before
-step 17 holds the deleted sign-ins.
+of that file is the backup it restores when the previous release cannot
+run the current database, and one from before step 17 holds the deleted
+sign-ins.
 
 - Undo: `sudo systemctl disable --now aether-edge-update.timer
   aether-edge-update-recover.service`, after the checks at the top of
