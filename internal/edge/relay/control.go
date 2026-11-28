@@ -224,6 +224,11 @@ func (r *Relay) enroll(ws *websocket.Conn, addr netip.Prefix, origin string) (*r
 	if old != nil {
 		old.cancel(errReplaced)
 	}
+	if !claimed {
+		// `aether-edge servers remove` forgets a server without telling
+		// the relay, which learns it here.
+		r.revokeSoon(id)
+	}
 
 	state := edgeproto.StateUnclaimed
 	if claimed {
@@ -418,7 +423,7 @@ func (r *Relay) handle(reg *registration, m edgeproto.Message) error {
 		if !r.claimed(reg) {
 			return nil
 		}
-		return r.recordOwner(reg, func(ctx context.Context) error { return r.dir.DropOwner(ctx, reg.id) })
+		return r.ownerChanged(reg, r.recordOwner(reg, func(ctx context.Context) error { return r.dir.DropOwner(ctx, reg.id) }))
 	case edgeproto.AccountDeletionApplied:
 		r.deletionApplied(reg, edgeproto.AccountDeleted(m))
 		return nil
@@ -461,6 +466,18 @@ func (r *Relay) claimReported(reg *registration, m edgeproto.Claimed) error {
 	})
 }
 
+// ownerChanged runs after a transfer or an ownerless report was recorded,
+// err being nil. A directory no longer ends the owner's connections, so a
+// former owner's end here unless the directory names them. The pass asks
+// the store about every connection, so it runs beside the control
+// channel's reader.
+func (r *Relay) ownerChanged(reg *registration, err error) error {
+	if err == nil {
+		r.revokeSoon(reg.id)
+	}
+	return err
+}
+
 // transferReported records the owner a server reported after an admin
 // transferred it, and answers with the outcome: the server made the
 // transfer only on the condition that the edge records it.
@@ -473,6 +490,7 @@ func (r *Relay) transferReported(reg *registration, m edgeproto.OwnerTransferred
 	if err != nil {
 		res.Error = err.Error()
 	}
+	_ = r.ownerChanged(reg, err)
 	return reg.send(res)
 }
 
@@ -607,22 +625,89 @@ func (r *Relay) storeDirectory(reg *registration, entries []edgeproto.DirectoryE
 	if err := r.dir.ReplaceDirectory(ctx, reg.id, entries); err != nil {
 		return fmt.Errorf("relay: store directory of %s: %w", reg.id, err)
 	}
-	now := time.Now()
-	// A claim connection is admitted by the server's claim code, not by
-	// the directory, which may predate the claim it makes; an http
-	// connection by nothing the edge holds.
-	r.closeConns(func(c *relayConn) bool {
-		if c.serverID != reg.id || c.kind != edgeproto.KindSSH {
-			return false
-		}
-		for _, e := range entries {
-			if e.Matches(c.account, now) {
-				return false
-			}
-		}
-		return true
-	}, edgeproto.RefusalNotMember)
+	r.revoke(reg.id)
 	return nil
+}
+
+// errUnchecked ends a connection whose access the edge could not check.
+var errUnchecked = errors.New("the edge could not check this connection's access; connect again")
+
+// revoke ends the ssh connections to serverID of accounts the edge would
+// not admit now, by the test that admits a new one: a directory that does
+// not name the owner does not end the owner's, and a connection admitted
+// under an earlier claim of the server ends once its account is neither
+// named nor the owner. A connection the edge cannot get an answer for ends
+// too. A claim connection is admitted by the server's claim code and an
+// http connection by nothing the edge holds. The pass outlives the control
+// channel that caused it, as the connections do, and has directoryTimeout
+// for all of them: past it the rest end unchecked.
+func (r *Relay) revoke(serverID string) {
+	r.mu.Lock()
+	var conns []*relayConn
+	for _, c := range r.conns {
+		if c.serverID == serverID && c.kind == edgeproto.KindSSH {
+			conns = append(conns, c)
+		}
+	}
+	r.mu.Unlock()
+	ctx, cancel := context.WithTimeout(r.ctx, directoryTimeout)
+	defer cancel()
+	var unchecked int
+	var first error
+	for _, c := range conns {
+		refusal, err := r.admitted(ctx, c)
+		switch {
+		case err != nil:
+			c.cancel(errUnchecked)
+			if unchecked++; first == nil {
+				first = err
+			}
+		case refusal != nil:
+			c.cancel(refusal)
+		}
+	}
+	// A relay that is stopping ends its connections itself.
+	if unchecked > 0 && r.ctx.Err() == nil {
+		slog.Warn("relay: access of relayed connections not checked; closed them", "server", serverID, "connections", unchecked, "error", first)
+	}
+}
+
+// revokeSoon runs revoke beside its caller. A server has one such pass at
+// a time: asked for again while it runs, it runs once more when it ends,
+// so reports cannot pile passes up.
+func (r *Relay) revokeSoon(serverID string) {
+	r.mu.Lock()
+	if _, running := r.revoking[serverID]; running {
+		r.revoking[serverID] = true
+		r.mu.Unlock()
+		return
+	}
+	r.revoking[serverID] = false
+	r.mu.Unlock()
+	go func() {
+		for {
+			r.revoke(serverID)
+			r.mu.Lock()
+			if !r.revoking[serverID] {
+				delete(r.revoking, serverID)
+				r.mu.Unlock()
+				return
+			}
+			r.revoking[serverID] = false
+			r.mu.Unlock()
+		}
+	}()
+}
+
+// admitted asks whether the edge would admit c's account to c's server
+// now: refusal is why not, and err is set when it could not tell.
+func (r *Relay) admitted(ctx context.Context, c *relayConn) (refusal, err error) {
+	err = r.dir.Admitted(ctx, c.serverID, c.account)
+	var ref edgeproto.Refusal
+	if errors.As(err, &ref) {
+		return ref, nil
+	}
+	return nil, err
 }
 
 func (r *Relay) leave(reg *registration) error {

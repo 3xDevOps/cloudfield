@@ -35,6 +35,9 @@ type Directory interface {
 	// serverID, edgeproto.RefusalUnknownServer when serverID is not
 	// claimed, and edgeproto.RefusalNotMember otherwise.
 	Admit(ctx context.Context, serverID string, account edgeproto.Account) error
+	// Admitted answers as Admit does and records nothing: the relay asks
+	// it about connections that are already open.
+	Admitted(ctx context.Context, serverID string, account edgeproto.Account) error
 	// Known returns nil when serverID is claimed at this edge, and
 	// edgeproto.RefusalUnknownServer otherwise.
 	Known(ctx context.Context, serverID string) error
@@ -200,6 +203,9 @@ type Relay struct {
 	// directories holds, per server id, the directory waiting to be
 	// stored.
 	directories map[string]*directoryWrite
+	// revoking holds the servers with a pass over their connections
+	// running; true when another was asked for meanwhile.
+	revoking map[string]bool
 	// connectors records connector requests, and connectorUsed holds,
 	// for each server and relay origin, when one was last recorded, is
 	// being recorded, or may next be tried after a failure, less
@@ -312,6 +318,7 @@ func New(ctx context.Context, cfg Config) (*Relay, error) {
 		away:               map[string]*absence{},
 		claims:             map[string]claimGrant{},
 		directories:        map[string]*directoryWrite{},
+		revoking:           map[string]bool{},
 		connectors:         cfg.Connectors,
 		connectorUsed:      map[connectorUse]time.Time{},
 		connectorPruneAt:   connectorPruneMin,
