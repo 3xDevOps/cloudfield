@@ -52,6 +52,9 @@ connected** with its scopes once the app connects. It lists your connectors
 with their scopes, the URL each was added at, when each was added and last
 used, and **Reconnect** and **Revoke** buttons. Errors appear as `cloudfield mcp`
 prints them, with a link to the fix.
+A connector at a retiring or retired address has no **Reconnect** or
+**Move**; see
+[Adding a connector again at a new address](#adding-a-connector-again-at-a-new-address).
 
 From a terminal:
 
@@ -118,6 +121,92 @@ To make the server show the new address, an admin moves it on v0.9.0 or
 later with `sudo cloudfield-server edge move https://edge.cloudfield.ai`,
 then `sudo systemctl restart aether-server`
 ([edge.md](edge.md#moving-to-another-address-of-the-edge)).
+
+### Adding a connector again at a new address
+
+An edge with more than one address can mark one as retiring, with an
+optional date, and later as retired. A connector's grant is bound to the
+address it was added at and does not move. The server learns the state from
+the notices its edge signs; with no notice, nothing below appears.
+
+The new URL keeps the connector's path, `/mcp` or `/mcp/<server id>`. The
+server names it only while all of these hold:
+
+- the server is connected to its edge at edge protocol 6 or later, and the
+  edge reports it claimed;
+- the edge takes connectors at the new address;
+- the notice did not come with the server's first connection to the edge,
+  which nothing vouches for;
+- for the universal URL in `cloudfield mcp`, Settings and the tool note,
+  the member has a GitHub account linked, since the edge offers the server
+  there only to accounts it lists for it. The consent page at the universal
+  URL names it without this check: its visitor signs in at the edge there.
+
+While the server's own address is retiring and the new URL is named,
+`cloudfield mcp` and Settings offer that URL to add a connector at.
+`cloudfield mcp` marks each of your connectors at a retiring or retired
+address:
+
+```
+Connected:
+  con-7k2m9q4xbd  Claude (claude.ai)  scopes read  added 2026-11-26  never used  at https://relay-old.example.com/mcp
+    retiring on 2027-03-01: add it again at https://relay-new.example.com/mcp, check it works, remove the old one in the app, then: aether mcp revoke con-7k2m9q4xbd
+  con-3h8n2w5rcd  ChatGPT (chatgpt.com)  scopes read  added 2026-11-26  never used  at https://relay-older.example.com/mcp
+    retired: add it again at https://relay-new.example.com/mcp if you still use it, remove the old one in the app, then: aether mcp revoke con-3h8n2w5rcd
+```
+
+With no new URL named, a retiring connector's line says `ask this server's
+admin where to add it again`, and a retired one's says `remove it in the
+app, then: aether mcp revoke <id>`. When no code can be minted and one of
+your connectors is marked, `cloudfield mcp` still prints this list before
+the error.
+
+In Settings a connector at a retiring address shows **This address is
+retiring on 2027-03-01**, one at a retired address **This address is
+retired**, each with the new URL to copy when one is named, or else the
+same advice as `cloudfield mcp`. Such a row has no **Reconnect** or
+**Move**, and Settings does not revoke it: once the connector works at the
+new URL, select **Revoke** on the old one. Starting a move or reconnect is refused when
+the connector, or one added meanwhile that would replace it, is at such an
+address, and one started before the notice stops without revoking
+anything once the old connector or its replacement is. To give such a connector another scope, such as one
+a refusal names, add it again at the new URL and check the box on its
+consent page.
+
+The consent page at a retiring address says `This address is retiring on
+2027-03-01. Add the connector at <url> instead. Connecting here still works
+until it is retired.` Without a new URL it says `Ask this server's admin
+where to add the connector instead.` A tool result carries a second text
+block after the usual one, at most once a day per connector, only when the
+connector's address is retiring, the server names its new URL, and the
+result is not an error. A retired address, a missing new URL and a failed
+call give none; `search` and `fetch`, which answer with JSON alone, leave it
+to the next other tool:
+
+```
+Notice for the user: this connector was added at https://relay-old.example.com/mcp, an address that is retiring on 2027-03-01. It must be added again at https://relay-new.example.com/mcp.
+```
+
+The server keeps that once-a-day record in memory, so after a restart the
+next tool result carries the notice again. After finding no notice for an
+address, the consent page and tool results do not read the edge's notices
+for it again for a minute, so a new notice can show up to a minute late; a
+notice that exists, and any URL it names, is read again on every consent
+page. For tool results, a connector that got its note does not read the
+notices again that day, and one whose notice gives it no note reads them
+at most once a minute, so a URL added to the notice, or GitHub linked
+later, can show up to a minute late.
+
+To move a connector:
+
+1. Add Cloudfield again in the app at the new URL, as in
+   [Add it in ChatGPT](#add-it-in-chatgpt) or
+   [Add it in Claude](#add-it-in-claude).
+2. Ask it something, such as "What needs me in Cloudfield?", to check it
+   works.
+3. Remove the old connector in the app: the app still sends its token to
+   the old address.
+4. Revoke the old one on the server: `cloudfield mcp revoke <id>`.
 
 ## Add it in ChatGPT
 

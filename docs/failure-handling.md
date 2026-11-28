@@ -734,6 +734,64 @@ mirror is failing.
 
 ## What the server did for want of memory or disk
 
+`cloudfield-server status`, run on the server, prints the machine as the
+server measures it before it starts or wakes a session, and what it did when
+it was short:
+
+```sh
+sudo cloudfield-server status
+```
+
+```
+memory   7.3 GiB available of 30.0 GiB; the server keeps 3.0 GiB, and a launch needs at least 0.5 GiB above that
+         (more while other starts have yet to take theirs; the wake of a VM saved to disk needs what it saved)
+stall    the running aether-server unit's cgroup over 60s, which refuses launches: 0.0%, limit 10%
+stall    the host over 10s, which saves session VMs once it lasts 30s: 0.1%, limit 60%
+disk     Cloudfield data filesystem: 122.6 GiB free of 500.0 GiB; the server keeps 20.0 GiB, and a launch needs at least 1.0 GiB above that
+         (the running server also checks the filesystems of its container or VM runtime, which this command does not measure)
+VMs      3 awake, 0 frozen by the memory brake, 2 asleep in memory, 4 asleep on disk, 0 asleep with nothing kept; 1 of closed sessions still in memory
+         (counted by the server 12s ago, at 2026-11-27T23:00:00Z; a running server that can write counts at least every minute)
+last refused launch: 2026-11-27T22:10:03Z, session <run id>
+  scheduler: insufficient host memory headroom: ...
+last refused wake: none in 14 days
+
+counted, in whole hours (UTC)        24 hours    14 days
+refusal launch memory                       2          5
+...
+```
+
+What it measures itself, and so prints while the server cannot answer a
+request: memory, the two stalls and the data filesystem, with the options
+in the config file. A server started before those options changed still
+runs with its own, and the last line of the output says so. The server's
+own stall is read from the cgroup of the running `aether-server` unit and
+is left out when that unit is not running.
+
+What it reads from the database, which it opens for reading only and never
+creates, migrates or changes (SQLite may leave `aether.db-wal` and
+`aether.db-shm` beside it): the session VM counts, the last refusals and the
+counters. What it cannot read it says, `VMs      not read: ...` and
+`history  not read, ...` with the error, after its own measurements. The VM
+counts are the running server's, written when they change and at least
+every minute: an older count means no server has written one since, because
+it is stopped or cannot write. `awake` includes a session a member paused;
+`asleep with nothing kept` is a VM stopped with no saved memory, or one
+still being saved; the last figure is the VMs of closed sessions that can
+still hold memory, until the guard stops them. A wake the server tried by itself is marked on the
+last refused wake. The refusal is admission's text. Under the counters it
+prints the share of the memory in use at memory and stall refusals that
+session VMs idle for over an hour, or closed, held, and the mean and longest wait of the
+waits that ended in a start. The two windows cover whole hours, so "24
+hours" is the current hour and the 24 before it.
+
+`server.capacity` ([local gateway](local-gateway.md)) returns the running
+server's own view to any member: its memory and stalls, every filesystem it
+checks, and its live VM counts. With `--min-free-disk` negative it lists no
+disk and sets `disk_unchecked`; `disk_error` still says when the runtime
+cannot be asked, which refuses every launch and wake. The session a refusal names, and the text of
+a measurement that failed, which can name a path of the host, go to a super
+admin only.
+
 The server counts each time it was short of memory or disk and what it did
 about it, and logs each one:
 
@@ -749,9 +807,9 @@ INFO subsessions: capacity: wait-end op=subsession cause=started run=<run id> wa
 ```
 
 The counts are kept in the database, in table `capacity_counts`, one row
-per hour (UTC) and counter, so they outlast a restart. A server start
-deletes rows older than 90 days. A counter is a `kind`, an `op` and a
-`cause`:
+per hour (UTC) and counter, so they outlast a restart; table `capacity_vms`
+holds the latest VM counts. A server start deletes counter rows older than
+90 days. A counter is a `kind`, an `op` and a `cause`:
 
 | `kind` | Counted when | `op` | `cause` |
 | --- | --- | --- | --- |
@@ -876,7 +934,7 @@ login shell stay up.
 
 | Failure | What you see | What you do |
 | --- | --- | --- |
-| The session cannot start, for example because the agent is not signed in | **Disconnected**, `enhanced session failed: <error>`. Messages are refused with `scheduler: the enhanced session is not running: <error>`. | Fix the cause, then press **Retry Enhanced** in the Chat view. A session whose first start failed then starts with the task it was launched with. |
+| The session cannot start, for example because the agent is not signed in | **Disconnected**, `enhanced session failed: <error>`. Messages are refused with `scheduler: the Enhanced agent is not running: <error>`. | Fix the cause, then press **Retry Enhanced** in the Chat view. A session whose first start failed then starts with the task it was launched with. |
 | The agent's process exits | The turn in flight shows **Turn interrupted**; **Disconnected**, `enhanced session ended: the agent's ACP server exited with code <n>`, with `; stderr: <tail>` when it printed any. | **Retry Enhanced**. |
 | The agent drops its conversation but keeps running, as Claude's adapter does when Claude Code dies | **Prompt failed** with `Session not found`, then **Agent conversation lost** while Cloudfield restores the conversation. Lost again within 5 minutes: **Disconnected**, `enhanced session failed: the agent lost its conversation again within 5 minutes: ...`. | Send the failed message again. After a second loss, **Retry Enhanced**. |
 | The agent refuses a turn with `Authentication required` | **Sign-in refused**, or **Agent signed out** when the login file cannot sign the agent in, while Cloudfield restarts the agent in its container, then `enhanced turn failed: ... Authentication required ...; <owner>'s <agent> login is signed out. Sign in, then send the message again: dashboard Agents page, or aether agent login <agent>`, or `...; Cloudfield restarted the agent to reread <owner>'s login: send the message again. Refused again? Sign in: ...` when the login file looks sound. The account owner's dashboard shows **\<agent\> is signed out** or **\<agent\>'s sign-in was refused** until the login works again. | Send the message again when the reason says so. Otherwise the account's owner signs in on the **Agents** page or with `cloudfield agent login <agent>`, then you send it again ([harnesses.md](harnesses.md#when-a-login-is-signed-out)). |
@@ -988,8 +1046,9 @@ row unfolds what the sleep kept and what it stopped. A session VM saved to
 disk reads **Asleep since &lt;time&gt;** alone, because its processes are
 saved. While the session wakes, the row reads **Waking…**.
 
-The session wakes when you send a message, change its model, mail
-reaches it, you type in its terminal, open a shell tab, use its Browser tab,
+The session wakes when you start typing a message in the Chat view's
+composer or send one, change its model, mail reaches it, you type in its
+terminal, open a shell tab, use its Browser tab,
 start `cloudfield ssh` or a port forward to it, run `cloudfield resume <session-id>`,
 or choose **Wake** in the Chat view. Opening the session or its Browser tab
 without acting does not wake it. A port forward wakes the session, but a server
@@ -1137,9 +1196,9 @@ runner, a VM with 1.3 GiB of saved memory woke in 1.9 to 8.5 seconds with
 the file read from disk, and in about 1 second with it still in the host's
 page cache. Cloud Hypervisor can also load the memory on demand, which ran
 the first command 0.8 to 1.5 seconds after the wake began, and Cloudfield
-does not use it: Cloud Hypervisor v54.1 takes a page that is already there
-as loaded, so a page anything on the host had touched first kept zeros, and
-VMs died as they woke
+does not use it: through v55.0 Cloud Hypervisor takes a page that is already
+there as loaded, so with v54.1 a page anything on the host had touched first
+kept zeros, and VMs died as they woke
 ([vm-guest.md](vm-guest.md#save-and-restore)). On a test host, a
 message to a sleeping Claude Code or Codex session running a dev server and
 a `docker compose` stack was accepted 0.7 to 1.5 seconds after it was sent,

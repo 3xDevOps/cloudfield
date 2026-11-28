@@ -122,6 +122,21 @@ func TestInstallForVMsWithoutKVMWritesNothing(t *testing.T) {
 	}
 }
 
+// A server start checks KVM before it replaces Cloud Hypervisor, so an
+// update on a host the pinned release cannot run on fails its trial with
+// the old files in place.
+func TestServerStartChecksKVMBeforeInstallingVMFiles(t *testing.T) {
+	if runtime.GOARCH != "amd64" {
+		t.Skip("session VMs need x86-64")
+	}
+	kvmDevice = filepath.Join(t.TempDir(), "kvm")
+	t.Cleanup(func() { kvmDevice = "/dev/kvm" })
+	err := ensureVMFiles(t.Context(), filepath.Join(t.TempDir(), "vmlinux"))
+	if err == nil || !strings.Contains(err.Error(), kvmDevice+": no such file or directory") {
+		t.Fatalf("server start without KVM = %v", err)
+	}
+}
+
 // Install links cloudfield-server.service to the unit as the updater does,
 // leaves whatever else holds the name as it is, and keeps one link on a
 // rerun. systemctl enable refuses an alias, so the activation line keeps

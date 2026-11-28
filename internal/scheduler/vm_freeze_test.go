@@ -469,6 +469,22 @@ func TestAVMWhoseGuestTheServerNeedsIsThawedAndNotSaved(t *testing.T) {
 	}
 }
 
+// frozenVMs, embedded beside a test runtime, lists as frozen the VMs a test
+// says the memory brake froze.
+type frozenVMs struct {
+	mu     sync.Mutex
+	frozen []runtime.ID
+}
+
+func (f *frozenVMs) Freeze(runtime.ID) (bool, error) { return false, nil }
+func (f *frozenVMs) Thaw(runtime.ID) error           { return nil }
+
+func (f *frozenVMs) Frozen() []runtime.ID {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.frozen)
+}
+
 // frozenUseRuntime is useRuntime with frozen frozen.
 type frozenUseRuntime struct {
 	useRuntime

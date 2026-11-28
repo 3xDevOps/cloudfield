@@ -71,6 +71,10 @@ func launchWithOptions(ctx context.Context, runs RunController, workspace domain
 
 // RunController is the SSH server's view of the scheduler (*scheduler.Scheduler).
 type RunController interface {
+	// Machine measures the machine as admission and the guards do, and VMs
+	// counts its session VMs.
+	Machine(ctx context.Context) scheduler.MachineStatus
+	VMs() domain.VMCounts
 	Launch(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode) (*domain.Run, error)
 	// CheckSharedLaunch reports whether member's launch of harness on
 	// account would be refused over the harness or the account owner's
@@ -163,6 +167,12 @@ type RunController interface {
 	// its terminal. stopped waits for the agent's answer.
 	Interrupt(ctx context.Context, run *domain.Run, actor domain.MemberID) (stopped func() error, err error)
 	ACPSetOption(ctx context.Context, run domain.RunID, optionID string, value any) error
+	// ACPSetModelEffort sets an enhanced run's model, then its effort, by
+	// value, and returns the two as the agent then reports them; an empty
+	// one is left as it is. What it set is recorded on the timeline with
+	// actor. scheduler.ErrNoSuchOption refuses one the run's agent has no
+	// option for.
+	ACPSetModelEffort(ctx context.Context, run *domain.Run, actor domain.MemberID, model, effort string) (nowModel, nowEffort string, err error)
 	// ACPHistory reads up to limit items before beforeSeq, oldest first;
 	// zero reads from the newest.
 	ACPHistory(run domain.RunID, beforeSeq int64, limit int) (acphost.HistoryPage, error)

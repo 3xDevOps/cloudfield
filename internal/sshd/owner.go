@@ -53,6 +53,11 @@ type EdgeOwner interface {
 	// claim binds the claiming account to the existing admin member
 	// admin.
 	IssueClaimCode(admin domain.MemberID) (code string, expires time.Time, err error)
+	// ConnectorOrigins are the relay origins a connector can be added at
+	// now: those the live control connection announced at
+	// edgeproto.VersionRelayOrigin or later while the edge reports the
+	// server claimed, read as one snapshot; none otherwise.
+	ConnectorOrigins() []string
 }
 
 // SetEdgeOwner connects the edge agent that records ownership. Call it

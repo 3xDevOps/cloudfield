@@ -116,3 +116,53 @@ func TestAFreezeIsCountedOncePerShortage(t *testing.T) {
 		t.Fatalf("counted freeze = %+v, want one, with the memory that caused it", froze)
 	}
 }
+
+// The session VMs are counted by what they hold of the host, and the count
+// is kept where cloudfield-server status reads it.
+func TestSessionVMsAreCountedByWhatTheyHold(t *testing.T) {
+	t.Parallel()
+	e, fr := newFreezeEnv(t)
+	mr := fr.memoryRuntime
+	paused := e.launchVM(t, mr, "say pong", 1<<30)
+	saved := e.launchVM(t, mr, "say pong", 6<<30)
+	e.launchVM(t, mr, acpmock.PromptWait, 1<<30)
+	e.launchVM(t, mr, acpmock.PromptWait, 1<<30)
+	if got, want := e.sched.VMs(), (domain.VMCounts{Awake: 4}); got != want {
+		t.Fatalf("four running VMs counted as %+v", got)
+	}
+	// The server writes its count where cloudfield-server status reads it.
+	waitFor(t, "the VM count in the store", func() bool {
+		got, at, err := e.db.VMCounts(t.Context())
+		return err == nil && !at.IsZero() && got.Awake == 4
+	})
+	e.pauseIdle(t, paused)
+	e.pauseIdle(t, saved)
+	stopped := e.launchVM(t, mr, "say pong", 1<<30)
+	e.pauseIdle(t, stopped)
+	savedRun, stoppedRun := e.runOf(t, saved), e.runOf(t, stopped)
+	e.sched.mu.Lock()
+	e.sched.runs[savedRun].asleepResident, e.sched.runs[savedRun].asleepSaved = false, true
+	// Asleep with its saved memory reclaimed: nothing is kept.
+	e.sched.runs[stoppedRun].asleepResident, e.sched.runs[stoppedRun].asleepSaved = false, false
+	e.sched.mu.Unlock()
+	floor := memoryFloor(32 << 30)
+	e.brake(fr, 4*floor)
+	e.brake(fr, floor-1)
+	if got, want := e.sched.VMs(), (domain.VMCounts{Frozen: 2, Paused: 1, Saved: 1, Stopped: 1}); got != want {
+		t.Fatalf("VMs = %+v, want %+v", got, want)
+	}
+	// A closed session's VM still in memory is counted as that.
+	e.sched.mu.Lock()
+	e.sched.runs[stoppedRun].retained, e.sched.runs[stoppedRun].asleepResident = true, true
+	e.sched.mu.Unlock()
+	if got, want := e.sched.VMs(), (domain.VMCounts{Frozen: 2, Paused: 1, Saved: 1, Closed: 1}); got != want {
+		t.Fatalf("VMs with a closed session's VM in memory = %+v, want %+v", got, want)
+	}
+	e.sched.mu.Lock()
+	e.sched.runs[stoppedRun].retained, e.sched.runs[stoppedRun].asleepResident = false, false
+	e.sched.mu.Unlock()
+	m := e.sched.Machine(t.Context())
+	if m.MemoryAvailableBytes != floor-1 || m.MemoryFloorBytes != floor || m.MemoryTotalBytes != 32<<30 || m.StartMemoryBytes != startupMemoryBytes {
+		t.Fatalf("machine memory = %+v, want what admission reads", m)
+	}
+}

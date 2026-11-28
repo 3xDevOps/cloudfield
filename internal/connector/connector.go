@@ -56,6 +56,12 @@ const (
 	// parallel launches, then one more every writeRefill.
 	writeBurst  = 30
 	writeRefill = 2 * time.Second
+	// A connector at a retiring address gets the notice on a tool result
+	// at most once every noticeEvery.
+	noticeEvery = 24 * time.Hour
+	// A connector URL the edge's notices say nothing about is not read
+	// again for noticeReadEvery, so a new notice shows up to that late.
+	noticeReadEvery = time.Minute
 )
 
 var b64 = base64.RawURLEncoding
@@ -117,8 +123,8 @@ type handler struct {
 	now             func() time.Time
 	long            *ops.LongCalls
 
-	// mu guards codes, nonces, wrong, wrongAll, wrongSwept, writes and
-	// writesSwept.
+	// mu guards codes, nonces, wrong, wrongAll, wrongSwept, writes,
+	// writesSwept, noticed, noNote, unnoticed and noticedSwept.
 	mu    sync.Mutex
 	codes map[string]authCode
 	// nonces holds the nonces of the edge assertions consent pages were
@@ -131,6 +137,18 @@ type handler struct {
 	wrongSwept  time.Time
 	writes      map[string]*rate.Limiter
 	writesSwept time.Time
+	// noticed is when each connector's tool result last carried the
+	// notice that its address is retiring. It does not survive a restart,
+	// so the next result after one carries it again.
+	noticed map[string]time.Time
+	// noNote is when each connector's address last had a notice that gave
+	// its tool results no note, as when the address is retired; it holds
+	// nothing that is shown.
+	noNote map[string]time.Time
+	// unnoticed is when the edge's notices last said nothing about each
+	// connector URL.
+	unnoticed    map[string]time.Time
+	noticedSwept time.Time
 }
 
 // New returns the handler for every path under the base URL's path, the
@@ -167,8 +185,8 @@ func New(cfg Config) (http.Handler, error) {
 			return http.ErrUseLastResponse
 		}},
 		mux: http.NewServeMux(), now: time.Now, started: cmp.Or(cfg.Started, time.Now()), codes: map[string]authCode{}, nonces: map[string]nonceUse{}, wrong: map[netip.Prefix]wrongCodes{},
-		writes: map[string]*rate.Limiter{},
-		long:   &ops.LongCalls{After: edgeproto.HTTPShortCall, Max: edgeproto.MaxHTTPLongCallsPerServer}}
+		writes: map[string]*rate.Limiter{}, noticed: map[string]time.Time{}, noNote: map[string]time.Time{}, unnoticed: map[string]time.Time{},
+		long: &ops.LongCalls{After: edgeproto.HTTPShortCall, Max: edgeproto.MaxHTTPLongCallsPerServer}}
 
 	streamable := mcp.NewStreamableHTTPHandler(h.server, &mcp.StreamableHTTPOptions{
 		Stateless:    true,
@@ -301,7 +319,109 @@ func (h *handler) server(r *http.Request) *mcp.Server {
 			"target", callTarget(raw), "result", result)
 		return err
 	}, func(s ops.Scope) bool { return slices.Contains(c.Scopes, string(s)) }, h.long)
+	srv.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			res, err := next(ctx, method, req)
+			// search and fetch answer with JSON alone, which clients may
+			// decode as such, so the notice waits for another tool.
+			if call, ok := res.(*mcp.CallToolResult); ok && err == nil && !call.IsError && !jsonOnly(req) {
+				if text := h.retiringNotice(ctx, c, h.now()); text != "" {
+					call.Content = append(call.Content, &mcp.TextContent{Text: text})
+				}
+			}
+			return res, err
+		}
+	})
 	return srv
+}
+
+func jsonOnly(req mcp.Request) bool {
+	call, ok := req.(*mcp.CallToolRequest)
+	return ok && (call.Params.Name == "search" || call.Params.Name == "fetch")
+}
+
+// noticeAt is what the edge's notices say about the connector URL u.
+// Only an answer of none is kept, for noticeReadEvery: a notice, and any
+// URL it names, is read again on every call.
+func (h *handler) noticeAt(u string, now time.Time) *protocol.ConnectorNotice {
+	h.mu.Lock()
+	h.sweepNotices(now)
+	last, ok := h.unnoticed[u]
+	h.mu.Unlock()
+	if ok && now.Sub(last) < noticeReadEvery {
+		return nil
+	}
+	n := h.ssh.ConnectorNotice(u)
+	h.mu.Lock()
+	if n == nil {
+		h.unnoticed[u] = now
+	} else {
+		delete(h.unnoticed, u)
+	}
+	h.mu.Unlock()
+	return n
+}
+
+// sweepNotices drops, at most once a minute as allowWrite sweeps its
+// buckets, the records noticed, noNote and unnoticed no longer use. h.mu
+// is held.
+func (h *handler) sweepNotices(now time.Time) {
+	if now.Sub(h.noticedSwept) < time.Minute {
+		return
+	}
+	maps.DeleteFunc(h.noticed, func(_ string, last time.Time) bool { return now.Sub(last) >= noticeEvery })
+	maps.DeleteFunc(h.noNote, func(_ string, last time.Time) bool { return now.Sub(last) >= noticeReadEvery })
+	maps.DeleteFunc(h.unnoticed, func(_ string, last time.Time) bool { return now.Sub(last) >= noticeReadEvery })
+	h.noticedSwept = now
+}
+
+// retiringNotice is the text a tool result of connector c adds when the
+// edge says the address c was added at is retiring, names where the
+// server takes it instead for c's member, and the notice was not added
+// in the last noticeEvery; empty otherwise. A notice that gives c no
+// note is not read again for c for noticeReadEvery.
+func (h *handler) retiringNotice(ctx context.Context, c *store.Connector, now time.Time) string {
+	recent := func() bool {
+		last, ok := h.noticed[c.ID]
+		quiet, q := h.noNote[c.ID]
+		return ok && now.Sub(last) < noticeEvery || q && now.Sub(quiet) < noticeReadEvery
+	}
+	h.mu.Lock()
+	skip := recent()
+	h.mu.Unlock()
+	if skip {
+		return ""
+	}
+	none := func() string {
+		h.mu.Lock()
+		h.noNote[c.ID] = now
+		h.mu.Unlock()
+		return ""
+	}
+	n := h.noticeAt(c.Resource, now)
+	if n == nil {
+		return ""
+	}
+	if n.State != edgeproto.NoticeRetiring || n.URL == "" {
+		return none()
+	}
+	if strings.HasSuffix(n.URL, edgeproto.PathUniversalMCP) {
+		if on, err := h.ssh.OnUniversal(ctx, c.Member); err != nil || !on {
+			return none()
+		}
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if recent() {
+		return ""
+	}
+	h.noticed[c.ID] = now
+	on := ""
+	if n.Date != "" {
+		on = " on " + n.Date
+	}
+	return "Notice for the user: this connector was added at " + c.Resource + ", an address that is retiring" + on +
+		". It must be added again at " + n.URL + "."
 }
 
 func call(ctx context.Context, local *sshd.Local, member domain.MemberID, method string, raw json.RawMessage, out any) error {

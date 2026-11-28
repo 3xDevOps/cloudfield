@@ -533,7 +533,7 @@ func (d *DB) GetMemory(ctx context.Context, workspace domain.WorkspaceID, id str
 			WHERE id <> ?2 GROUP BY id) chain
 		JOIN memory m ON m.id = chain.id`+memoryJoins+`
 		WHERE m.workspace_id = ?1 AND `+reached+`
-		ORDER BY chain.step, m.created_at, m.id`, args...)
+		ORDER BY chain.step, m.created_at, m.rowid`, args...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("store: read memory chain of %s: %w", id, err)
 	}
