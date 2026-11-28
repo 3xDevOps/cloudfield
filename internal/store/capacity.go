@@ -95,7 +95,7 @@ FROM capacity_counts WHERE hour >= ? ORDER BY hour, kind, op, cause`, since.UTC(
 	if err != nil {
 		return nil, fmt.Errorf("store: capacity counts: %w", err)
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // rows.Err is checked
 	var out []domain.CapacityCount
 	for rows.Next() {
 		var c domain.CapacityCount
