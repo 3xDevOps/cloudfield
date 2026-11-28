@@ -33,6 +33,11 @@ const (
 	// with no ACP stream: RunIDParams. It needs Steer, and is refused while
 	// another member holds the run's control.
 	MethodRunInterrupt = "run.interrupt"
+
+	// MethodRunOptionSet changes an enhanced run's model, its effort or
+	// both, for a caller with no ACP stream and so no option ids. It needs
+	// Steer, and is refused while another member holds the run's control.
+	MethodRunOptionSet = "run.option.set"
 )
 
 // RunModeSwitchParams.Mode is "tui" or "acp". The lease may be empty while
@@ -73,6 +78,21 @@ type RunACPSetOptionParams struct {
 	OptionID string          `json:"option_id"`
 	Value    json.RawMessage `json:"value"`
 	ACPLease
+}
+
+// RunOptionSetParams names at least one of Model and Effort, each a value
+// the run's agent offers; an empty one is left as it is.
+type RunOptionSetParams struct {
+	RunID  string `json:"run_id"`
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
+}
+
+// RunOptionSetResult is the run's model and effort after the change, as its
+// agent reports them: an agent can take a value under another name.
+type RunOptionSetResult struct {
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
 }
 
 // RunACPHistoryParams pages backwards: BeforeSeq zero reads from the newest

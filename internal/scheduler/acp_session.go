@@ -255,6 +255,9 @@ func (s *Scheduler) ACPSetOption(ctx context.Context, run domain.RunID, optionID
 		return err
 	}
 	defer awake()
+	if err = s.optionsAnswered(run); err != nil {
+		return err
+	}
 	sess, err := s.acp.live(ctx, run)
 	if err != nil {
 		return err
@@ -311,6 +314,83 @@ func (s *Scheduler) ACPSetOption(ctx context.Context, run domain.RunID, optionID
 	}
 	s.publish(ctx, events.Event{WorkspaceID: stored.WorkspaceID, RunID: run, Payload: events.RunModelPayload{Model: model}})
 	return nil
+}
+
+// optionsAnswered refuses a session that is paused or whose VM is frozen:
+// its agent answers nothing, and the caller holds control admission until
+// its call returns. It goes before the live session, which a session paused
+// across a server restart lacks until its resume.
+func (s *Scheduler) optionsAnswered(run domain.RunID) error {
+	s.mu.Lock()
+	var paused bool
+	var cid runtime.ID
+	if entry := s.runs[run]; entry != nil {
+		paused, cid = entry.paused, entry.containerID
+	}
+	s.mu.Unlock()
+	switch {
+	case paused:
+		return fmt.Errorf("%w: the session is paused: run cloudfield resume %s first", ErrInvalidTransition, run)
+	case s.vmFrozen(cid):
+		return fmt.Errorf("%w: the server froze the session's VM while it is short of memory, and it carries on by itself once memory is free again: change it then", ErrInvalidTransition)
+	}
+	return nil
+}
+
+// ErrNoSuchOption refuses a model or an effort for a session whose agent
+// offers no option that sets it.
+var ErrNoSuchOption = errors.New("scheduler: the session's agent offers no such option")
+
+// ACPSetModelEffort is ACPSetOption for a caller that names a model, an
+// effort or both and has no option ids; an empty one is left as it is. It
+// returns the two as the agent reports them afterwards, which can differ
+// from the values asked for, and records what it set on the timeline with
+// actor.
+func (s *Scheduler) ACPSetModelEffort(ctx context.Context, run *domain.Run, actor domain.MemberID, model, effort string) (nowModel, nowEffort string, err error) {
+	awake, err := s.holdAwakeNow(run.ID)
+	if err != nil {
+		return "", "", err
+	}
+	defer awake()
+	if err = s.optionsAnswered(run.ID); err != nil {
+		return "", "", err
+	}
+	sess, err := s.acp.live(ctx, run.ID)
+	if err != nil {
+		return "", "", err
+	}
+	var set []string
+	defer func() {
+		if len(set) == 0 {
+			return
+		}
+		if err != nil {
+			err = fmt.Errorf("%w; the session is now set to %s", err, strings.Join(set, ", "))
+		}
+		// The agent already has the change, so recording who made it must
+		// not depend on the caller staying connected.
+		recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), steerRecordTimeout)
+		defer cancel()
+		s.publishTimeline(recordCtx, run.WorkspaceID, run.ID, actor, events.TimelineNote, "set "+strings.Join(set, ", "))
+	}()
+	// The model goes first: the levels an agent offers can depend on it.
+	for _, option := range []struct {
+		name, value string
+		id, now     func() string
+	}{{"model", model, sess.ModelOptionID, sess.Model}, {"effort", effort, sess.EffortOptionID, sess.Effort}} {
+		if option.value == "" {
+			continue
+		}
+		id := option.id()
+		if id == "" {
+			return "", "", fmt.Errorf("%w: %s", ErrNoSuchOption, option.name)
+		}
+		if err = s.ACPSetOption(ctx, run.ID, id, option.value); err != nil {
+			return "", "", fmt.Errorf("set the session's %s: %w", option.name, err)
+		}
+		set = append(set, option.name+" "+option.now())
+	}
+	return sess.Model(), sess.Effort(), nil
 }
 
 var errACPBusy = errors.New("scheduler: the Enhanced agent is busy")
