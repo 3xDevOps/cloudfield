@@ -28,6 +28,11 @@ const (
 	ErrorReasonNotSwitchable       = "not_switchable"
 	ErrorReasonSessionNotReported  = "session_not_reported"
 	ErrorReasonAdapterNotInstalled = "adapter_not_installed"
+
+	// MethodRunInterrupt stops the turn a run's agent is in, for a caller
+	// with no ACP stream: RunIDParams. It needs Steer, and is refused while
+	// another member holds the run's control.
+	MethodRunInterrupt = "run.interrupt"
 )
 
 // RunModeSwitchParams.Mode is "tui" or "acp". The lease may be empty while

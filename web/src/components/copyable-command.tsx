@@ -4,7 +4,8 @@ import { Button } from '@/components/ui/button'
 import { cn, focusRing } from '@/lib/utils'
 import { copyText } from '@/lib/clipboard'
 
-export function CopyableCommand({ command }: { command: string }) {
+/** `wrap` breaks a long command over lines instead of scrolling it, so all of it can be read before it is run. */
+export function CopyableCommand({ command, wrap = false }: { command: string; wrap?: boolean }) {
   const codeRef = useRef<HTMLElement>(null)
 
   return (
@@ -15,7 +16,8 @@ export function CopyableCommand({ command }: { command: string }) {
         title={command}
         className={cn(
           focusRing,
-          'min-w-0 flex-1 overflow-x-auto whitespace-pre px-1 font-code text-ui-sm leading-5 text-text select-text',
+          'min-w-0 flex-1 px-1 font-code text-ui-sm leading-5 text-text select-text',
+          wrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'overflow-x-auto whitespace-pre',
         )}
       >
         {command}

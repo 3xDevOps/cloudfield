@@ -241,7 +241,9 @@ type Scheduler struct {
 
 	// capacityGate protects admission probes/accounting, never lifecycle state.
 	capacityGate chan struct{}
-	reclaimMu    sync.Mutex
+	// capacityCounts carries capacity events to countCapacityEvents.
+	capacityCounts chan capacityCount
+	reclaimMu      sync.Mutex
 	// reclaimSweptAt is when reclaim last swept caches, images and scratch
 	// above the low watermark. Guarded by reclaimMu.
 	reclaimSweptAt       time.Time
@@ -269,7 +271,9 @@ type Scheduler struct {
 	// runs again, and vmBrakeTargets are the VMs its next check freezes;
 	// only the brake's own goroutine touches them.
 	vmMemoryBraked bool
-	vmBrakeTargets []runtime.ID
+	// vmFreezeCounted is set once that freeze was counted.
+	vmFreezeCounted bool
+	vmBrakeTargets  []runtime.ID
 	// vmMemoryWaking holds, under mu, while a wake the guard started runs.
 	vmMemoryWaking bool
 
@@ -535,8 +539,8 @@ type supervised struct {
 	spendMu   sync.Mutex
 	uncharged events.RunCostPayload
 	// appServer marks a Standard run whose terminal is attached to the
-	// agent's app-server (appServerDriver). serverTurn marks a turn mail
-	// started there, which does not answer a shown question.
+	// agent's app-server (appServerDriver). serverTurn marks a turn mail or
+	// a report reminder started there, which does not answer a shown question.
 	appServer  bool
 	serverTurn bool
 	// idleWake marks a Standard run whose terminal loads an idle wake
@@ -833,6 +837,7 @@ func New(cfg Config) (*Scheduler, error) {
 		frozenTTL:            frozenTTL,
 		harnesses:            harnesses,
 		capacityGate:         make(chan struct{}, 1),
+		capacityCounts:       make(chan capacityCount, capacityCountBacklog),
 		checkoutSweepGate:    make(chan struct{}, 1),
 		captureBootGate:      make(chan struct{}, 1),
 		superCtx:             ctx,
@@ -856,6 +861,7 @@ func New(cfg Config) (*Scheduler, error) {
 		slog.Warn("scheduler: remove the old one-VM-session records", "error", err)
 	}
 	s.useOMPBroker(cfg.OMPBrokers)
+	s.wg.Go(func() { s.countCapacityEvents(ctx, cfg.Store) })
 	return s, nil
 }
 

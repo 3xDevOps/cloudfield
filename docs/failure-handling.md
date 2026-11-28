@@ -302,7 +302,26 @@ Docker session.
 
 Attaching, messaging, pulling, closing, killing and deleting sessions keep
 working below the reserve, and so does reopening a closed session whose container
-is still there. To free space yourself:
+is still there. Waking a sleeping session, or starting a closed one's stopped
+container, creates no session disk, so it needs only 1 GiB free for itself
+and each start in flight, not the reserve. With less it is refused with the
+error above, naming a reserve of 0 bytes. Waking a saved VM deletes its saved
+memory, but not for good: while the disk is this full the session's next
+idle sleep saves the VM again at once, and a wake that fails after the VM
+started always does, both with no free-space check
+([Sessions in VMs](#sessions-in-vms)). A start
+from a VM's disks, as after disk reclaim deleted its saved memory, still
+writes to the data filesystem with no free-space check: the disk of an agent
+program that changed in the member's home since its last disk was built,
+with a copy of the program while it builds (the program is at most 2 GiB);
+a copy of a closed session VM's package cache, when you reopen it while the
+server still copies that cache for the member's next session; the helper
+disk, built once for each server binary; the browser's disk, after a server
+update brought another browser image; and the root disk of a VM whose setup
+script never finished. The 1 GiB is checked when the session wakes, not
+held afterwards: a woken session VM whose disks then grow is paused as
+described above, and a woken Docker session, like a running one, is not. To
+free space yourself:
 
 1. Open **Insights → System** to see what uses the space.
 2. Delete sessions you no longer need with **Delete run** or `cloudfield delete
@@ -713,6 +732,77 @@ An upstream that was rewritten or diverged stays held (`rewritten` or
 --commit <reviewed-sha> --yes`. Published session branches stay fetchable while a
 mirror is failing.
 
+## What the server did for want of memory or disk
+
+The server counts each time it was short of memory or disk and what it did
+about it, and logs each one:
+
+```sh
+sudo journalctl -u aether-server | grep -E '(scheduler|subsessions): capacity:'
+```
+
+```
+INFO scheduler: capacity: refusal op=wake cause=memory run=<run id> available=... floor=... used=... idle_hour=... vm=0 text="scheduler: insufficient host memory headroom: ..."
+INFO scheduler: capacity: save op=idle cause="" run=<run id> available=... floor=... used=0 idle_hour=0 vm=... text=""
+INFO scheduler: capacity: freeze op="" cause="" run="" available=... floor=... used=0 idle_hour=0 vm=0 text="froze 3 session VMs"
+INFO subsessions: capacity: wait-end op=subsession cause=started run=<run id> waited=2m10s text=""
+```
+
+The counts are kept in the database, in table `capacity_counts`, one row
+per hour (UTC) and counter, so they outlast a restart. A server start
+deletes rows older than 90 days. A counter is a `kind`, an `op` and a
+`cause`:
+
+| `kind` | Counted when | `op` | `cause` |
+| --- | --- | --- | --- |
+| `refusal` | Admission refused a start for memory or disk | `launch`, `launch-retry` (the server trying a waiting subsession again), `wake`, `wake-auto` (a wake nobody asked for: the memory guard waking a VM it saved while it worked, or the sweep waking a session idle for seven days to close it), `boot` (a stopped VM booted to commit its work), `start` (any other container or VM: a member's environment terminal, an agent sign-in, the assistant's container, a browser, an agent update, a move to another account) | `memory`, `stall`, `disk`, `unknown` (a measurement failed or timed out behind other admissions) |
+| `wait` | A subsession the server had no room for went back to the queue, once for each | `subsession` | |
+| `wait-end` | A subsession that waited stopped waiting | `subsession` | `started`, `refused`, `cancelled` |
+| `freeze` | The memory brake froze at least one session VM, once each time it engages | | |
+| `save` | The memory guard, or an admission short of memory, saved a session VM to disk | `idle`, `paused` (it was paused in memory), `working`, `closed` (a closed session's VM, stopped and not saved) | |
+
+Each row holds the `count` and the sum of each event's figures, in bytes:
+
+- `available_bytes` and `floor_bytes`: available memory and the floor
+  admission keeps, for a memory refusal, a freeze and a save (measured
+  before the save).
+- `used_bytes`: the memory in use at a memory or stall refusal. It is read
+  when the event is counted, after any pass that saved idle VMs for that
+  admission, so it is not the same instant as `available_bytes`.
+- `idle_hour_bytes`: what session VMs idle for over an hour, and the VMs
+  of closed sessions, held then. It covers session VMs the memory guard may
+  save: not a container session, a Background session, one held awake, one
+  with a question pending, one being saved, or one whose save failed in the
+  last five minutes. A sleeping VM counts from when it fell asleep. On a
+  server whose sessions are containers it is 0.
+- `vm_bytes`: what a saved VM held.
+- `waited_seconds` and `max_waited_seconds`: the total and the longest time
+  from a subsession's first refusal for room, when its parent was told it
+  waits, to the end of its wait. A subsession held behind a waiting sibling
+  that then starts at its first attempt is not counted.
+- `last_at`, `last_run` and `last_text`: the counter's latest event, with
+  the refusal as its caller got it.
+
+What the counts are not:
+
+- `wake` counts attempts, so one session a person keeps trying to wake
+  counts each time. It includes wakes the server makes for someone: to
+  deliver mail to a sleeping session, and before a close or a kill. Callers
+  that ask while a wake runs share it and its counter.
+- A waiting subsession's refusals are counted as `refusal` too (`launch`,
+  then `launch-retry`), beside its `wait`.
+- A disk refusal's figures are in its text. A refusal for browser CPU is
+  not counted. A VM saved because it stayed paused for an hour is not
+  counted: no shortage caused it.
+- An event whose end falls in a server restart, such as a waiting
+  subsession that started as the server stopped, can go uncounted.
+
+Counting never holds up admission, the brake or the guard: their events go
+to the database from a queue of 256. One that finds the queue full is
+logged (`not counted, ...`) and not counted, and a server that stops can
+leave its last events uncounted. A subsession's `wait` and `wait-end` are written by the subsession
+service itself, after its state changed and outside the launch lock.
+
 ## Where a launch or a wake spends its time
 
 The server logs one line for every session it launched and every sleeping
@@ -907,8 +997,10 @@ that ran detached, such as one started with `nohup`, stopped with the sleep:
 the connection is refused until you start it again. The request that woke it waits while the
 container starts and the agent restores its conversation, then goes through.
 Two wakes at once start the container once. Waking counts against the same
-memory and disk checks as a launch, and a saved VM must fit its saved memory
-([Recover from memory pressure](#recover-from-memory-pressure)); a VM
+memory checks as a launch, and a saved VM must fit its saved memory
+([Recover from memory pressure](#recover-from-memory-pressure)). On disk it
+needs 1 GiB free but not the reserve a launch keeps
+([Recover from disk pressure](#recover-from-disk-pressure)). A VM
 still paused in memory already holds what it wakes with and passes no
 check. A refused or failed wake returns its
 error to the request that caused it, keeps the session asleep and shows the

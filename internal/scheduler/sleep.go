@@ -186,6 +186,10 @@ func (s *Scheduler) holdAwake(ctx context.Context, run domain.RunID) (release fu
 // the same time: the first runs the wake and the others wait for its result.
 func (s *Scheduler) wake(ctx context.Context, entry *supervised) error {
 	timed := runtime.WithSteps(s.superCtx)
+	// Callers that ask while this wake runs share it and its counter.
+	if ctx.Value(autoWake{}) != nil {
+		timed = context.WithValue(timed, autoWake{}, true)
+	}
 	for {
 		s.mu.Lock()
 		switch {
@@ -323,7 +327,7 @@ func (s *Scheduler) wakeLive(ctx context.Context, entry *supervised) (woke, erro
 		resident = inspectErr == nil && !info.Exited
 	}
 	if !resident {
-		release, err = s.reserveWake(ctx, cid)
+		release, err = s.reserveWake(ctx, entry.runID, cid)
 	}
 	if err == nil {
 		defer release()

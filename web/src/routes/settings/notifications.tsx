@@ -8,7 +8,7 @@ import { desktopBridge } from '@/components/shell/window-bar'
 import { Input } from '@/components/ui/input'
 import { Radio, RadioGroup } from '@/components/ui/radio'
 import type { NotifyLevel, NotifyPrefs, NotifyPrefsSetParams, SlackLinkResult, SlackStatusResult } from '@/lib/types'
-import { errorSentence } from '@/lib/format'
+import { browserZone, errorSentence } from '@/lib/format'
 import { androidShell } from '@/lib/android-push'
 import { disablePush, enablePush, readPush, testPush, watchAndroidPushState, type PushState } from '@/lib/push'
 import { SettingRow, SettingsSection, TryAgain } from '@/routes/settings/layout'
@@ -249,7 +249,6 @@ export function PushSection({ client, onSubscriptionChange }: { client: Api; onS
   )
 }
 
-const browserZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
 const quietDefault = () => ({ start: '22:00', end: '07:00', tz: browserZone() })
 
 const later = 'finished, failed, stopped, merged, checks, reviews and closed pull requests'
