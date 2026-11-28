@@ -150,6 +150,23 @@ the source. `overlay`, on a `home` mount, mounts the source read-only below
 a writable layer at `overlay/<source>` on the data disk, whose root takes the
 source's owner and mode: the guest's writes stay in the VM.
 
+The data disk is a sparse file of 32 GiB plus the swap file's size, made
+with the VM, so a larger memory limit leaves the session about the same room.
+It holds `/tmp`, nested Docker's `/var/lib/docker`, an Isolated home's
+writable layer, the swap file and the store of
+[the git service](#the-git-service).
+A write that finds it full fails with `No space left on device`. ext4 keeps
+5% of it for root, so the session's user fills `/tmp` at about 29 GiB and the
+git service, which runs as root, still snapshots and commits the checkout.
+Root's writes take the 5% too: root in the session, nested Docker's daemon,
+and writes to an Isolated home, which the kernel makes as the helper that
+mounted the overlay. With the whole disk full, Changes shows
+`Snapshot history unavailable; current change statistics remain live.`, and
+the commit a close makes fails with the guest's error in the server log and
+leaves the uncommitted files in the checkout, until the session deletes
+files. A VM made before the disk had this size keeps its 128 GiB disk, which
+keeps nothing for root.
+
 ## Memory the guest returns
 
 Guest memory is shared memory the host fills as the guest touches it

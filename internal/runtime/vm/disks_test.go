@@ -3,10 +3,80 @@ package vm
 import (
 	"bytes"
 	"os"
+	"path/filepath"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
+
+// A session takes no more of the host through /tmp and nested Docker than
+// its data disk holds. Its swap file is added to the disk, so a larger
+// memory limit leaves the session the same room, and root keeps a share of
+// the disk. The session's database disk stays the session's whole.
+func TestANewVMsDataDiskHoldsTheSessionsRoomAndItsSwap(t *testing.T) {
+	h := newHarness(t)
+	state := t.TempDir()
+	small, large := sessionSpec("run-a"), sessionSpec("run-b")
+	small.Mounts = []runtime.Mount{{HostPath: state, Subpath: "0", ContainerPath: "/root/.codex/vm-sqlite", Kind: runtime.MountState}}
+	large.MemoryLimitBytes = 64 << 30
+	for _, vm := range []struct {
+		spec runtime.Spec
+		opts options
+	}{{small, options{}}, {large, options{}}, {sessionSpec("run-c"), options{NoSwap: true}}} {
+		if _, err := h.engine.create(t.Context(), vm.spec.CreationKey, vm.spec, vm.opts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []fakeDataDisk{
+		{h.engine.path("run-a", dataDisk), 32<<30 + 512<<20, 5},
+		{filepath.Join(state, stateDiskFile), 1 << 30, 0},
+		{h.engine.path("run-b", dataDisk), 32<<30 + 16<<30, 5},
+		{h.engine.path("run-c", dataDisk), 32 << 30, 5},
+	}
+	if !slices.Equal(h.images.dataDisks, want) {
+		t.Errorf("the VMs' data disks, each with its size and root's percent:\n got %+v\nwant %+v", h.images.dataDisks, want)
+	}
+}
+
+// A data disk's size is its file's, set when the VM was created: a VM from
+// before a server update keeps the disk it has through a stop and start, a
+// sleep and wake, and a server restart.
+func TestAnExistingVMKeepsItsDataDisk(t *testing.T) {
+	h := newHarness(t)
+	h.createStarted("run-a", sessionSpec("run-a"))
+	disk := h.engine.path("run-a", dataDisk)
+	const before = 128 << 30
+	if err := os.Truncate(disk, before); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.engine.stop(t.Context(), "run-a", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.engine.start(t.Context(), "run-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.engine.save(t.Context(), "run-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.engine.restore(t.Context(), "run-a"); err != nil {
+		t.Fatal(err)
+	}
+	after := h.newEngine(filepath.Dir(h.engine.root))
+	if err := after.stop(t.Context(), "run-a", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := after.start(t.Context(), "run-a"); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(disk); err != nil || info.Size() != before || len(h.images.dataDisks) != 1 {
+		t.Errorf("after a stop, a sleep and a server restart: data disk %v, %v, with %d made; want the one of %d bytes", info, err, len(h.images.dataDisks), int64(before))
+	}
+	if got := launchDisks(t, h.units.last().launch.Args)["data"]["path"]; got != disk {
+		t.Errorf("the VM started on the data disk %q, want %s", got, disk)
+	}
+}
 
 func TestDiskUseCountsTheBlocksOfEachVMsDisks(t *testing.T) {
 	h := newHarness(t)
