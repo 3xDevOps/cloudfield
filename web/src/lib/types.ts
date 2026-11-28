@@ -2148,6 +2148,66 @@ export interface ServerRunLimits {
   effective: RunLimits
 }
 
+/** server.capacity, from internal/protocol/capacity.go: the one machine the
+ * server runs on. A failed measurement leaves its figures zero and sets its
+ * error. */
+export interface ServerCapacity {
+  memory_total_bytes: number
+  memory_available_bytes: number
+  /** Under it a launch is refused and session VMs are frozen and saved; a
+   * launch needs `start_memory_bytes` above it. */
+  memory_floor_bytes: number
+  start_memory_bytes: number
+  memory_error?: string
+  /** Percent of the last 60 s the server's cgroup stalled on memory. */
+  server_stall?: number
+  server_stall_limit: number
+  /** Percent of the last 10 s every task on the host stalled on memory. */
+  host_stall?: number
+  host_stall_limit: number
+  stall_error?: string
+  disks: ServerCapacityDisk[]
+  start_disk_bytes: number
+  disk_error?: string
+  vms: { awake: number; frozen: number; paused: number; saved: number }
+  last_launch_refusal?: ServerCapacityRefusal
+  last_wake_refusal?: ServerCapacityRefusal
+  day: ServerCapacityCount[]
+  fortnight: ServerCapacityCount[]
+}
+
+export interface ServerCapacityDisk {
+  name: string
+  total_bytes: number
+  free_bytes: number
+  reserve_bytes: number
+}
+
+export interface ServerCapacityRefusal {
+  at: string
+  op: string
+  cause: string
+  text: string
+  /** Present for a super admin only. */
+  run_id?: string
+}
+
+/** One counter; the byte and second fields are sums over its `count` events. */
+export interface ServerCapacityCount {
+  kind: 'refusal' | 'wait' | 'wait-end' | 'freeze' | 'save'
+  op?: string
+  cause?: string
+  count: number
+  available_bytes?: number
+  floor_bytes?: number
+  used_bytes?: number
+  idle_hour_bytes?: number
+  vm_bytes?: number
+  waited_seconds?: number
+  max_waited_seconds?: number
+  last_at: string
+}
+
 /** When an update applies: immediately, at the next idle moment, or never
  * (which clears the pending one). */
 export type ServerUpdateWhen = 'now' | 'idle' | 'cancel'

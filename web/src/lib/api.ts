@@ -126,6 +126,7 @@ import type {
   ServerUpdateResult,
   ServerUpdateStatus,
   RunLimits,
+  ServerCapacity,
   ServerRunLimits,
   SysboxStatus,
   ServerUpdateWhen,
@@ -817,6 +818,7 @@ export const api = {
     call<ServerUpdateResult>('server.update', { when }),
   /** Reads the server-wide run limits; with a field set, an admin changes
    * them. Zero clears a field. */
+  serverCapacity: () => call<ServerCapacity>('server.capacity'),
   serverRunLimits: (params: { cpus?: number; memory_bytes?: number; pids?: number } = {}) =>
     call<ServerRunLimits>('server.run_limits', params),
   /** Admin only. Whether runs can run Docker inside their containers. */

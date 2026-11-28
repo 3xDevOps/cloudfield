@@ -1,8 +1,8 @@
 import type { ComponentType } from 'react'
-import { Bell, Bot, Brain, Cable, Eye, Gauge, Globe, Monitor, Network, Rocket, ServerCog, Settings, Sparkles } from '@/components/icons'
+import { Bell, Bot, Brain, Cable, Eye, Gauge, Globe, Monitor, Network, Rocket, Server, ServerCog, Settings, Sparkles } from '@/components/icons'
 import type { Capability } from '@/lib/capability'
 
-export type CategoryID = 'general' | 'launch' | 'agents' | 'connections' | 'notifications' | 'watches' | 'memory' | 'assistant' | 'children' | 'usage' | 'this-computer' | 'server' | 'remote-access'
+export type CategoryID = 'general' | 'launch' | 'agents' | 'connections' | 'notifications' | 'watches' | 'memory' | 'assistant' | 'children' | 'usage' | 'this-computer' | 'server' | 'machines' | 'remote-access'
 
 export type Gates = { cap: Capability; admin: boolean; superAdmin: boolean; assistant: boolean; onboarding: boolean; member: boolean; workspace: boolean }
 
@@ -37,6 +37,7 @@ export const categories: Category[] = [
   { id: 'usage', group: 'You', title: 'Usage', purpose: 'Subscription usage of your agent accounts.', Icon: Gauge },
   { id: 'this-computer', group: 'This computer', title: 'This computer', purpose: 'The server this computer links to and the files it syncs.', Icon: Monitor },
   { id: 'server', group: 'Server', title: 'Server', purpose: 'The Cloudfield server every member shares.', Icon: ServerCog },
+  { id: 'machines', group: 'Server', title: 'Machines', purpose: 'What the machine has free for sessions, and why a launch or a wake was refused.', Icon: Server },
   { id: 'remote-access', group: 'Server', title: 'Remote access', purpose: 'How this server is reached from outside its network.', Icon: Globe },
 ]
 
@@ -78,6 +79,7 @@ export const entries: SettingEntry[] = [
   { id: 'retained-containers', category: 'server', label: 'Retained sandboxes', help: 'Remove sandboxes that finished sessions keep.', keywords: 'cleanup free disk release', visible: (g) => g.admin && g.cap.hasMethod('run.release') },
   { id: 'workspace-settings', category: 'server', label: 'Workspace settings and budget', help: "The active workspace's settings, on its page.", keywords: 'budget limit workspace repository', link: { name: 'workspace', params: (active) => ({ workspaceId: active }) }, visible: (g) => g.workspace && g.cap.hasMethod('workspace.settings') },
   { id: 'members', category: 'server', label: 'Members and devices', help: 'Invite members and approve devices, on the Members page.', keywords: 'invite member device approve', link: { name: 'members' }, visible: (g) => g.admin && g.cap.hasMethod('member.list') },
+  { id: 'machine', category: 'machines', label: 'Machine capacity', help: 'Free memory and disk against what a launch needs, session VMs, and why the last launch and wake were refused.', keywords: 'capacity machine host memory ram disk storage stall pressure floor reserve vm frozen asleep saved room refused refusal launch wake waiting subsession queued counters idle', visible: (g) => g.cap.hasMethod('server.capacity') },
   { id: 'edge', category: 'remote-access', label: 'Remote access', help: 'Edge, server id, access policy and owner.', keywords: 'edge owner claim server id policy tunnel', visible: (g) => g.cap.hasMethod('server.edge') },
 ]
 
