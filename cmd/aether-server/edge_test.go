@@ -22,6 +22,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	edgeagent "github.com/3xDevOps/cloudfield/internal/edge/agent"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	"github.com/3xDevOps/cloudfield/internal/server"
 	"github.com/3xDevOps/cloudfield/internal/serversetup"
 	"github.com/3xDevOps/cloudfield/internal/store"
 	"github.com/3xDevOps/cloudfield/internal/store/storetest"
@@ -74,7 +75,7 @@ func TestEdgeStatusAndClaimCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if err := edgeStatus(&out, dir, edgeagent.DefaultURL, edgeproto.PolicyApprovedDevices, time.Now()); !errors.Is(err, errNotConnected) {
+	if err := edgeStatus(&out, dir, edgeagent.DefaultURL, serversetup.DefaultConfigPath, edgeproto.PolicyApprovedDevices, time.Now()); !errors.Is(err, errNotConnected) {
 		t.Fatalf("status of a server that never connected = %v, want %v", err, errNotConnected)
 	}
 	for _, want := range []string{id, edgeproto.EdgeKeyFingerprint(pub), "valid for 30 min, until ", "5 attempts left", "edge access  approved-devices",
@@ -134,7 +135,7 @@ func TestEdgeStatusReportsAStaleConnection(t *testing.T) {
 				t.Fatal(err)
 			}
 			var out bytes.Buffer
-			if err := edgeStatus(&out, dir, edgeagent.DefaultURL, edgeproto.PolicyApprovedDevices, now); err != tt.err {
+			if err := edgeStatus(&out, dir, edgeagent.DefaultURL, serversetup.DefaultConfigPath, edgeproto.PolicyApprovedDevices, now); err != tt.err {
 				t.Fatalf("status = %v, want %v", err, tt.err)
 			}
 			for _, want := range append(tt.want, "measures     the server->edge control connection; it does not prove clients can reach the server") {
@@ -232,6 +233,7 @@ func TestEdgeIsOffUnlessConfigured(t *testing.T) {
 // before the server has pinned its edge's key, which is what shows the
 // new address is the same edge.
 func TestEdgeMoveNeedsAPinnedKey(t *testing.T) {
+	t.Setenv("SUDO_USER", "ubuntu")
 	dir := t.TempDir()
 	path := filepath.Join(dir, "server.conf")
 	values := map[string]string{"data-dir": dir, "edge-url": "https://edge.onaether.dev"}
@@ -243,11 +245,69 @@ func TestEdgeMoveNeedsAPinnedKey(t *testing.T) {
 	}
 	err := edgeCmd([]string{"move", "https://edge.cloudfield.ai", "--config", path})
 	if want := "no edge key is pinned for https://edge.onaether.dev yet, so nothing shows that https://edge.cloudfield.ai is the same edge; " +
-		"start the server, let it connect once, and run edge move again"; err == nil || err.Error() != want {
+		"start the server, let it connect once, and run edge move again. If https://edge.onaether.dev no longer answers for this edge: " +
+		"confirm https://edge.cloudfield.ai and the edge key's fingerprint with whoever runs the edge, " +
+		"then run sudo cloudfield-server config set edge-url https://edge.cloudfield.ai --config " + path +
+		", sudo cloudfield-server edge trust --config " + path + " (it shows the fingerprint to compare; type yes) and sudo systemctl restart aether-server"; err == nil || err.Error() != want {
 		t.Errorf("move without a pinned key: %v, want %q", err, want)
 	}
 	if got, err := serversetup.Load(path); err != nil || got["edge-url"] != "https://edge.onaether.dev" {
 		t.Errorf("config after a refused move: %v, %v", got, err)
+	}
+}
+
+// A flag that overrides the config's edge-url refuses edge move before it
+// dials anything, since the move would write the file the flag overrides.
+func TestEdgeMoveRefusesAFlagOverrideFirst(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "server.conf")
+	const file, flagged = "https://edge-old.example.test", "https://edge-flag.example.test"
+	if err := serversetup.WriteConfig(path, map[string]string{"data-dir": dir, "edge-url": file}); err != nil {
+		t.Fatal(err)
+	}
+	err := edgeCmd([]string{"move", "https://edge-new.example.test", "--config", path, "--edge-url", flagged})
+	if want := path + ` gives edge-url "` + file + `" and data-dir "` + dir + `", but edge move runs with "` + flagged + `" and "` + dir +
+		`" from its flags; nothing changed, run it again without --edge-url or --data-dir`; fmt.Sprint(err) != want {
+		t.Errorf("move: %v\nwant: %s", err, want)
+	}
+	if _, err = os.Stat(server.HostKeyPath(dir)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the refused move made a host key: %v", err)
+	}
+}
+
+// An empty --edge-url on edge move is a flag override of the file, not an
+// edge that is off.
+func TestEdgeMoveRefusesAnEmptyFlagOverride(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "server.conf")
+	const file = "https://edge-old.example.test"
+	if err := serversetup.WriteConfig(path, map[string]string{"data-dir": dir, "edge-url": file}); err != nil {
+		t.Fatal(err)
+	}
+	err := edgeCmd([]string{"move", "https://edge-new.example.test", "--config", path, "--edge-url="})
+	if want := path + ` gives edge-url "` + file + `" and data-dir "` + dir + `", but edge move runs with "" and "` + dir +
+		`" from its flags; nothing changed, run it again without --edge-url or --data-dir`; fmt.Sprint(err) != want {
+		t.Errorf("move: %v\nwant: %s", err, want)
+	}
+}
+
+// edge move decides on the one config it read at the start: a file
+// changed since to the address a flag gave does not turn a flag override
+// into a move, and nothing is dialed or created.
+func TestEdgeMoveDecidesOnTheConfigItRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "server.conf")
+	const read, flagged = "https://edge-old.example.test", "https://edge-flag.example.test"
+	if err := serversetup.WriteConfig(path, map[string]string{"data-dir": dir, "edge-url": flagged}); err != nil {
+		t.Fatal(err)
+	}
+	err := edgeMove(io.Discard, dir, flagged, edgeproto.PolicyAccount, "https://edge-new.example.test", path, map[string]string{"data-dir": dir, "edge-url": read})
+	if want := path + ` gives edge-url "` + read + `" and data-dir "` + dir + `", but edge move runs with "` + flagged + `" and "` + dir +
+		`" from its flags; nothing changed, run it again without --edge-url or --data-dir`; fmt.Sprint(err) != want {
+		t.Errorf("move: %v\nwant: %s", err, want)
+	}
+	if _, err = os.Stat(server.HostKeyPath(dir)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the refused move made a host key: %v", err)
 	}
 }
 
@@ -268,7 +328,12 @@ func TestApplyMoveAndThePendingRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := applyMove(&out, dir, from, to, path); err != nil {
+	held, herr := edgeagent.OpenState(dir).HoldPin()
+	if herr != nil {
+		t.Fatal(herr)
+	}
+	defer held.Close()
+	if err := applyMove(&out, dir, from, path, map[string]string{"data-dir": dir, "edge-url": from}, held, edgeagent.Moved{To: to}); err != nil {
 		t.Fatal(err)
 	}
 	want := "enrolled at " + to + ", an address of the same edge (edge key " + edgeproto.EdgeKeyFingerprint(pub) + ", still pinned); " +
@@ -294,7 +359,7 @@ func TestApplyMoveAndThePendingRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if err := edgeStatus(&out, dir, to, edgeproto.PolicyAccount, time.Now()); err != nil {
+	if err := edgeStatus(&out, dir, to, serversetup.DefaultConfigPath, edgeproto.PolicyAccount, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if want := "running      the running server is at " + from + "; restart to apply edge-url: sudo systemctl restart aether-server\n"; !strings.Contains(out.String(), want) {
