@@ -17,21 +17,24 @@ var ErrTooManyWaiting = errors.New("store: too many launches already wait")
 type LaunchIntentStore interface {
 	// CreateLaunchIntent records in as waiting under a new session ID.
 	// A member's open intent under the same key is returned instead, with
-	// existing true. More than maxOpen open intents of the member is
-	// ErrTooManyWaiting.
-	CreateLaunchIntent(ctx context.Context, in *domain.LaunchIntent, maxOpen int) (intent *domain.LaunchIntent, existing bool, err error)
+	// existing true. With maxOpen open intents of the member already, or
+	// maxDaily of any state made in the last day, it is ErrTooManyWaiting.
+	CreateLaunchIntent(ctx context.Context, in *domain.LaunchIntent, maxOpen, maxDaily int) (intent *domain.LaunchIntent, existing bool, err error)
 	GetLaunchIntent(ctx context.Context, id domain.RunID) (*domain.LaunchIntent, error)
 	// LaunchIntentByKey returns the member's latest intent under key.
 	LaunchIntentByKey(ctx context.Context, member domain.MemberID, key string) (*domain.LaunchIntent, error)
-	// LaunchIntents lists intents in the given states, the oldest first;
-	// member "" lists every member's.
-	LaunchIntents(ctx context.Context, member domain.MemberID, states ...domain.LaunchIntentState) ([]*domain.LaunchIntent, error)
+	// LaunchIntents lists the open intents, and with endedSince not zero
+	// those that ended since without a session, the oldest first; member
+	// "" lists every member's.
+	LaunchIntents(ctx context.Context, member domain.MemberID, endedSince time.Time) ([]*domain.LaunchIntent, error)
 	// ClaimLaunchIntent moves a waiting intent to starting for one attempt.
 	// ErrConflict when it is not waiting.
 	ClaimLaunchIntent(ctx context.Context, id domain.RunID, at time.Time) error
 	// ReleaseLaunchIntent returns a starting intent to waiting with the
-	// refusal its attempt got. ErrConflict when it is not starting.
-	ReleaseLaunchIntent(ctx context.Context, id domain.RunID, refusal string) error
+	// refusal its attempt got. failed counts an attempt that failed on
+	// something other than room; one refused for room clears the count.
+	// ErrConflict when it is not starting.
+	ReleaseLaunchIntent(ctx context.Context, id domain.RunID, refusal string, failed bool) error
 	// EndLaunchIntent moves an open intent to a final state that is not
 	// started, with why. ErrConflict when it is not open.
 	EndLaunchIntent(ctx context.Context, id domain.RunID, to domain.LaunchIntentState, reason string, at time.Time) error
@@ -45,18 +48,23 @@ type LaunchIntentStore interface {
 	// PassLaunchIntents counts one more launch admitted ahead of every
 	// waiting intent, and returns how many it passed.
 	PassLaunchIntents(ctx context.Context) (int64, error)
+	// OpenLaunchIntents counts the intents of every member that wait or
+	// are being tried.
+	OpenLaunchIntents(ctx context.Context) (int, error)
+	// PruneLaunchIntents deletes the intents that ended before before.
+	PruneLaunchIntents(ctx context.Context, before time.Time) error
 }
 
-const launchIntentCols = `id, member_id, workspace_id, idempotency_key, method, params, base_commit, base_branch, base_source, base_checked_at, via, connector, state, refusal,
-	attempts, passed, created_at, attempted_at, ended_at`
+const launchIntentCols = `id, member_id, workspace_id, idempotency_key, method, params, harness, task, base_commit, base_branch, base_source, base_checked_at, via, connector, device, state, refusal,
+	attempts, failures, passed, created_at, attempted_at, ended_at`
 
 func scanLaunchIntent(row interface{ Scan(...any) error }) (*domain.LaunchIntent, error) {
 	var in domain.LaunchIntent
 	var params string
 	var created, attempted, checked int64
 	var ended sql.NullInt64
-	if err := row.Scan(&in.ID, &in.MemberID, &in.WorkspaceID, &in.IdempotencyKey, &in.Method, &params, &in.Base.Commit, &in.Base.Branch, &in.Base.Source, &checked, &in.Via, &in.Connector,
-		&in.State, &in.Refusal, &in.Attempts, &in.Passed, &created, &attempted, &ended); err != nil {
+	if err := row.Scan(&in.ID, &in.MemberID, &in.WorkspaceID, &in.IdempotencyKey, &in.Method, &params, &in.Harness, &in.Task, &in.Base.Commit, &in.Base.Branch, &in.Base.Source, &checked, &in.Via, &in.Connector, &in.Device,
+		&in.State, &in.Refusal, &in.Attempts, &in.Failures, &in.Passed, &created, &attempted, &ended); err != nil {
 		return nil, err
 	}
 	in.Params = []byte(params)
@@ -68,24 +76,24 @@ func scanLaunchIntent(row interface{ Scan(...any) error }) (*domain.LaunchIntent
 	return &in, nil
 }
 
-func (d *DB) CreateLaunchIntent(ctx context.Context, in *domain.LaunchIntent, maxOpen int) (*domain.LaunchIntent, bool, error) {
+func (d *DB) CreateLaunchIntent(ctx context.Context, in *domain.LaunchIntent, maxOpen, maxDaily int) (*domain.LaunchIntent, bool, error) {
 	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, false, fmt.Errorf("store: create launch intent: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // committed below
 	if in.IdempotencyKey != "" {
-		prior, err := scanLaunchIntent(tx.QueryRowContext(ctx, `SELECT `+launchIntentCols+` FROM launch_intents
+		prior, scanErr := scanLaunchIntent(tx.QueryRowContext(ctx, `SELECT `+launchIntentCols+` FROM launch_intents
 			WHERE member_id = ? AND idempotency_key = ? AND state IN ('waiting', 'starting')`, in.MemberID, in.IdempotencyKey))
-		if err == nil {
+		if scanErr == nil {
 			return prior, true, nil
 		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return nil, false, fmt.Errorf("store: create launch intent: %w", err)
+		if !errors.Is(scanErr, sql.ErrNoRows) {
+			return nil, false, fmt.Errorf("store: create launch intent: %w", scanErr)
 		}
 	}
 	var open int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM launch_intents WHERE member_id = ? AND state IN ('waiting', 'starting')`, in.MemberID).Scan(&open); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM launch_intents WHERE member_id = ? AND state IN ('waiting', 'starting')`, in.MemberID).Scan(&open); err != nil {
 		return nil, false, fmt.Errorf("store: create launch intent: %w", err)
 	}
 	if open >= maxOpen {
@@ -95,14 +103,20 @@ func (d *DB) CreateLaunchIntent(ctx context.Context, in *domain.LaunchIntent, ma
 	if err != nil {
 		return nil, false, err
 	}
+	// Cancelled and ended ones are kept a while, so the member's rows of
+	// the last day are bounded too.
+	var recent int
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM launch_intents WHERE member_id = ? AND created_at > ?`, in.MemberID, ts.Add(-24*time.Hour).UnixNano()).Scan(&recent); err != nil {
+		return nil, false, fmt.Errorf("store: create launch intent: %w", err)
+	}
+	if recent >= maxDaily {
+		return nil, false, ErrTooManyWaiting
+	}
 	out := *in
 	out.ID, out.CreatedAt, out.AttemptedAt, out.State = domain.RunID(id), ts, ts, domain.IntentWaiting
-	if out.IdempotencyKey == "" {
-		out.IdempotencyKey = id
-	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO launch_intents (`+launchIntentCols+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, NULL)`,
-		out.ID, out.MemberID, out.WorkspaceID, out.IdempotencyKey, out.Method, string(out.Params), out.Base.Commit, out.Base.Branch, out.Base.Source, out.Base.CheckedAt.UTC().UnixNano(), out.Via, out.Connector,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, NULL)`,
+		out.ID, out.MemberID, out.WorkspaceID, out.IdempotencyKey, out.Method, string(out.Params), out.Harness, out.Task, out.Base.Commit, out.Base.Branch, out.Base.Source, out.Base.CheckedAt.UTC().UnixNano(), out.Via, out.Connector, out.Device,
 		out.State, out.Refusal, ts.UnixNano(), ts.UnixNano()); err != nil {
 		return nil, false, fmt.Errorf("store: create launch intent: %w", mapConstraint(err, ErrNotFound))
 	}
@@ -135,23 +149,23 @@ func (d *DB) LaunchIntentByKey(ctx context.Context, member domain.MemberID, key 
 	return in, nil
 }
 
-func (d *DB) LaunchIntents(ctx context.Context, member domain.MemberID, states ...domain.LaunchIntentState) ([]*domain.LaunchIntent, error) {
-	query := `SELECT ` + launchIntentCols + ` FROM launch_intents WHERE (?1 = '' OR member_id = ?1) AND state IN (?` + repeatPlaceholders(len(states)-1) + `)
-		ORDER BY created_at, id`
-	args := []any{member}
-	for _, s := range states {
-		args = append(args, s)
+func (d *DB) LaunchIntents(ctx context.Context, member domain.MemberID, endedSince time.Time) ([]*domain.LaunchIntent, error) {
+	ended := int64(-1)
+	if !endedSince.IsZero() {
+		ended = endedSince.UTC().UnixNano()
 	}
-	rows, err := d.db.QueryContext(ctx, query, args...)
+	rows, err := d.db.QueryContext(ctx, `SELECT `+launchIntentCols+` FROM launch_intents
+		WHERE (?1 = '' OR member_id = ?1) AND (state IN ('waiting', 'starting') OR (?2 >= 0 AND state <> 'started' AND ended_at >= ?2))
+		ORDER BY created_at, id`, member, ended)
 	if err != nil {
 		return nil, fmt.Errorf("store: launch intents: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // rows.Err is checked
 	var out []*domain.LaunchIntent
 	for rows.Next() {
-		in, err := scanLaunchIntent(rows)
-		if err != nil {
-			return nil, fmt.Errorf("store: launch intents: %w", err)
+		in, scanErr := scanLaunchIntent(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("store: launch intents: %w", scanErr)
 		}
 		out = append(out, in)
 	}
@@ -176,9 +190,10 @@ func (d *DB) ClaimLaunchIntent(ctx context.Context, id domain.RunID, at time.Tim
 		`UPDATE launch_intents SET state = 'starting', attempts = attempts + 1, attempted_at = ? WHERE id = ? AND state = 'waiting'`, at.UTC().UnixNano(), id)
 }
 
-func (d *DB) ReleaseLaunchIntent(ctx context.Context, id domain.RunID, refusal string) error {
+func (d *DB) ReleaseLaunchIntent(ctx context.Context, id domain.RunID, refusal string, failed bool) error {
 	return d.moveLaunchIntent(ctx, "release", id,
-		`UPDATE launch_intents SET state = 'waiting', refusal = ? WHERE id = ? AND state = 'starting'`, refusal, id)
+		`UPDATE launch_intents SET state = 'waiting', refusal = ?1, failures = CASE WHEN ?2 THEN failures + 1 ELSE 0 END WHERE id = ?3 AND state = 'starting'`,
+		refusal, failed, id)
 }
 
 func (d *DB) EndLaunchIntent(ctx context.Context, id domain.RunID, to domain.LaunchIntentState, reason string, at time.Time) error {
@@ -186,7 +201,7 @@ func (d *DB) EndLaunchIntent(ctx context.Context, id domain.RunID, to domain.Lau
 		return fmt.Errorf("store: end launch intent: %q is not an ending", to)
 	}
 	return d.moveLaunchIntent(ctx, "end", id,
-		`UPDATE launch_intents SET state = ?, refusal = ?, ended_at = ? WHERE id = ? AND state IN ('waiting', 'starting')`, to, reason, at.UTC().UnixNano(), id)
+		`UPDATE launch_intents SET state = ?, refusal = ?, params = '', ended_at = ? WHERE id = ? AND state IN ('waiting', 'starting')`, to, reason, at.UTC().UnixNano(), id)
 }
 
 func (d *DB) CreateRunForIntent(ctx context.Context, r *domain.Run) error {
@@ -194,7 +209,9 @@ func (d *DB) CreateRunForIntent(ctx context.Context, r *domain.Run) error {
 		return errors.New("store: create an intent's session: id is required")
 	}
 	return d.createRun(ctx, r, true, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `UPDATE launch_intents SET state = 'started', refusal = '', ended_at = ? WHERE id = ? AND state = 'starting'`,
+		// The request is the session's from here: a deleted session must
+		// not leave its task behind.
+		res, err := tx.ExecContext(ctx, `UPDATE launch_intents SET state = 'started', refusal = '', params = '', ended_at = ? WHERE id = ? AND state = 'starting'`,
 			time.Now().UTC().UnixNano(), r.ID)
 		if err != nil {
 			return fmt.Errorf("start launch intent: %w", err)
@@ -207,7 +224,7 @@ func (d *DB) CreateRunForIntent(ctx context.Context, r *domain.Run) error {
 }
 
 func (d *DB) RecoverLaunchIntents(ctx context.Context) error {
-	if _, err := d.db.ExecContext(ctx, `UPDATE launch_intents SET state = 'started', refusal = '', ended_at = ?
+	if _, err := d.db.ExecContext(ctx, `UPDATE launch_intents SET state = 'started', refusal = '', params = '', ended_at = ?
 		WHERE state = 'starting' AND id IN (SELECT id FROM runs)`, time.Now().UTC().UnixNano()); err != nil {
 		return fmt.Errorf("store: recover launch intents: %w", err)
 	}
@@ -223,4 +240,19 @@ func (d *DB) PassLaunchIntents(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("store: pass launch intents: %w", err)
 	}
 	return res.RowsAffected()
+}
+
+func (d *DB) OpenLaunchIntents(ctx context.Context) (int, error) {
+	var n int
+	if err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM launch_intents WHERE state IN ('waiting', 'starting')`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count open launch intents: %w", err)
+	}
+	return n, nil
+}
+
+func (d *DB) PruneLaunchIntents(ctx context.Context, before time.Time) error {
+	if _, err := d.db.ExecContext(ctx, `DELETE FROM launch_intents WHERE ended_at < ?`, before.UTC().UnixNano()); err != nil {
+		return fmt.Errorf("store: prune launch intents: %w", err)
+	}
+	return nil
 }

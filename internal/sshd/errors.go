@@ -104,7 +104,7 @@ func rpcError(err error) *protocol.Error {
 			code = protocol.CodeDenied
 		case errors.Is(err, errNoSession), errors.Is(err, errSessionEnded), errors.Is(err, errDiskFull),
 			errors.Is(err, scheduler.ErrMemoryPressure), errors.Is(err, scheduler.ErrCapacityUnknown),
-			errors.Is(err, scheduler.ErrBrowserCPUCapacity):
+			errors.Is(err, scheduler.ErrBrowserCPUCapacity), errors.Is(err, scheduler.ErrLaunchesWaiting):
 			// Capacity refusals are retryable availability failures, not bad requests.
 			code = protocol.CodeUnavailable
 		}

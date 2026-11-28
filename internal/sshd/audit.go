@@ -109,7 +109,11 @@ func (s *Server) auditCall(ctx context.Context, member domain.MemberID, method s
 	// A try of a waiting launch that found no room changed nothing, and
 	// the request that asked for it was recorded.
 	if a := attemptOf(ctx); a != nil && perr != nil && scheduler.IsCapacityRefusal(a.refused) {
-		return
+		select {
+		case <-a.created:
+		default:
+			return
+		}
 	}
 	var via, connector, client string
 	switch id, ok := ctx.Value(connIdentityKey{}).(connIdentity); {

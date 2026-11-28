@@ -53,7 +53,7 @@ func TestAMemoryRefusalIsCountedWithWhatIdleSessionsHeld(t *testing.T) {
 
 	// Too little for saving every idle VM to admit a start, so none is saved.
 	mr.setAvailable(100 << 20)
-	_, err := e.sched.reserveLaunch(t.Context(), "run-reserved", false)
+	_, err := e.sched.reserveLaunch(t.Context(), "run-reserved", false, false)
 	if !errors.Is(err, ErrMemoryPressure) {
 		t.Fatalf("a launch with 100 MiB available = %v, want the memory refusal", err)
 	}
@@ -63,7 +63,7 @@ func TestAMemoryRefusalIsCountedWithWhatIdleSessionsHeld(t *testing.T) {
 	if got != want {
 		t.Fatalf("counted refusal = %+v\nwant %+v", got, want)
 	}
-	if _, err = e.sched.reserveLaunch(t.Context(), "run-reserved", true); !errors.Is(err, ErrMemoryPressure) {
+	if _, err = e.sched.reserveLaunch(t.Context(), "run-reserved", true, false); !errors.Is(err, ErrMemoryPressure) {
 		t.Fatalf("the launch tried again = %v, want the memory refusal", err)
 	}
 	e.counted(t, domain.CapacityRefusal, opLaunchRetry, "memory")

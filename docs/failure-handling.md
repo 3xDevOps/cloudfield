@@ -779,8 +779,8 @@ it is stopped or cannot write. `awake` includes a session a member paused;
 still being saved; the last figure is the VMs of closed sessions that can
 still hold memory, until the guard stops them. A wake the server tried by itself is marked on the
 last refused wake. The refusal is admission's text. Under the counters it
-prints the share of the memory in use at memory refusals that session VMs
-idle for over an hour, or closed, held, and the mean and longest wait of the
+prints the share of the memory in use at memory and stall refusals that
+session VMs idle for over an hour, or closed, held, and the mean and longest wait of the
 waits that ended in a start. The two windows cover whole hours, so "24
 hours" is the current hour and the 24 before it.
 
@@ -788,7 +788,7 @@ hours" is the current hour and the 24 before it.
 server's own view to any member: its memory and stalls, every filesystem it
 checks, and its live VM counts. With `--min-free-disk` negative it lists no
 disk and sets `disk_unchecked`; `disk_error` still says when the runtime
-cannot be asked, which refuses every launch. The session a refusal names, and the text of
+cannot be asked, which refuses every launch and wake. The session a refusal names, and the text of
 a measurement that failed, which can name a path of the host, go to a super
 admin only.
 
@@ -813,7 +813,7 @@ holds the latest VM counts. A server start deletes counter rows older than
 
 | `kind` | Counted when | `op` | `cause` |
 | --- | --- | --- | --- |
-| `refusal` | Admission refused a start for memory or disk | `launch`, `launch-retry` (the server trying a waiting subsession again), `wake`, `wake-auto` (a wake nobody asked for: the memory guard waking a VM it saved while it worked, or the sweep waking a session idle for seven days to close it), `boot` (a stopped VM booted to commit its work), `start` (any other container or VM: a member's environment terminal, an agent sign-in, the assistant's container, a browser, an agent update, a move to another account) | `memory`, `stall`, `disk`, `unknown` (a measurement failed or timed out behind other admissions) |
+| `refusal` | Admission refused a start for memory or disk | `launch`, `launch-retry` (the server trying a waiting launch or subsession again), `wake`, `wake-auto` (a wake nobody asked for: the memory guard waking a VM it saved while it worked, or the sweep waking a session idle for seven days to close it), `boot` (a stopped VM booted to commit its work), `start` (any other container or VM: a member's environment terminal, an agent sign-in, the assistant's container, a browser, an agent update, a move to another account) | `memory`, `stall`, `disk`, `unknown` (a measurement failed or timed out behind other admissions) |
 | `wait` | A launch or a subsession the server had no room for began to wait, once for each | `launch`, `subsession` | |
 | `wait-end` | One that waited stopped waiting | `launch`, `subsession` | `started`, `refused`, `cancelled`, `expired` (a launch only) |
 | `pass` | A launch was admitted while launches waited for room | `launch` | |
@@ -868,34 +868,52 @@ A launch the server has no memory or disk for is refused with the reason,
 such as `scheduler: insufficient host memory headroom: ...`. A client that
 sends `wait` with `run.launch` has it kept instead: the launch waits and the
 server starts it when there is room. A wake of a sleeping session never
-waits: it stays asleep with the refusal shown.
+waits: it stays asleep with the refusal shown. Nor does a launch the
+built-in assistant makes: what asked for it, a connector or a device behind
+the assistant's turn, could not be checked again when it started.
 
-- **What is kept.** The request as its member sent it, the workspace's base
-  commit captured when it began to wait, and a session ID reserved for it.
+- **What is kept.** The request as its member sent it (64 KiB at most; a
+  larger one is refused as before), the workspace's base commit captured
+  when it began to wait, and a session ID reserved for it. Extra
+  repositories are captured when it starts.
   It is not a session: nothing can message, wake or report to that ID, and
   it holds no slot, until it has started.
 - **When it is tried.** The oldest waiting launch is tried every 30 seconds,
-  and within 5 seconds of a session ending or falling asleep, so room that
-  appears is offered to waiting launches first. When one starts, the next is
-  tried in the same pass. A try the server makes by itself frees no disk
-  ([Recover from disk pressure](#recover-from-disk-pressure)).
+  and within 5 seconds of a session starting, ending, falling asleep or
+  being deleted,
+  so room that appears is offered to waiting launches first. When one's session exists,
+  the next is tried in the same pass, without waiting for the first to
+  finish provisioning. One try in ten minutes may free disk as a launch
+  somebody asks for does
+  ([Recover from disk pressure](#recover-from-disk-pressure)); the others
+  leave what closed and sleeping sessions keep alone.
 - **What a try checks.** Everything a fresh launch checks, at that moment
   and as its member: membership and role, access to the workspace, the
   account and whether it is still shared, the agent's login, the budget.
-  A launch that fails one ends `refused` with that error.
+  What admitted the request must still admit it: a launch asked for from an
+  edge device is tried only while that device is admitted, and one asked
+  for through a connector as that connector, with the grant and scopes it
+  has then. A launch that fails a check ends `refused` with that error. A
+  try that fails on something that may pass, such as a database read or a
+  repository that cannot be reached, leaves it waiting; the fifth such try
+  in a row ends it `refused` with that error.
 - **Order.** Oldest first. Every launch needs the same room, so the oldest
   never holds up one that would fit. A launch that asks to wait while others
-  wait goes behind them without a try of its own. A launch that does not ask
+  wait goes behind them without a try of its own, and is tried within 5
+  seconds. A launch that does not ask
   to wait, a subsession and a wake are admitted as before and can take room
-  a waiting launch was about to get; each such launch is counted against
-  every waiting one (`passed`).
+  a waiting launch was about to get; each such launch or subsession, not a
+  wake, is counted against every waiting one (`passed`).
 - **How it ends.** It becomes its session, in one database transaction with
   the session's row; or its member cancels it; or it finds no room for 24
-  hours and ends `expired` with the last refusal; or a check refuses it. An
-  ending that is not a start is pushed to its member's devices and stays in
-  `launch.waiting.list` for a day.
-- **Limits.** One member may have 8 launches waiting; one more is refused as
-  a launch always was.
+  hours and ends `expired` with the last refusal; or a check refuses it; or
+  a super admin cancels it. An ending its member did not choose is pushed
+  to their devices and stays in `launch.waiting.list` for a day. A launch
+  that ended keeps its agent and the first 200 bytes of its task, not its
+  request, and answers its idempotency key for 7 days.
+- **Limits.** One member may have 8 launches waiting and make 200 in a day,
+  and a request over 64 KiB is not kept. A launch past a limit is refused
+  with `-32004`, the refusal and why it was not kept to wait.
 - **What removes it.** Deleting its workspace or its member deletes their
   waiting launches with them.
 - **A restart.** A waiting launch is in the database and waits on. One the
