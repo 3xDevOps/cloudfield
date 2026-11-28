@@ -518,6 +518,11 @@ A restored VM's clock stopped while it was saved. The server calls
 save of a running VM it calls `Sync`, which writes every filesystem's dirty data to its
 disk, so the cache disk of a saved VM that is deleted without a restore
 holds what the session wrote. `Sync` then drops the guest's page cache.
+`CacheUse` returns how many blocks and inodes the cache volume has free
+(`statfs`). The server asks before `Boot` on a new cache disk, after the
+`Sync` of a save and before `PowerOff`, and promotes the cache only when a
+count moved ([environments.md](environments.md#sessions-in-virtual-machines)); a helper
+that does not answer counts as one whose cache grew.
 Free page reporting hands the freed memory to the host in passes 2 seconds
 apart, each about a sixteenth of the guest's free memory, so the server
 waits until a 4-second check sees under 16 MiB more come back, at most 40

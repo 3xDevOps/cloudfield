@@ -87,6 +87,9 @@ func (e *engine) save(ctx context.Context, key string) error {
 		e.awaitReported(ctx, key)
 		synced = ctx.Err() == nil && e.syncGuest(ctx, key)
 	}
+	if synced && rec.Cache.Path != "" {
+		rec.CacheUse = e.cacheUse(ctx, key)
+	}
 	if !paused {
 		// The guest still runs, so a caller that gave up loses nothing. A
 		// frozen VM was thawed for this save and is saved all the same.

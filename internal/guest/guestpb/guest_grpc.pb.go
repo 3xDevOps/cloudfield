@@ -38,6 +38,7 @@ const (
 	Guest_Thaw_FullMethodName          = "/aether.guest.v1.Guest/Thaw"
 	Guest_FreezeSession_FullMethodName = "/aether.guest.v1.Guest/FreezeSession"
 	Guest_Sync_FullMethodName          = "/aether.guest.v1.Guest/Sync"
+	Guest_CacheUse_FullMethodName      = "/aether.guest.v1.Guest/CacheUse"
 	Guest_Browser_FullMethodName       = "/aether.guest.v1.Guest/Browser"
 )
 
@@ -72,6 +73,9 @@ type GuestClient interface {
 	// Sync writes every filesystem's dirty data to its disk, then drops the
 	// page cache, before a save.
 	Sync(ctx context.Context, in *SyncRequest, opts ...grpc.CallOption) (*SyncReply, error)
+	// CacheUse counts what the cache volume has free. A session that leaves
+	// both counts as it found them added nothing to its caches.
+	CacheUse(ctx context.Context, in *CacheUseRequest, opts ...grpc.CallOption) (*CacheUseReply, error)
 	// Browser starts, pauses, resumes or stops the development browser's
 	// companion, which runs from the disk with serial "browser" in a root,
 	// cgroup and IPC namespace of its own.
@@ -236,6 +240,16 @@ func (c *guestClient) Sync(ctx context.Context, in *SyncRequest, opts ...grpc.Ca
 	return out, nil
 }
 
+func (c *guestClient) CacheUse(ctx context.Context, in *CacheUseRequest, opts ...grpc.CallOption) (*CacheUseReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CacheUseReply)
+	err := c.cc.Invoke(ctx, Guest_CacheUse_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *guestClient) Browser(ctx context.Context, in *BrowserRequest, opts ...grpc.CallOption) (*BrowserReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(BrowserReply)
@@ -277,6 +291,9 @@ type GuestServer interface {
 	// Sync writes every filesystem's dirty data to its disk, then drops the
 	// page cache, before a save.
 	Sync(context.Context, *SyncRequest) (*SyncReply, error)
+	// CacheUse counts what the cache volume has free. A session that leaves
+	// both counts as it found them added nothing to its caches.
+	CacheUse(context.Context, *CacheUseRequest) (*CacheUseReply, error)
 	// Browser starts, pauses, resumes or stops the development browser's
 	// companion, which runs from the disk with serial "browser" in a root,
 	// cgroup and IPC namespace of its own.
@@ -335,6 +352,9 @@ func (UnimplementedGuestServer) FreezeSession(context.Context, *FreezeSessionReq
 }
 func (UnimplementedGuestServer) Sync(context.Context, *SyncRequest) (*SyncReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method Sync not implemented")
+}
+func (UnimplementedGuestServer) CacheUse(context.Context, *CacheUseRequest) (*CacheUseReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method CacheUse not implemented")
 }
 func (UnimplementedGuestServer) Browser(context.Context, *BrowserRequest) (*BrowserReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method Browser not implemented")
@@ -630,6 +650,24 @@ func _Guest_Sync_Handler(srv interface{}, ctx context.Context, dec func(interfac
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Guest_CacheUse_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CacheUseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GuestServer).CacheUse(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Guest_CacheUse_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GuestServer).CacheUse(ctx, req.(*CacheUseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Guest_Browser_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(BrowserRequest)
 	if err := dec(in); err != nil {
@@ -714,6 +752,10 @@ var Guest_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Sync",
 			Handler:    _Guest_Sync_Handler,
+		},
+		{
+			MethodName: "CacheUse",
+			Handler:    _Guest_CacheUse_Handler,
 		},
 		{
 			MethodName: "Browser",

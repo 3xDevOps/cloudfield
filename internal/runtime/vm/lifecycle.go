@@ -246,6 +246,9 @@ func (e *engine) powerOff(ctx context.Context, rec *record) (bool, error) {
 	h, err := e.helper(rec.Key)
 	if err == nil {
 		offCtx, offCancel := context.WithTimeout(ctx, helperCallTimeout)
+		if rec.Cache.Path != "" {
+			rec.CacheUse = e.cacheUse(offCtx, rec.Key)
+		}
 		err = h.PowerOff(offCtx)
 		offCancel()
 	}
