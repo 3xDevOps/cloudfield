@@ -363,6 +363,22 @@ func (u *fakeUnits) Stop(_ context.Context, name string) error {
 	return os.RemoveAll(u.cgroup(name))
 }
 
+// SetProperty writes a MemoryMax to the unit's memory.max, as systemd does.
+func (u *fakeUnits) SetProperty(_ context.Context, name, property string) error {
+	value, ok := strings.CutPrefix(property, "MemoryMax=")
+	if !ok {
+		return fmt.Errorf("fake units: set-property %s", property)
+	}
+	if value == "infinity" {
+		value = "max"
+	}
+	return os.WriteFile(filepath.Join(u.cgroup(name), "memory.max"), []byte(value), 0o644)
+}
+
+func (e *engine) memoryMaxFile(key string) string {
+	return filepath.Join(e.cgroupRoot, runtime.SessionSlice, unitName(key), "memory.max")
+}
+
 func (u *fakeUnits) State(_ context.Context, name string) (unitState, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()

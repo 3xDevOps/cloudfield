@@ -24,6 +24,7 @@ type units interface {
 	Start(ctx context.Context, name string, argv, properties []string) error
 	Stop(ctx context.Context, name string) error
 	State(ctx context.Context, name string) (unitState, error)
+	SetProperty(ctx context.Context, name, property string) error
 }
 
 func unitName(key string) string { return "aether-vm-" + key + ".service" }
@@ -73,6 +74,13 @@ func (SystemdUnits) State(ctx context.Context, name string) (unitState, error) {
 		}
 	}
 	return st, nil
+}
+
+// SetProperty changes a setting of a running unit for as long as that unit
+// lasts. systemd holds the value itself, so when it applies the unit's
+// settings again it writes this one, not the one the unit started with.
+func (SystemdUnits) SetProperty(ctx context.Context, name, property string) error {
+	return systemctl(ctx, "systemctl", "set-property", "--runtime", name, property)
 }
 
 func systemctl(ctx context.Context, name string, args ...string) error {

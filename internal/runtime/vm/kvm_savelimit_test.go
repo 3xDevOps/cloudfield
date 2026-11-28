@@ -70,8 +70,11 @@ func TestKVMAResumeAfterASnapshotGivesTheUnitItsMemoryLimitBack(t *testing.T) {
 		if err = e.pause(t.Context(), key); err != nil {
 			t.Fatal(err)
 		}
-		if err = writeCgroup(e.memoryMaxFile(key), "max"); err != nil {
+		if err = e.units.SetProperty(t.Context(), unitName(key), "MemoryMax=infinity"); err != nil {
 			t.Fatal(err)
+		}
+		if got, _ := os.ReadFile(e.memoryMaxFile(key)); strings.TrimSpace(string(got)) != "max" {
+			t.Fatalf("round %d: the paused guest's unit has a memory.max of %q, want max", round, got)
 		}
 		if err = os.Mkdir(dir, 0o700); err == nil {
 			err = newCHAPI(e.path(key, apiSocket)).snapshot(t.Context(), dir)
