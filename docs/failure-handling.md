@@ -879,12 +879,12 @@ the assistant's turn, could not be checked again when it started.
   It is not a session: nothing can message, wake or report to that ID, and
   it holds no slot, until it has started.
 - **When it is tried.** The oldest waiting launch is tried every 30 seconds,
-  and within 5 seconds of a session starting, ending, falling asleep or
-  being deleted,
+  and within 5 seconds of a session ending, falling asleep or being
+  deleted,
   so room that appears is offered to waiting launches first. When one's session exists,
   the next is tried in the same pass, without waiting for the first to
-  finish provisioning. One try in ten minutes may free disk as a launch
-  somebody asks for does
+  finish provisioning. A try refused for disk may free some as a launch
+  somebody asks for does, once in ten minutes
   ([Recover from disk pressure](#recover-from-disk-pressure)); the others
   leave what closed and sleeping sessions keep alone.
 - **What a try checks.** Everything a fresh launch checks, at that moment

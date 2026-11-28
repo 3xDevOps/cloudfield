@@ -220,7 +220,7 @@ type Server struct {
 	// cannot acquire a replacement lock and recreate removed resources.
 	workspaceLocksMu sync.Mutex
 	workspaceLocks   map[domain.WorkspaceID]*sync.RWMutex
-	// launchReclaimed is when a try of a waiting launch last could free
+	// launchReclaimed is when a try of a waiting launch last went to free
 	// disk, in Unix nanoseconds.
 	launchReclaimed atomic.Int64
 	// launchPruned is when ended waiting launches were last deleted.
