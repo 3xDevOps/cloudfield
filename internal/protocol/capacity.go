@@ -12,7 +12,9 @@ type ServerCapacityResult struct {
 	MemoryAvailableBytes uint64 `json:"memory_available_bytes"`
 	// MemoryFloorBytes is the available memory the server keeps: under it
 	// a launch is refused and the session VMs are frozen and saved to
-	// disk. A launch needs StartMemoryBytes above it.
+	// disk. A launch needs at least StartMemoryBytes above it, more while
+	// other starts have yet to take theirs; the wake of a VM saved to disk
+	// needs what it saved.
 	MemoryFloorBytes uint64 `json:"memory_floor_bytes"`
 	StartMemoryBytes uint64 `json:"start_memory_bytes"`
 	MemoryError      string `json:"memory_error,omitempty"`
@@ -26,18 +28,22 @@ type ServerCapacityResult struct {
 	HostStall        *float64 `json:"host_stall,omitempty"`
 	HostStallLimit   float64  `json:"host_stall_limit"`
 	StallError       string   `json:"stall_error,omitempty"`
-	// Disks are the filesystems a launch needs StartDiskBytes above the
-	// reserve of.
+	// Disks are the filesystems a launch needs at least StartDiskBytes
+	// above the reserve of. DiskUnchecked says the server was started with
+	// the disk check off: Disks is then empty and no launch is refused for
+	// disk.
 	Disks          []ServerCapacityDisk `json:"disks"`
 	StartDiskBytes uint64               `json:"start_disk_bytes"`
 	DiskError      string               `json:"disk_error,omitempty"`
+	DiskUnchecked  bool                 `json:"disk_unchecked,omitempty"`
 	VMs            ServerCapacityVMs    `json:"vms"`
 	// LastLaunchRefusal and LastWakeRefusal are the latest capacity
-	// refusal of each within Fortnight, with the text its caller got.
+	// refusal of each in the last 14 days, with admission's text. Op tells
+	// a wake nobody asked for ("wake-auto") from one somebody did.
 	LastLaunchRefusal *ServerCapacityRefusal `json:"last_launch_refusal,omitempty"`
 	LastWakeRefusal   *ServerCapacityRefusal `json:"last_wake_refusal,omitempty"`
-	// Day and Fortnight are the capacity counters summed over the last 24
-	// hours and the last 14 days.
+	// Day and Fortnight are the capacity counters summed over the hours
+	// (UTC, whole) of the last 24 hours and the last 14 days.
 	Day       []ServerCapacityCount `json:"day"`
 	Fortnight []ServerCapacityCount `json:"fortnight"`
 }
@@ -49,22 +55,27 @@ type ServerCapacityDisk struct {
 	ReserveBytes uint64 `json:"reserve_bytes"`
 }
 
-// ServerCapacityVMs counts the session VMs of open sessions: awake, awake
-// and frozen by the memory brake, asleep and paused in memory, asleep and
-// saved to disk.
+// ServerCapacityVMs counts the session VMs of open sessions: awake (one a
+// member paused too), awake and frozen by the memory brake, asleep and
+// paused in memory, asleep and saved to disk, and asleep with neither
+// (stopped, or still being saved).
 type ServerCapacityVMs struct {
-	Awake  int `json:"awake"`
-	Frozen int `json:"frozen"`
-	Paused int `json:"paused"`
-	Saved  int `json:"saved"`
+	Awake   int `json:"awake"`
+	Frozen  int `json:"frozen"`
+	Paused  int `json:"paused"`
+	Saved   int `json:"saved"`
+	Stopped int `json:"stopped"`
 }
 
 type ServerCapacityRefusal struct {
 	At    string `json:"at"`
 	Op    string `json:"op"`
 	Cause string `json:"cause"`
-	Text  string `json:"text"`
-	// RunID is the session refused, for an admin.
+	// Text is admission's refusal. For a caller who is not a super admin
+	// one that names a failed measurement is replaced by a fixed sentence:
+	// such a refusal can carry a path of the host.
+	Text string `json:"text"`
+	// RunID is the session refused, for a super admin.
 	RunID string `json:"run_id,omitempty"`
 }
 

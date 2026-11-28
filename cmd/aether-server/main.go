@@ -148,11 +148,12 @@ example:
 	"status": `usage: cloudfield-server status [--config <file>]
 
 print the machine as the server measures it before it starts or wakes a
-session: memory against the floor, the memory stall, disk against its
-reserve, the session VMs, the last refused launch and wake with the refusal
-as the caller got it, and the counts of the last 24 hours and 14 days. It
-reads the database and measures the machine itself, so it answers while the
-server cannot (docs/failure-handling.md)
+session: memory against the floor, the memory stall, the data filesystem
+against its reserve, the session VMs, the last refused launch and wake with
+admission's refusal, and the counts of the last 24 hours and 14 days. It
+measures memory, the stall and the data filesystem itself and only reads the
+database, so it prints those while the server cannot answer
+(docs/failure-handling.md)
 
 example:
   sudo cloudfield-server status
