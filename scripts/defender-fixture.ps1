@@ -11,13 +11,13 @@ function Get-FixtureResource([string]$Path) {
 }
 
 # Test-FixtureOnlyDetection reports whether every resource of Detection is
-# FixtureResource, compared whole and without regard to case, as Windows
-# compares paths.
+# FixtureResource, compared character for character but for case, as
+# Windows compares paths.
 function Test-FixtureOnlyDetection($Detection, [string]$FixtureResource) {
     $resources = @($Detection.Resources)
     if ($resources.Count -eq 0) { return $false }
     foreach ($resource in $resources) {
-        if ([string]$resource -ne $FixtureResource) { return $false }
+        if (-not [string]::Equals([string]$resource, $FixtureResource, [StringComparison]::OrdinalIgnoreCase)) { return $false }
     }
     return $true
 }

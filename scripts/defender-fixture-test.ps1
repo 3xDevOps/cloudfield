@@ -19,7 +19,11 @@ $cases = @(
     @{ Name = 'a file of the same name elsewhere'; Resources = @('file:_C:\Users\runner\fake-release.exe'); Ignored = $false },
     @{ Name = 'the fixture as a process'; Resources = @('process:_pid:4242,ProcessStart:1'); Ignored = $false },
     @{ Name = 'the fixture as a wildcard'; Resources = @('file:_D:\a\_temp\*'); Ignored = $false },
-    @{ Name = 'no resource'; Resources = @(); Ignored = $false }
+    @{ Name = 'no resource'; Resources = @(); Ignored = $false },
+    @{ Name = 'a null resource'; Resources = $null; Ignored = $false },
+    @{ Name = 'the fixture and a null resource'; Resources = @($fixture, $null); Ignored = $false },
+    @{ Name = 'the fixture and an empty resource'; Resources = @($fixture, ''); Ignored = $false },
+    @{ Name = 'the fixture with a soft hyphen in its name'; Resources = @('file:_D:\a\_temp\fake-rel' + [char]0xAD + 'ease.exe'); Ignored = $false }
 )
 foreach ($case in $cases) {
     $detection = [pscustomobject]@{ DetectionID = '{test}'; ThreatID = 1; Resources = $case.Resources }
@@ -60,7 +64,12 @@ $note = [string](Select-CountedDetections @($unlisted) $fixture 'in a test' 6>&1
 if ($note -notlike '*a threat Defender no longer lists (threat 11) in file:_D:\a\_temp\fake-release.exe') {
     throw "The note for a threat Defender does not list: $note"
 }
-if ((Get-FixtureResource (Join-Path ([IO.Path]::GetTempPath()) 'fake-release.exe')) -notmatch '^file:_.*fake-release\.exe$') {
-    throw 'Get-FixtureResource does not name the file as Defender does.'
+# The job passes the path with a forward slash; Defender names the full
+# path in the system's own form.
+$temp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+$want = 'file:_' + (Join-Path $temp 'fake-release.exe')
+$got = Get-FixtureResource ($temp + 'elsewhere/../fake-release.exe')
+if ($got -cne $want) {
+    throw "Get-FixtureResource names the fixture $got; want $want."
 }
 Write-Host "ok: the Defender fixture filter ignores a detection of the fixture alone and counts the other $($cases.Count - 3) kinds"
