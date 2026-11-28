@@ -58,6 +58,7 @@ export function WaitingLaunch({ runId, fallback }: { runId: string; fallback: Re
   // A phone opens a session over its tab bar, where the list is "Sessions".
   const mobile = useIsMobile()
   const launch = useStore((s) => s.waitingLaunches[runId])
+  const openDialog = useStore((s) => s.openPaletteDialog)
   const [none, setNone] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const known = launch !== undefined
@@ -123,7 +124,7 @@ export function WaitingLaunch({ runId, fallback }: { runId: string; fallback: Re
               <ul className="mt-1 text-ui-sm leading-5 text-muted">
                 <li>No session exists yet. The server starts it by itself when it has room.</li>
                 <li>
-                  Gives up in {formatDuration(Math.max(0, Date.parse(launch.expires_at) - Date.now()))}, {at(launch.expires_at)}.
+                  Gives up in {left(launch)}, {at(launch.expires_at)}.
                 </li>
                 <li>
                   Asked {timeAgo(launch.created_at)}; tried {launch.attempts} {launch.attempts === 1 ? 'time' : 'times'} since.
@@ -158,12 +159,19 @@ export function WaitingLaunch({ runId, fallback }: { runId: string; fallback: Re
               Cancel launch
             </Button>
           )}
+          {over && (
+            <Button variant="secondary" size="sm" onClick={() => openDialog('launch')}>
+              New session
+            </Button>
+          )}
           {back}
         </div>
       </div>
     </section>
   )
 }
+
+const left = (w: LaunchWaiting) => formatDuration(Math.max(0, Date.parse(w.expires_at) - Date.now()))
 
 function at(iso: string): string {
   return `at ${new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`
@@ -180,6 +188,7 @@ export function WaitingLaunches({ narrow }: { narrow?: boolean }) {
   const navigate = useStore((s) => s.navigate)
   const launches = useStore((s) => s.waitingLaunches)
   const own = useStore((s) => s.ownLaunches)
+  const shown = useStore((s) => (s.route.name === 'run' ? s.route.params.runId : undefined))
   useEffect(() => {
     // The store only asks after launches it knows are open: one made elsewhere shows when a list opens.
     if (offered) void loadWaitingLaunches(useStore, api).catch(() => {})
@@ -188,14 +197,15 @@ export function WaitingLaunches({ narrow }: { narrow?: boolean }) {
   const list = own.flatMap((id) => launches[id] ?? [])
   if (list.length === 0) return null
   return (
-    <ul aria-label="Launches waiting for room" className="border-b border-seam/80">
+    <ul aria-label="Launches waiting for room" className={`border-b border-seam/80 ${narrow ? '' : 'mx-3 sm:mx-4'}`}>
       {list.map((w) => {
         const over = !launchOpen(w)
         const Icon = over ? CircleX : Hourglass
         return (
           <li
             key={w.id}
-            className={`flex min-w-0 items-start gap-2.5 border-t border-seam/60 px-3 py-2 first:border-t-0 ${narrow ? '' : 'sm:px-4'} ${over ? 'border-l-2 border-l-state-failed' : ''}`}
+            aria-current={narrow && shown === w.id ? 'page' : undefined}
+            className={`flex min-w-0 flex-wrap items-start gap-x-2.5 gap-y-1.5 border-t border-seam/60 px-3 py-2 first:border-t-0 aria-[current]:bg-hover-chrome ${over ? 'border-l-2 border-l-state-failed' : ''}`}
           >
             <Icon className={`mt-0.5 size-4 shrink-0 ${over ? 'text-state-failed' : 'text-state-paused'}`} aria-hidden />
             <Button
@@ -204,16 +214,21 @@ export function WaitingLaunches({ narrow }: { narrow?: boolean }) {
               onClick={() => navigate('run', { runId: w.id })}
             >
               <span className="block truncate text-ui leading-5">{w.task || `${w.harness} session`}</span>
-              <span className="block truncate text-ui-sm leading-5 text-muted">
+              <span className={`block text-ui-sm leading-5 text-muted ${narrow ? 'truncate' : ''}`}>
                 <span className={over ? 'text-state-failed' : undefined}>{heading[w.state]}</span>
                 {!narrow && ` · asked ${timeAgo(w.created_at)}`}
+                {!narrow && !over && ` · gives up in ${left(w)}`}
               </span>
+              {/* The launch's page has the refusal in full. */}
               {!narrow && <span className="line-clamp-2 break-words font-mono text-ui-sm leading-5 text-muted">{w.refusal}</span>}
             </Button>
             {!narrow && !over && (
-              <Button variant="secondary" size="sm" className="shrink-0" disabled={cancelling.has(w.id)} onClick={() => cancel(w.id)}>
-                Cancel launch
-              </Button>
+              // Under the text on a phone, where beside it the button takes a third of the row.
+              <div className="shrink-0 max-sm:basis-full max-sm:pl-6.5">
+                <Button variant="secondary" size="sm" disabled={cancelling.has(w.id)} onClick={() => cancel(w.id)}>
+                  Cancel launch
+                </Button>
+              </div>
             )}
           </li>
         )
