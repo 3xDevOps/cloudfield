@@ -11,8 +11,9 @@ const (
 	// refused while another member holds the run's control.
 	MethodRunInputRespond = "run.input.respond"
 
-	// The data.reason of the CodeConflict run.input.respond and
-	// run.interrupt return while another member holds the run's control.
+	// The data.reason of the CodeConflict run.input.respond, run.interrupt
+	// and run.option.set return while another member holds the run's
+	// control.
 	ErrorReasonControlHeld = "control_held"
 
 	RunInputRespondAnswered        = "answered"

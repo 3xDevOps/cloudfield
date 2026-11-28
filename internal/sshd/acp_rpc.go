@@ -181,7 +181,7 @@ func acpError(err error) *protocol.Error {
 		return &protocol.Error{Code: protocol.CodeUnavailable, Message: "earlier agent conversation history has expired"}
 	case errors.Is(err, acphost.ErrUnknownRequest), errors.Is(err, scheduler.ErrACPItemNotFound):
 		return &protocol.Error{Code: protocol.CodeNotFound, Message: err.Error()}
-	case errors.Is(err, acphost.ErrUnknownOption):
+	case errors.Is(err, acphost.ErrUnknownOption), errors.Is(err, scheduler.ErrNoSuchOption):
 		return invalidParams(err.Error())
 	case errors.Is(err, scheduler.ErrACPNotRunning), errors.Is(err, scheduler.ErrAppServerUnavailable), errors.Is(err, acphost.ErrClosed):
 		return &protocol.Error{Code: protocol.CodeUnavailable, Message: err.Error()}

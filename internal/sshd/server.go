@@ -192,6 +192,10 @@ type Server struct {
 	noticesErr atomic.Pointer[string]
 	// configErr is the same for reading the options file's edge-url.
 	configErr atomic.Pointer[string]
+	// connectorNoticesErr is the last error reading the edge's stored
+	// notices for connectors, empty after a read that succeeded, so each
+	// is logged once.
+	connectorNoticesErr atomic.Pointer[string]
 	// tailnetDashboardURL and tailnetDashboardErr are what server.info
 	// reports as dashboard_url and tailnet_dashboard_error. Guarded by mu.
 	tailnetDashboardURL string

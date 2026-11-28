@@ -25,8 +25,6 @@ const (
 	cacheTotalTarget uint64 = 16 << 30
 	cacheInactiveAge        = 7 * 24 * time.Hour
 	memberCacheCap   uint64 = 20 << 30
-	// Must exceed the longest go command by more than Go's hourly mtime refresh.
-	goBuildCacheInUseAge = 2 * time.Hour
 )
 
 // CacheRetentionInfo describes ownership, not a promise of physically freed
@@ -398,7 +396,7 @@ func (s *Scheduler) sweepCaches(ctx context.Context, pressure bool) {
 	// Unlocked so a long trim never delays a launch: owners keep using the
 	// pools, and Go tolerates removal of entries older than the cutoff while
 	// it builds. Under the cap no Go build cache is walked.
-	cutoff := s.cfg.Now().Add(-goBuildCacheInUseAge)
+	cutoff := s.cfg.Now().Add(-disk.GoBuildInUseAge)
 	for member, pools := range trim {
 		if ctx.Err() != nil {
 			return

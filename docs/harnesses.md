@@ -816,7 +816,9 @@ not run omp there while VM sessions use the account.
 `cloudfield session --model <model>` or the **Model** field in the dashboard passes the
 model to the agent as is. Empty keeps the agent's default. Every shipped agent
 takes a model. For Enhanced sessions the model is set over ACP after the session
-opens.
+opens, and `cloudfield session set <session-id> --model <model> --effort <level>`
+changes the model or effort of a running one
+([enhanced-sessions.md](enhanced-sessions.md#launch-an-enhanced-session)).
 
 A custom agent with no model flag refuses a Standard or Background launch with
 a model:

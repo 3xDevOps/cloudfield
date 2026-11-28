@@ -151,6 +151,15 @@ const atUniversal = (info: ListInfo, url?: string | null) =>
 // page, the same sign-in, and a connector added at one counts at another.
 const sameURL = (info: ListInfo, a?: string, b?: string) => a === b || (atUniversal(info, a) && atUniversal(info, b))
 
+// sameClient reports whether c was added by the same app client as old.
+const sameClient = (old: Connector, c: Connector) => (old.client_id ? c.client_id === old.client_id : c.redirect_host === old.redirect_host)
+
+// noticeStop is why a move or reconnect of old stops once c, old itself or
+// its replacement, is at an address the edge marks retiring or retired.
+const noticeStop = (c: Connector, old: Connector) => c.id === old.id
+  ? `The edge now says the address ${label(c)} was added at is ${c.notice?.state}, so ${label(old)} was not revoked. Follow the steps on its row in this list.`
+  : `The edge says the address the new ${c.client_name} connector was added at is ${c.notice?.state}, so ${label(old)} was not revoked. Follow the steps on the new connector’s row in this list.`
+
 const signsInAt = (info: ListInfo, url?: string) => !!info.sign_in && (!url || sameURL(info, url, info.url))
 
 function Setup({
@@ -316,8 +325,16 @@ function Connectors({ client }: { client: Api }) {
       }
       // A replacement that called Aether wins over one whose tokens may
       // never have arrived.
-      const candidates = next.filter((c) => !attempt.known.has(c.id) && sameURL(attempt.info, c.resource, attempt.into) &&
-        (old.client_id ? c.client_id === old.client_id : c.redirect_host === old.redirect_host))
+      const candidates = next.filter((c) => !attempt.known.has(c.id) && sameURL(attempt.info, c.resource, attempt.into) && sameClient(old, c))
+      const noticed = [next.find((c) => c.id === old.id), ...candidates].find((c) => c?.notice)
+      if (noticed) {
+        finish()
+        setTarget(null)
+        // A new code still on its way must not restart the stopped move.
+        starts.current++
+        setPollError({ text: noticeStop(noticed, old), fix: <Link href={`${docs}/connectors.md#adding-a-connector-again-at-a-new-address`}>Adding a connector again</Link> })
+        return
+      }
       let added: Connector | undefined
       try {
         added = [...candidates.filter((c) => c.last_used_at), ...candidates.filter((c) => !c.last_used_at)].find((c) => claimMove(c.id, attempt.id, next))
@@ -402,11 +419,21 @@ function Connectors({ client }: { client: Api }) {
     const into = next?.kind === 'move' ? rest.universal_url : next?.replaces.resource ?? rest.url
     const at = into && into !== rest.url ? into : undefined
     const signIn = signsInAt(rest, at)
-    const code = signIn ? null : await client.connectorCode()
-    if (run !== starts.current) return
     // Signing in needs nothing from here, so it may be done already: what
     // the page showed before is what counts as already there.
     const known = next?.known ?? new Set((signIn && shown ? shown : fresh).map((c) => c.id))
+    if (next) {
+      const old = next.replaces
+      const noticed = [fresh.find((c) => c.id === old.id), ...fresh.filter((c) => !known.has(c.id) && sameURL(rest, c.resource, into) && sameClient(old, c))]
+        .find((c) => c?.notice)
+      if (noticed) {
+        setAttempt((a) => (next.id && a?.id === next.id ? null : a))
+        setTarget(null)
+        throw new Error(noticeStop(noticed, old))
+      }
+    }
+    const code = signIn ? null : await client.connectorCode()
+    if (run !== starts.current) return
     const id = next?.id ?? randomID('connector-move')
     setApp(forApp)
     setTarget(next && { ...next, at, id, known })
@@ -520,7 +547,9 @@ function Connectors({ client }: { client: Api }) {
       )}
       {connectors?.map((c) => {
         const universal = atUniversal(info, c.resource)
-        const movable = !!c.resource && !!info.universal_url && !universal && info.url === info.universal_url
+        const movable = !c.notice && !!c.resource && !!info.universal_url && !universal && info.url === info.universal_url
+        // The new address's own URL asks for a code even while the universal URL takes the sign-in.
+        const asksCode = !!c.notice?.url && !!info.sign_in && !atUniversal(info, c.notice.url)
         return (
           <SettingRow
             key={c.id}
@@ -528,19 +557,43 @@ function Connectors({ client }: { client: Api }) {
             help={(
               <>
                 <span className="block">{scopeList(c)}</span>
-                {c.resource && <span className="block">{universal ? 'Universal URL' : <>This server’s own URL, <Code>{c.resource}</Code></>}</span>}
+                {c.resource && <span className="block">{c.notice ? <>Added at <Code>{c.resource}</Code></> : universal ? 'Universal URL' : <>This server’s own URL, <Code>{c.resource}</Code></>}</span>}
                 Added <RelativeTime at={c.created_at} />
                 {' · '}{c.last_used_at ? <>last used <RelativeTime at={c.last_used_at} /></> : 'never used'}
               </>
             )}
             control={(
               <>
-                <Button size="sm" variant="ghost" aria-label={`Reconnect ${label(c)}`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'reconnect' })}>Reconnect</Button>
+                {!c.notice && <Button size="sm" variant="ghost" aria-label={`Reconnect ${label(c)}`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'reconnect' })}>Reconnect</Button>}
                 <Button size="sm" variant="ghost" aria-label={`Revoke ${label(c)}`} disabled={busy} onClick={() => setConfirming({ connector: c, action: 'revoke' })}>Revoke</Button>
               </>
             )}
           >
             {movable && <Button size="sm" variant="secondary" className="self-start" aria-label={`Move ${label(c)} to the universal URL`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'move' })}>Move to the universal URL</Button>}
+            {c.notice?.state === 'retiring' && (
+              <Callout tone="needs-you" title={`This address is retiring${c.notice.date ? ` on ${c.notice.date}` : ''}`}>
+                {c.notice.url
+                  ? (
+                      <div className="flex min-w-0 flex-col gap-1.5">
+                        <p>Add it again in {c.client_name} at this URL and check that it works, then remove the old connector in {c.client_name} and select <strong>Revoke</strong> on this row.{asksCode && <> Its page asks for a code; run <Code className="whitespace-nowrap">aether mcp code</Code> to get one.</>} Its consent page is where you choose its scopes.</p>
+                        <CopyableCommand command={c.notice.url} />
+                      </div>
+                    )
+                  : <p>It keeps working until the address is retired. Ask this server’s admin where to add it again.</p>}
+              </Callout>
+            )}
+            {c.notice?.state === 'retired' && (
+              <Callout tone="failed" title="This address is retired">
+                {c.notice.url
+                  ? (
+                      <div className="flex min-w-0 flex-col gap-1.5">
+                        <p>This connector no longer works. Add it again in {c.client_name} at this URL, then remove the old connector in {c.client_name} and select <strong>Revoke</strong> on this row.{asksCode && <> Its page asks for a code; run <Code className="whitespace-nowrap">aether mcp code</Code> to get one.</>} Its consent page is where you choose its scopes.</p>
+                        <CopyableCommand command={c.notice.url} />
+                      </div>
+                    )
+                  : <p>This connector no longer works. Revoke it, and remove the old connector in {c.client_name}.</p>}
+              </Callout>
+            )}
           </SettingRow>
         )
       })}
@@ -582,7 +635,9 @@ function Connectors({ client }: { client: Api }) {
       ) : (
         <Confirm
           title={`Revoke ${label(confirming.connector)}?`}
-          description={`Its next call fails, and ${confirming.connector.client_name} asks you to connect again${signsIn(confirming.connector) ? '' : ' with a new code'}. Removing it in ${confirming.connector.client_name} does not revoke it here.`}
+          description={confirming.connector.notice?.state === 'retired'
+            ? `Its address is retired, so its calls already fail there. Removing it in ${confirming.connector.client_name} does not revoke it here.`
+            : `Its next call fails, and ${confirming.connector.client_name} asks you to connect again${signsIn(confirming.connector) ? '' : ' with a new code'}. Removing it in ${confirming.connector.client_name} does not revoke it here.`}
           action="Revoke"
           pending="Revoking…"
           onConfirm={async () => {

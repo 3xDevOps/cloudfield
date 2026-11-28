@@ -279,6 +279,19 @@ func TestASubsessionOutcomeIsForItsParentOnly(t *testing.T) {
 	}
 }
 
+func TestLoginNamesCannotLookLikeLoginIDs(t *testing.T) {
+	for _, name := range []string{"lgn-abc", "lgn-"} {
+		if err := ValidateLoginName(name); err == nil {
+			t.Errorf("ValidateLoginName(%q) = nil; want it refused", name)
+		}
+	}
+	for _, name := range []string{"work", "lgn", "my-lgn-2"} {
+		if err := ValidateLoginName(name); err != nil {
+			t.Errorf("ValidateLoginName(%q) = %v", name, err)
+		}
+	}
+}
+
 func TestOriginForNote(t *testing.T) {
 	shown := []string{"", "https://github.com/acme/shop.git", "http://git.example.test:8080/shop", "/srv/git/shop.git", "git://git.example.test/shop.git"}
 	hidden := []string{

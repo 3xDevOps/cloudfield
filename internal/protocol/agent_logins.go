@@ -18,7 +18,18 @@ const (
 	MethodAgentLoginRemove    = "agent.login.remove"
 	MethodAgentLoginOrder     = "agent.login.order"
 	MethodAgentLoginAutomatic = "agent.login.automatic"
+	// MethodAgentLoginShare sets whether the caller's account shares reach
+	// a login; turning it off moves teammates' running sessions off it.
+	MethodAgentLoginShare = "agent.login.share"
 )
+
+// AgentLoginShareParams sets a login's use-for-shares switch; Shared is
+// required.
+type AgentLoginShareParams struct {
+	Agent   string `json:"agent"`
+	LoginID string `json:"login_id"`
+	Shared  *bool  `json:"shared"`
+}
 
 // AgentLoginParams names an agent, and for most methods one of the caller's
 // logins of it: "default" or an added login's "lgn-" id.
@@ -51,10 +62,12 @@ type AgentLoginOrderParams struct {
 	LoginIDs []string `json:"login_ids"`
 }
 
+// AgentLoginAutomaticParams sets a login's automatic switch; Automatic is
+// required.
 type AgentLoginAutomaticParams struct {
 	Agent     string `json:"agent"`
 	LoginID   string `json:"login_id"`
-	Automatic bool   `json:"automatic"`
+	Automatic *bool  `json:"automatic"`
 }
 
 // AgentLoginListResult lists the logins in the order Cloudfield tries them.

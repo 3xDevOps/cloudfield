@@ -165,7 +165,7 @@ func TestProtectedCacheTrimsOldestGoBuildEntriesToMemberCap(t *testing.T) {
 	oldest := write(filepath.Join(runs, "go-build", "ab", "oldest-d"), entry, 5*time.Hour)
 	older := write(filepath.Join(terminal, "go-build", "cd", "older-a"), entry, 4*time.Hour)
 	newer := write(filepath.Join(runs, "go-build", "ab", "newer-d"), entry, 3*time.Hour)
-	inUse := write(filepath.Join(runs, "go-build", "ab", "in-use-a"), entry, goBuildCacheInUseAge-time.Minute)
+	inUse := write(filepath.Join(runs, "go-build", "ab", "in-use-a"), entry, disk.GoBuildInUseAge-time.Minute)
 	other := write(filepath.Join(runs, "go-build", "ab", "other"), 0, 6*time.Hour)
 	e.sched.sweepCaches(t.Context(), false)
 	requireCacheExists(t, oldest, false)
