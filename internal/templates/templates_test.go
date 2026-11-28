@@ -143,8 +143,9 @@ func TestScheduleMissedWhileDownIsSkippedNotCaughtUp(t *testing.T) {
 	}
 }
 
-// robfig matches the hour that repeats when clocks fall back twice; a
-// daily zoned rule in that hour still launches once that night.
+// robfig matches the hour that repeats when clocks fall back twice; each
+// wall-clock time of a zoned rule in that hour still launches once that
+// night, also when the server restarts in between.
 func TestZonedScheduleLaunchesOnceWhenClocksFallBack(t *testing.T) {
 	ctx := context.Background()
 	db, err := storetest.Open(filepath.Join(t.TempDir(), "aether.db"))
@@ -169,35 +170,46 @@ func TestZonedScheduleLaunchesOnceWhenClocksFallBack(t *testing.T) {
 	if err = db.SaveTemplate(ctx, tpl); err != nil {
 		t.Fatalf("save template: %v", err)
 	}
-	// 01:30 in New York happens at 05:30Z (EDT) and again at 06:30Z (EST)
-	// on 2026-11-01.
-	clock := &fakeClock{t: time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC)}
+	// On 2026-11-01, 01:00 and 01:30 in New York happen at 05:00Z and
+	// 05:30Z (EDT) and again at 06:00Z and 06:30Z (EST).
+	clock := &fakeClock{t: time.Date(2026, 11, 1, 4, 50, 0, 0, time.UTC)}
 	runs := &recordingLauncher{}
 	svc, err := New(Config{Store: storetest.Unscoped{DB: db}, Bus: bus, Runs: runs, Now: clock.now})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	info, err := svc.SaveSchedule(ctx, ws.ID, tpl.Name, "CRON_TZ=America/New_York 30 1 * * *", m.ID, false)
+	info, err := svc.SaveSchedule(ctx, ws.ID, tpl.Name, "CRON_TZ=America/New_York 0,30 1 * * *", m.ID, false)
 	if err != nil {
 		t.Fatalf("SaveSchedule: %v", err)
 	}
-	if want := time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC); !info.Next.Equal(want) {
+	if want := time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC); !info.Next.Equal(want) {
 		t.Fatalf("first slot = %s, want %s", info.Next, want)
 	}
-	for _, at := range []time.Time{
-		time.Date(2026, 11, 1, 5, 30, 10, 0, time.UTC),
-		time.Date(2026, 11, 1, 6, 30, 10, 0, time.UTC),
-	} {
+	scanAt := func(svc *Service, at time.Time) {
+		t.Helper()
 		clock.set(at)
 		if err := svc.scan(ctx, true); err != nil {
 			t.Fatalf("scan at %s: %v", at, err)
 		}
 	}
-	if n := runs.count(); n != 1 {
-		t.Fatalf("launches = %d, want one for the night the clocks fell back", n)
+	scanAt(svc, time.Date(2026, 11, 1, 5, 0, 10, 0, time.UTC))
+	scanAt(svc, time.Date(2026, 11, 1, 5, 30, 10, 0, time.UTC))
+	// A restart after 01:30 EDT: the new service only has the stored fire.
+	restarted, err := New(Config{Store: storetest.Unscoped{DB: db}, Bus: bus, Runs: runs, Now: clock.now})
+	if err != nil {
+		t.Fatalf("New: %v", err)
 	}
-	if next, want := svc.nextFire(info.Schedule.ID), time.Date(2026, 11, 2, 6, 30, 0, 0, time.UTC); !next.Equal(want) {
-		t.Fatalf("next slot = %s, want %s, 01:30 EST the next day", next, want)
+	clock.set(time.Date(2026, 11, 1, 5, 45, 0, 0, time.UTC))
+	if err := restarted.scan(ctx, false); err != nil {
+		t.Fatalf("seed after restart: %v", err)
+	}
+	scanAt(restarted, time.Date(2026, 11, 1, 6, 0, 10, 0, time.UTC))
+	scanAt(restarted, time.Date(2026, 11, 1, 6, 30, 10, 0, time.UTC))
+	if n := runs.count(); n != 2 {
+		t.Fatalf("launches = %d, want one each for 01:00 and 01:30 on the night the clocks fell back", n)
+	}
+	if next, want := restarted.nextFire(info.Schedule.ID), time.Date(2026, 11, 2, 6, 0, 0, 0, time.UTC); !next.Equal(want) {
+		t.Fatalf("next slot = %s, want %s, 01:00 EST the next day", next, want)
 	}
 }
 
