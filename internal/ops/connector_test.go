@@ -1130,9 +1130,7 @@ func TestConnectorLaunchWaitsForRoom(t *testing.T) {
 	}
 
 	// A key whose launch ended is not offered as a retry.
-	f.answers[protocol.MethodRunLaunch] = func(json.RawMessage) (any, error) {
-		return nil, &protocol.Error{Code: protocol.CodeUnavailable, Message: `run.launch: the launch under idempotency_key "k-w" waited for room and ended expired: no room; use a new key to launch again`}
-	}
+	f.errs[protocol.MethodRunLaunch] = &protocol.Error{Code: protocol.CodeUnavailable, Message: `run.launch: the launch under idempotency_key "k-w" waited for room and ended expired: no room; use a new key to launch again`}
 	args["idempotency_key"] = "k-w"
 	text, _, failed := try(t, cs, "aether_launch_session", args)
 	if !failed || !strings.Contains(text, "use a new key") || strings.Contains(text, "retry with idempotency_key") {
