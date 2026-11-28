@@ -13,7 +13,7 @@ import (
 // Capabilities lists the memory methods run's socket serves: reading
 // while the run's owner reaches its workspace, adding while they may push.
 func (s *Service) Capabilities(ctx context.Context, id domain.RunID) ([]string, error) {
-	run, err := s.cfg.Store.GetRun(ctx, id)
+	run, err := s.cfg.Self(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +34,7 @@ func (s *Service) Capabilities(ctx context.Context, id domain.RunID) ([]string, 
 // workspace, author, harness and commit all come from it, and it reads as
 // its owner.
 func (s *Service) HandleAgent(ctx context.Context, id domain.RunID, method string, params json.RawMessage) (any, error) {
-	run, err := s.cfg.Store.GetRun(ctx, id)
+	run, err := s.cfg.Self(ctx, id)
 	if err != nil {
 		return nil, fail(method, err)
 	}

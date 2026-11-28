@@ -76,6 +76,11 @@ func (s *Scheduler) guardVMDisks(ctx context.Context) {
 		// pause nor resume, so the two thresholds do not flap.
 		return
 	}
+	// Spares go before any session is paused; the next check measures what
+	// that freed.
+	if s.dropSpares(ctx, false, nil) {
+		return
+	}
 	use, err := vms.DiskUse(ctx)
 	if err != nil {
 		slog.Warn("scheduler: disk guard: measure VM disks", "error", err)

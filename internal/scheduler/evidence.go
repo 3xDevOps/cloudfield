@@ -261,6 +261,14 @@ func (s *Scheduler) captureEvidence(ctx context.Context, run domain.RunID, trigg
 	if r == nil || r.ID != run {
 		return fmt.Errorf("scheduler: evidence session lookup returned no matching session")
 	}
+	// A spare records no evidence: no member has worked in it, and the
+	// evidence service cannot see its row.
+	if r.Spare {
+		if cleanup != nil {
+			return cleanup(ctx)
+		}
+		return nil
+	}
 	// A VM whose boot to commit is under way or backing off still holds the
 	// work; trying the capture again now would only fail the same way.
 	s.mu.Lock()

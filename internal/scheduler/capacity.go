@@ -103,6 +103,9 @@ func memoryFloor(total uint64) uint64 {
 // show as used yet.
 type memoryClaim struct {
 	bytes uint64
+	// spare is a spare session's start, which fits only above the memory
+	// guard's calm line, twice the floor: the guard removes spares below it.
+	spare bool
 	// wake starts a container whose disks exist, so it is not held to the
 	// disk reserve: refusing it would keep a saved VM's memory on disk.
 	wake bool
@@ -130,6 +133,16 @@ func (e *memoryShortage) Unwrap() error { return ErrMemoryPressure }
 // reserveCapacity admits a start that brings up a new container or VM.
 func (s *Scheduler) reserveCapacity(ctx context.Context) (func(), error) {
 	return s.reserve(ctx, &memoryClaim{bytes: startupMemoryBytes})
+}
+
+// reserveSpare admits a spare session only into room nobody needs: it
+// frees no memory or disk, and waits behind a session the memory guard
+// saved while it worked.
+func (s *Scheduler) reserveSpare(ctx context.Context) (func(), error) {
+	if s.memoryWanted() > 0 {
+		return nil, fmt.Errorf("%w: a saved session waits for memory to wake", ErrMemoryPressure)
+	}
+	return s.tryReserveCapacity(ctx, &memoryClaim{bytes: spareMemoryBytes, spare: true})
 }
 
 // reserveWake admits the wake of a sleeping container: a saved VM must fit
@@ -201,6 +214,10 @@ func (s *Scheduler) reserve(ctx context.Context, claim *memoryClaim) (func(), er
 	case errors.Is(err, ErrDiskFull):
 		s.reclaimDisk(ctx, "")
 		return s.tryReserveCapacity(ctx, claim)
+	case errors.As(err, &short) && s.dropSpares(ctx, true, nil):
+		if release, err = s.tryReserveCapacity(ctx, claim); errors.As(err, &short) && s.saveIdleVMs(ctx, short.need+short.claimed) {
+			return s.tryReserveCapacity(ctx, claim)
+		}
 	case errors.As(err, &short) && s.saveIdleVMs(ctx, short.need+short.claimed):
 		return s.tryReserveCapacity(ctx, claim)
 	}
@@ -210,6 +227,9 @@ func (s *Scheduler) reserve(ctx context.Context, claim *memoryClaim) (func(), er
 // fitMemory refuses claim unless available memory covers the floor, claim
 // and what admitted claims have yet to take. Caller holds capacityGate.
 func (s *Scheduler) fitMemory(ctx context.Context, available, floor uint64, claim *memoryClaim) error {
+	if claim.spare {
+		floor *= 2
+	}
 	if claimed := s.claimedMemory(ctx); available < floor+claim.bytes+claimed {
 		return &memoryShortage{available: available, floor: floor, need: claim.bytes, claimed: claimed}
 	}

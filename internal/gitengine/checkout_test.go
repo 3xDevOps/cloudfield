@@ -418,3 +418,40 @@ func TestWorkspaceWithACloudfieldBranchKeepsTheAetherPrefix(t *testing.T) {
 		t.Errorf("WorkspaceBranchCommit(%q): %v; want the branch reserved", branch, err)
 	}
 }
+
+// A spare session nobody claimed gives back the branch name it reserved.
+// A branch a session committed to is work, and stays.
+func TestReleaseRunBranchDeletesOnlyABranchStillAtItsBase(t *testing.T) {
+	e := newUnitEngine(t)
+	ctx := t.Context()
+	if _, err := e.InitWorkspaceRepo(ctx, "ws1"); err != nil {
+		t.Fatalf("InitWorkspaceRepo: %v", err)
+	}
+	seedBareMain(t, e, "ws1")
+	repo, err := e.repoPath("ws1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := runCheckoutGit(t, repo, "rev-parse", "refs/heads/main")
+	_, unused, err := e.CreateRunCheckout(ctx, "ws1", "run-unused", "main", "", "")
+	if err != nil {
+		t.Fatalf("CreateRunCheckout: %v", err)
+	}
+	checkout, worked, err := e.CreateRunCheckout(ctx, "ws1", "run-worked", "main", "", "")
+	if err != nil {
+		t.Fatalf("CreateRunCheckout: %v", err)
+	}
+	runCheckoutGit(t, checkout, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "work")
+	runCheckoutGit(t, checkout, "push", repo, worked)
+
+	if err = e.ReleaseRunBranch(ctx, "ws1", unused, base); err != nil {
+		t.Fatalf("ReleaseRunBranch of a branch at its base: %v", err)
+	}
+	if err = e.ReleaseRunBranch(ctx, "ws1", worked, base); err == nil {
+		t.Fatal("ReleaseRunBranch deleted a branch that moved off its base")
+	}
+	branches := runCheckoutGit(t, repo, "for-each-ref", "--format=%(refname:short)", "refs/heads")
+	if strings.Contains(branches, unused) || !strings.Contains(branches, worked) {
+		t.Fatalf("branches after the release:\n%s\nwant %s gone and %s kept", branches, unused, worked)
+	}
+}

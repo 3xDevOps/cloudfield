@@ -3,6 +3,7 @@ package sshd
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -67,6 +68,10 @@ func TestMemberRolePromoteAndDemote(t *testing.T) {
 	}
 	if res.Member.Role != string(domain.RoleViewer) {
 		t.Errorf("demote result role = %q, want viewer", res.Member.Role)
+	}
+	// A spare made for the role the member had is not kept.
+	if drop := "drop-spares:" + string(bob.ID) + ":false"; !slices.Contains(e.runs.Calls(), drop) {
+		t.Errorf("RunController calls = %v, want %q", e.runs.Calls(), drop)
 	}
 	got, err = e.store.GetMember(ctx, bob.ID)
 	if err != nil {

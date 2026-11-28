@@ -707,45 +707,10 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 			}
 		}
 	}
-	var modelErr error
-	if run.Model != "" && adopt == nil {
-		if modelErr = sess.SetModel(ctx, run.Model); modelErr != nil {
-			reason := modelErr.Error()
-			// A one-shot run ends on the error below; a refused live
-			// session keeps the model it reports.
-			refused := !oneShot && acphost.Refused(modelErr)
-			running := sess.Model()
-			// Claude Code's adapter reports its default as "default".
-			if running == "default" || running == run.Model || domain.ValidModel(running) != nil {
-				running = ""
-			}
-			if refused {
-				on := "the agent's default model"
-				if running != "" {
-					on = strconv.Quote(running)
-				}
-				reason = fmt.Sprintf("The agent refused %q, so the session runs on %s: %v", run.Model, on, modelErr)
-			}
-			if err := sess.Notice("error", "Model not set", reason); err != nil {
-				slog.Warn("scheduler: record the model notice", "run", runID, "error", err)
-			}
-			if refused {
-				if changed, err := d.s.cfg.Store.RefuseRunModel(ctx, runID, run.Model, running, reason); err != nil {
-					slog.Warn("scheduler: record the refused model", "run", runID, "error", err)
-				} else if changed {
-					d.s.publish(ctx, events.Event{WorkspaceID: run.WorkspaceID, RunID: runID, Payload: events.RunModelPayload{Model: running}})
-				}
-			}
-		}
-	}
-	// After the model: the levels an agent offers can depend on it.
-	var effortErr error
-	if run.Effort != "" && !profile.ACPEffortArgs && adopt == nil {
-		if effortErr = sess.SetEffort(ctx, run.Effort); effortErr != nil {
-			if err := sess.Notice("error", "Effort not set", effortErr.Error()); err != nil {
-				slog.Warn("scheduler: record the effort notice", "run", runID, "error", err)
-			}
-		}
+	// An adopted session keeps the model and effort it had.
+	var modelErr, effortErr error
+	if adopt == nil {
+		modelErr, effortErr = d.setModelAndEffort(ctx, sess, run, profile, oneShot)
 	}
 	// Recorded once the session is set up: a restart that finds none opens
 	// the run's first session again.
@@ -773,12 +738,8 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 	if c != nil && c.enabled && !oneShot {
 		c.svc.EnhancedSessionOpened(runID)
 	}
-	if c != nil && c.enabled && coordDir != "" && fresh {
-		channel := "first message"
-		if systemPrompt != "" {
-			channel = "system prompt"
-		}
-		d.s.publishTimeline(ctx, run.WorkspaceID, runID, "", events.TimelineNote, "session instructions: "+channel)
+	if coordDir != "" && fresh {
+		d.noteInstructions(ctx, run, systemPrompt != "")
 	}
 	switch {
 	case oneShot && marked:

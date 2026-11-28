@@ -17,7 +17,7 @@ func init() {
 	registerService("system", func(d Deps) (Service, error) {
 		source, _ := d.Runtime.(sysstats.ContainerSource)
 		svc := &systemService{sampler: sysstats.New(sysstats.Options{Source: source})}
-		d.SSH.Services.System = &systemReader{sampler: svc.sampler, store: d.Store}
+		d.SSH.Services.System = &systemReader{sampler: svc.sampler, store: d.Spares}
 		return svc, nil
 	})
 }
@@ -106,6 +106,10 @@ func (r *systemReader) owner(ctx context.Context, key string) (sysstats.Owner, e
 	}
 	if err != nil {
 		return sysstats.Owner{}, fmt.Errorf("sandbox owner lookup failed for %q: %w", key, err)
+	}
+	// A spare is the member's as their terminal is: no member can open it.
+	if run.Spare {
+		return sysstats.Owner{Kind: "member", ID: string(run.MemberID), MemberID: string(run.MemberID)}, nil
 	}
 	return sysstats.Owner{
 		Kind: "run", ID: string(run.ID), MemberID: string(run.MemberID),

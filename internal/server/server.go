@@ -444,17 +444,17 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 			return s.sched.PersistDevelopmentLease(run, surface, lease)
 		}})
 	secrets := secretstore.New(filepath.Join(cfg.DataDir, "workspace-secrets"))
-	mem, err := newMemory(Deps{Store: s.db, Bus: s.bus, Events: s.log})
+	mem, err := newMemory(Deps{Store: s.db, Spares: s.db.WithSpares(), Bus: s.bus, Events: s.log})
 	if err != nil {
 		return nil, fmt.Errorf("server: build team memory: %w", err)
 	}
 	var egressProxy scheduler.EgressProxy
 	if s.docker != nil {
-		s.egress = []*egress.Proxy{egress.New(s.docker, s.db, s.bus)}
+		s.egress = []*egress.Proxy{egress.New(s.docker, s.db.WithSpares(), s.bus)}
 		// Docker's proxy keeps serving the sessions started on Docker before
 		// session-runtime was vm.
 		if vms, ok := s.rt.(*vm.Runtime); ok {
-			s.egress = append(s.egress, egress.New(vms, s.db, s.bus))
+			s.egress = append(s.egress, egress.New(vms, s.db.WithSpares(), s.bus))
 		}
 		egressProxy = s.egress[len(s.egress)-1]
 	}
@@ -463,7 +463,7 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 		waitConditions = cfg.WaitConditions
 	}
 	if s.sched, err = scheduler.New(scheduler.Config{
-		Store:          s.db,
+		Store:          s.db.WithSpares(),
 		Runtime:        s.rt,
 		Bus:            s.bus,
 		WaitConditions: waitConditions,
@@ -592,6 +592,7 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 		Config:     cfg,
 		DataDir:    cfg.DataDir,
 		Store:      s.db,
+		Spares:     s.db.WithSpares(),
 		Bus:        s.bus,
 		Events:     s.log,
 		Runs:       s.sched,

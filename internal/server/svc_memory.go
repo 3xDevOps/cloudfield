@@ -13,7 +13,7 @@ func newMemory(d Deps) (*memory.Service, error) {
 	if !ok {
 		return nil, errors.New("team memory needs a store with the memory table")
 	}
-	return memory.New(memory.Config{Store: notes, Bus: d.Bus, Log: d.Events})
+	return memory.New(memory.Config{Store: notes, Self: d.Spares.GetRun, Bus: d.Bus, Log: d.Events})
 }
 
 func init() {

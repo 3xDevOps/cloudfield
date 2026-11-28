@@ -255,6 +255,19 @@ func (e *Engine) uniqueRunBranch(ctx context.Context, repo, base string, run dom
 	return full, nil
 }
 
+// ReleaseRunBranch gives back the name a run reserved in workspace ws and
+// then left at base: a branch that moved since is kept.
+func (e *Engine) ReleaseRunBranch(ctx context.Context, ws domain.WorkspaceID, branch, base string) error {
+	repo, err := e.existingRepoPath(ws)
+	if err != nil {
+		return err
+	}
+	if _, err := e.git(ctx, repo, "update-ref", "-d", "refs/heads/"+branch, base); err != nil {
+		return fmt.Errorf("gitengine: release branch %s: %w", branch, err)
+	}
+	return nil
+}
+
 // claimBranch creates refs/heads/<branch> at base, reporting false when
 // the ref already exists. The all-zero old value makes this a create-only
 // update: git rejects it rather than moving an existing ref.

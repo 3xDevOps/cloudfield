@@ -23,7 +23,7 @@ func init() {
 			return nil, nil
 		}
 		svc, err := children.New(children.Config{
-			Store: st, Runs: d.Runs, Git: d.Git, Usage: d.SSH.Services.Usage, Bus: d.Bus, Recovered: d.Runs.RecoveryReady(),
+			Store: st, Self: d.Spares.GetRun, Runs: d.Runs, Git: d.Git, Usage: d.SSH.Services.Usage, Bus: d.Bus, Recovered: d.Runs.RecoveryReady(),
 			Agents: func() children.Agents {
 				if d.SSHServer == nil {
 					return nil

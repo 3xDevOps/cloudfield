@@ -87,6 +87,11 @@ func (s *Scheduler) checkVMMemory(ctx context.Context) (uint64, bool) {
 		slog.Warn("scheduler: memory guard: measure host memory", "error", err)
 		return 0, false
 	}
+	// Spares go before any member's session is saved, and before one the
+	// guard saved waits longer; the next check measures what that freed.
+	if (available < 2*floor || s.memoryWanted() > 0) && s.dropSpares(ctx, false, nil) {
+		return 0, false
+	}
 	if available < 2*floor {
 		if available, err = s.savePausedVMs(ctx, 2*floor); err != nil {
 			slog.Warn("scheduler: memory guard: measure host memory", "error", err)

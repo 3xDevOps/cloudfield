@@ -696,6 +696,14 @@ func (s *Scheduler) recoverRuns(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("scheduler: recovery: %w", err)
 	}
+	// Before anything is published about a spare the last server left.
+	if hider, hides := s.cfg.Bus.(runHider); hides {
+		for _, r := range active {
+			if r.Spare {
+				hider.Hide(r.ID)
+			}
+		}
+	}
 	if len(active) > 0 {
 		slog.Info("scheduler: recovery: reconnecting sessions", "sessions", len(active), "at_once", runRecoveryConcurrency)
 	}

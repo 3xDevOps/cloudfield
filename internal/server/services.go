@@ -32,6 +32,10 @@ type Deps struct {
 	Config  Config
 	DataDir string
 	Store   store.Store
+	// Spares is Store reading spare sessions too, which no member can
+	// see: for a session's lookups of itself, and for the operator's
+	// pages, which account for every sandbox and file.
+	Spares  store.Store
 	Bus     events.Bus
 	Events  events.EventLog
 	Runs    *scheduler.Scheduler

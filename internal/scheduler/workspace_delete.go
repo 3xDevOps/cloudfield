@@ -26,6 +26,8 @@ func (s *Scheduler) workspaceLock(id domain.WorkspaceID) *sync.RWMutex {
 // WithInactiveWorkspace fences launch/relaunch for the full cleanup, including
 // launch preflight before a run row exists. It never stops unfinished work.
 func (s *Scheduler) WithInactiveWorkspace(ctx context.Context, id domain.WorkspaceID, cleanup func([]*domain.Run) error) error {
+	// Before the lock, which a spare's own launch and removal take.
+	s.removeWorkspaceSpares(ctx, id)
 	lock := s.workspaceLock(id)
 	if !lock.TryLock() {
 		return fmt.Errorf("%w: workspace has a launch or relaunch in progress", ErrInvalidTransition)

@@ -674,7 +674,7 @@ func leavesRun(method string) bool {
 }
 
 func (s *Service) refuseIsolated(ctx context.Context, run domain.RunID, method string) *protocol.Error {
-	r, err := s.cfg.Store.GetRun(ctx, run)
+	r, err := s.cfg.Self(ctx, run)
 	if err != nil {
 		return &protocol.Error{Code: protocol.CodeInternal, Message: fmt.Sprintf("%s: read session %s: %v", method, run, err)}
 	}

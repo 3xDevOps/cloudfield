@@ -166,6 +166,7 @@ func (s *Server) workspaceAccessRevoke(ctx context.Context, member domain.Member
 	if _, perr := s.grantee(ctx, member, id, method); perr != nil {
 		return nil, perr
 	}
+	s.cfg.Runs.DropSpares(ctx, id, false)
 	active, err := s.cfg.Store.ListActiveRuns(ctx)
 	if err != nil {
 		return nil, rpcError(err)

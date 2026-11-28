@@ -514,9 +514,19 @@ func (s *Service) Inbox(ctx context.Context, run domain.RunID, p protocol.CoordI
 	return protocol.CoordInboxResult{Messages: out, AckToken: token, Acked: acked, More: more}, nil
 }
 
-// resolveRun loads a run, mapping the unknown case to CodeNotFound.
+// resolveRun loads the run that calls, mapping the unknown case to
+// CodeNotFound.
 func (s *Service) resolveRun(ctx context.Context, method string, run domain.RunID) (*domain.Run, *protocol.Error) {
-	r, err := s.cfg.Store.GetRun(ctx, run)
+	return resolveWith(ctx, method, run, s.cfg.Self)
+}
+
+// resolvePeer is resolveRun for a run the caller names.
+func (s *Service) resolvePeer(ctx context.Context, method string, run domain.RunID) (*domain.Run, *protocol.Error) {
+	return resolveWith(ctx, method, run, s.cfg.Store.GetRun)
+}
+
+func resolveWith(ctx context.Context, method string, run domain.RunID, get func(context.Context, domain.RunID) (*domain.Run, error)) (*domain.Run, *protocol.Error) {
+	r, err := get(ctx, run)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, unknownRun(method, run)
 	}
@@ -1233,7 +1243,7 @@ func (s *Service) sendMessage(ctx context.Context, method string, from, to domai
 		if rpcErr != nil {
 			return nil, "", rpcErr
 		}
-		target, rpcErr := s.resolveRun(ctx, method, to)
+		target, rpcErr := s.resolvePeer(ctx, method, to)
 		if rpcErr != nil {
 			return nil, "", rpcErr
 		}
@@ -1257,7 +1267,7 @@ func (s *Service) sendMessage(ctx context.Context, method string, from, to domai
 	if rpcErr != nil {
 		return nil, "", rpcErr
 	}
-	target, rpcErr := s.resolveRun(ctx, method, to)
+	target, rpcErr := s.resolvePeer(ctx, method, to)
 	if rpcErr != nil {
 		return nil, "", rpcErr
 	}

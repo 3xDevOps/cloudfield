@@ -567,7 +567,7 @@ func (s *Scheduler) LoginInUse(ctx context.Context, account domain.Account) (map
 	}
 	inUse := make(map[domain.RunID]domain.MemberID)
 	for _, r := range runs {
-		if r.Account() == account {
+		if r.Account() == account && !r.Spare {
 			inUse[r.ID] = r.MemberID
 		}
 	}

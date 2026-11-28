@@ -68,8 +68,11 @@ type Store interface {
 
 type Config struct {
 	Store Store
-	Runs  Runs
-	Git   Git
+	// Self reads the row of the run that calls, which may be a spare
+	// session no member can see; Store.GetRun when unset.
+	Self func(context.Context, domain.RunID) (*domain.Run, error)
+	Runs Runs
+	Git  Git
 	// Agents and Cost resolve at call time: their owners are built after
 	// this service, as is the Mailer SetMailer installs.
 	Agents func() Agents
@@ -107,6 +110,9 @@ type Service struct {
 func New(cfg Config) (*Service, error) {
 	if cfg.Store == nil || cfg.Runs == nil || cfg.Git == nil || cfg.Authorize == nil || cfg.AuthorizationMu == nil {
 		return nil, errors.New("subsessions: store, sessions, git and launch authorization are required")
+	}
+	if cfg.Self == nil {
+		cfg.Self = cfg.Store.GetRun
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now

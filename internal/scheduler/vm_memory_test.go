@@ -129,16 +129,16 @@ func newMemoryEnv(t *testing.T) (*testEnv, *memoryRuntime) {
 }
 
 // newMemoryEnvWith is newMemoryEnv with wrap's runtime around the host's.
-func newMemoryEnvWith(t *testing.T, wrap func(*memoryRuntime) runtime.Runtime) (*testEnv, *memoryRuntime) {
+func newMemoryEnvWith(t *testing.T, wrap func(*memoryRuntime) runtime.Runtime, opts ...func(*Config)) (*testEnv, *memoryRuntime) {
 	t.Helper()
 	var mr *memoryRuntime
-	e, _ := newACPEnv(t, func(cfg *Config) {
+	e, _ := newACPEnv(t, append([]func(*Config){func(cfg *Config) {
 		sr := &saveRuntime{acpRuntime: cfg.Runtime.(*acpRuntime), saved: map[runtime.ID]string{}}
 		mr = &memoryRuntime{saveRuntime: sr, available: 24 << 30, vm: map[runtime.ID]uint64{}, loading: map[runtime.ID]bool{}}
 		cfg.Runtime = wrap(mr)
 		cfg.hostMemory = mr.hostMemory
 		cfg.sleepAnyAgent = true
-	})
+	}}, opts...)...)
 	e.onGuestCPU("0")
 	return e, mr
 }

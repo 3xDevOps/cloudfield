@@ -202,6 +202,10 @@ type RunController interface {
 	ForgetOMPAccount(ctx context.Context, member domain.MemberID)
 	TerminalStatus(ctx context.Context, member domain.MemberID) (domain.TerminalStatus, error)
 	ExecTerminal(ctx context.Context, member domain.MemberID, command string) (int, string, string, error)
+	// DropSpares removes the spare session kept ready for member's next
+	// launch, which no member can see or stop; with wait it returns once
+	// the spare's sandbox is gone.
+	DropSpares(ctx context.Context, member domain.MemberID, wait bool)
 	SaveEnvironment(ctx context.Context, member domain.MemberID) (string, error)
 	ResetEnvironment(ctx context.Context, member domain.MemberID) error
 	// InstallAgent returns the end of the install command's output and its

@@ -697,7 +697,9 @@ func (a *fakeAttachment) Close() error {
 type fakeGit struct {
 	root string
 
-	mu            sync.Mutex
+	mu sync.Mutex
+	// released are the branches ReleaseRunBranch gave back.
+	released      []string
 	commits       map[domain.RunID][]string
 	published     map[domain.RunID]int
 	watching      map[domain.RunID]domain.WorkspaceID
@@ -736,6 +738,19 @@ func (g *fakeGit) checkoutPath(run domain.RunID) string {
 
 func (g *fakeGit) CreateRunCheckout(ctx context.Context, ws domain.WorkspaceID, run domain.RunID, baseBranch, task, origin string) (string, string, error) {
 	return g.CreateRunCheckoutAt(ctx, ws, run, baseBranch, baseBranch, task, origin)
+}
+
+func (g *fakeGit) ReleaseRunBranch(_ context.Context, _ domain.WorkspaceID, branch, _ string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.released = append(g.released, branch)
+	return nil
+}
+
+func (g *fakeGit) releasedBranches() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.released)
 }
 
 func (g *fakeGit) CreateRunCheckoutAt(_ context.Context, ws domain.WorkspaceID, run domain.RunID, baseCommit, baseBranch, _, origin string) (string, string, error) {

@@ -195,6 +195,8 @@ func (s *Server) memberRemove(ctx context.Context, member domain.MemberID, param
 	if p.MemberID == "" {
 		return nil, invalidParams("member_id is required")
 	}
+	// Before the locks: this waits for the spare's sandbox to go.
+	s.cfg.Runs.DropSpares(ctx, domain.MemberID(p.MemberID), true)
 	// The checks below refuse early, before the terminal stops; the
 	// delete repeats them in its own transaction, so `aether-server
 	// member role` cannot race it.

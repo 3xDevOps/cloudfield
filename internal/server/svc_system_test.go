@@ -24,13 +24,15 @@ func (s runOnlyStore) GetRun(_ context.Context, id domain.RunID) (*domain.Run, e
 func TestBrowserSidecarIsItsOwnEntryOwnedByItsRun(t *testing.T) {
 	t.Parallel()
 	r := &systemReader{store: runOnlyStore{runs: map[domain.RunID]domain.Run{
-		"run-1": {ID: "run-1", MemberID: "mem-1", WorkspaceID: "ws-1", Title: "fix it", Status: domain.RunRunning},
+		"run-1":     {ID: "run-1", MemberID: "mem-1", WorkspaceID: "ws-1", Title: "fix it", Status: domain.RunRunning},
+		"run-spare": {ID: "run-spare", MemberID: "mem-3", WorkspaceID: "ws-1", Status: domain.RunRunning, Spare: true},
 	}}}
 	out, err := r.attribute(t.Context(), []sysstats.ContainerUsage{
 		{ID: "side", BrowserRunContainer: "run-ctr", MemoryBytes: 40, MemoryLimitBytes: 500},
 		{ID: "run-ctr", CreationKey: "run-1", MemoryBytes: 100, MemoryLimitBytes: 1000},
 		{ID: "env", CreationKey: "terminal:mem-2"},
 		{ID: "orphan", BrowserRunContainer: "gone"},
+		{ID: "spare", CreationKey: "run-spare"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -47,6 +49,11 @@ func TestBrowserSidecarIsItsOwnEntryOwnedByItsRun(t *testing.T) {
 	}
 	if env := kinds["env"]; env.Owner.Kind != "member" || env.Owner.MemberID != "mem-2" {
 		t.Errorf("environment = %+v", env)
+	}
+	// A spare session is its member's, as their environment is, and names
+	// no session a member could open.
+	if spare := kinds["spare"]; spare.Owner != (sysstats.Owner{Kind: "member", ID: "mem-3", MemberID: "mem-3"}) {
+		t.Errorf("spare session = %+v", spare.Owner)
 	}
 	if orphan := kinds["orphan"]; orphan.Owner.Kind != "" {
 		t.Errorf("a sidecar whose run is not sampled must be unowned, got %+v", orphan.Owner)

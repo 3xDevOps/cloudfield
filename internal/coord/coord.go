@@ -124,6 +124,9 @@ type Config struct {
 	Dir string
 	// Store resolves runs and members.
 	Store Runs
+	// Self reads the row of the run that calls, which may be a spare
+	// session no member can see; Store.GetRun when unset.
+	Self func(context.Context, domain.RunID) (*domain.Run, error)
 	// RetainsContainer reports whether a terminal run's retained container
 	// is still valid and owns its coordination assets.
 	RetainsContainer func(context.Context, domain.RunID) bool
@@ -258,6 +261,9 @@ type runLifecycle struct {
 func New(cfg Config) (*Service, error) {
 	if cfg.Dir == "" || cfg.Store == nil || cfg.Mail == nil || cfg.Bus == nil || cfg.Peers == nil {
 		return nil, errors.New("coord: config: Dir, Store, Mail, Bus, and Peers are required")
+	}
+	if cfg.Self == nil {
+		cfg.Self = cfg.Store.GetRun
 	}
 	if cfg.Grace <= 0 {
 		cfg.Grace = DefaultGrace
