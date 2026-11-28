@@ -252,6 +252,19 @@ describe('templates view', () => {
     expect(dialog.getByLabelText('Cron rule')).toHaveProperty('value', '*/15 9-17 * * 1-5')
   })
 
+  it('keeps the zone of the saved rule as the server took it', async () => {
+    const kolkata = { ...schedule, cron: 'CRON_TZ=Asia/Kolkata 0 3 * * *' }
+    const client = fakeApi({ scheduleList: vi.fn(async () => [kolkata]) })
+    seed()
+    render(<Templates client={client} />)
+
+    await screen.findByText(/^Scheduled every day/)
+    await rowAction('Schedule')
+    const dialog = within(await screen.findByRole('dialog', { name: `Schedule ${template.name}` }))
+    expect(dialog.getByText('CRON_TZ=Asia/Kolkata 0 3 * * *')).toBeDefined()
+    expect(dialog.getByText(nextLaunch, { exact: false })).toBeDefined()
+  })
+
   it('carries a rule typed in cron back into the picker', async () => {
     const client = fakeApi({ scheduleList: vi.fn(async () => []) })
     seed()

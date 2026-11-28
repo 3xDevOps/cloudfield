@@ -6506,14 +6506,15 @@ day from 1 to 28. All three take a time (default 09:00) and an IANA zone
 (the browser's for a new schedule, the rule's own when editing), and show
 the rule they save, such as `CRON_TZ=Europe/Berlin 30 9 * * 1-5`; a UTC rule
 has no prefix. The rule keeps the zone the server already took; any other
-zone is saved in the browser's canonical spelling, which Go's zone
-database loads (`europe/berlin` saves as `Europe/Berlin`, `PST` as
-`America/Los_Angeles`). A name `Intl` does not take as an IANA zone
-disables Save, and once the field is left shows "Not an IANA zone name.
-Check the spelling." Cron takes the rule as text and is where a rule the
-fields cannot show exactly opens. Switching to Cron fills in the rule the
-fields made, and a rule typed in Cron carries back into the fields when
-they can show it. While the
+Area/Location name is saved in the browser's canonical spelling, which
+Go's zone database loads (`europe/berlin` saves as `Europe/Berlin`).
+Abbreviations such as `BST` are refused, since `Intl` maps them to
+surprising zones, and so is a name `Intl` does not take: Save is disabled
+and, once the field is left, it says "Not an IANA zone name. Check the
+spelling." Cron takes the rule as text and is where a rule the fields
+cannot show exactly opens. Switching to Cron fills in the rule the fields
+made, unless Cron holds a rule only it can show, and a rule typed in Cron
+carries back into the fields when they can show it. While the
 form shows the saved rule, the next launch is the `next_fire_at` that
 `schedule.save` returned, shown relative and in the viewer's local time
 ("your time"), never computed in the browser. **Duplicate** opens the form

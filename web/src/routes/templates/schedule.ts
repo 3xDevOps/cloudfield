@@ -47,6 +47,9 @@ export const zones = ['UTC', ...Intl.supportedValuesOf('timeZone')]
 export function zoneName(typed: string, kept: string): string | null {
   const zone = typed.trim()
   if (zone && zone === kept) return zone
+  // ICU maps three-letter IDs to surprising zones (BST to Asia/Dhaka), so
+  // only Area/Location names and UTC are taken.
+  if (!zone.includes('/') && zone.toUpperCase() !== 'UTC') return null
   let name: string
   try {
     name = new Intl.DateTimeFormat('en', { timeZone: zone }).resolvedOptions().timeZone

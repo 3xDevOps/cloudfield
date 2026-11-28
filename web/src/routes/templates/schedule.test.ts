@@ -33,11 +33,12 @@ describe('schedule rules', () => {
     expect(describeRule(rule)).toEqual({ cron, zone })
   })
 
-  it('keeps the zone the server took and saves any other in the browser canonical spelling', () => {
+  it('keeps the zone the server took, saves any other Area/Location name in the browser spelling, and refuses abbreviations', () => {
     expect(zoneName('Asia/Kolkata', 'Asia/Kolkata')).toBe('Asia/Kolkata')
     expect(zoneName(' europe/berlin ', '')).toBe('Europe/Berlin')
     expect(zoneName('utc', '')).toBe('UTC')
-    expect(zoneName('PST', '')).toBe('America/Los_Angeles')
+    expect(zoneName('PST', '')).toBeNull()
+    expect(zoneName('BST', '')).toBeNull()
     expect(['Asia/Kolkata', 'Asia/Calcutta']).toContain(zoneName('asia/kolkata', ''))
     expect(zoneName('Europe/Berln', '')).toBeNull()
     expect(zoneName('+05:30', '')).toBeNull()

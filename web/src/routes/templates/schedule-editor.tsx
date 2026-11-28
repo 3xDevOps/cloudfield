@@ -43,12 +43,13 @@ export function ScheduleEditor({
   const id = useId()
   const [plan, setPlan] = useState(() => readRule(draft ?? schedule?.cron ?? '', browserZone()))
   const [typedCron, setTypedCron] = useState(false)
-  const [zoneLeft, setZoneLeft] = useState(false)
   const [busy, setBusy] = useState(false)
   const late = usePastDeadline(busy || saving)
   const [error, setError] = useState<string | null>(null)
   const set = (fields: Partial<Plan>) => setPlan((current) => ({ ...current, ...fields }))
   const zone = zoneName(plan.zone, schedule ? readRule(schedule.cron, '').zone : '')
+  // A zone refused on opening, such as a misspelled draft, says why at once.
+  const [zoneLeft, setZoneLeft] = useState(!zone)
   const rule = writeRule(zone ? { ...plan, zone } : plan)
   const ready = plan.repeat === 'cron' ? Boolean(rule) : Boolean(plan.at && zone && (plan.repeat !== 'weekly' || plan.days.length))
   const saved = schedule && writeRule(readRule(schedule.cron, '')) === rule
@@ -86,7 +87,7 @@ export function ScheduleEditor({
               const repeat = value as Repeat
               const typed = readRule(plan.rule, plan.zone)
               // A rule typed in Cron carries into the fields when they can show it; one only Cron can show stays there.
-              if (plan.repeat === 'cron' && typedCron && typed.repeat !== 'cron') setPlan({ ...typed, repeat, rule: plan.rule })
+              if (plan.repeat === 'cron' && typedCron && plan.rule.trim() && typed.repeat !== 'cron') setPlan({ ...typed, repeat, rule: plan.rule })
               else set(repeat === 'cron' && ready && typed.repeat !== 'cron' ? { repeat, rule } : { repeat })
               setTypedCron(false)
             }}
@@ -155,7 +156,7 @@ export function ScheduleEditor({
                 error={zoneLeft && !zone ? (plan.zone.trim() ? 'Not an IANA zone name. Check the spelling.' : 'Enter a time zone.') : undefined}
                 className="min-w-0 flex-1 basis-40"
               >
-                <Input required value={plan.zone} spellCheck={false} list={`${id}-zones`} onBlur={() => setZoneLeft(true)} onChange={(e) => set({ zone: e.target.value })} />
+                <Input required value={plan.zone} spellCheck={false} list={`${id}-zones`} onBlur={() => setZoneLeft(true)} onKeyDown={(e) => e.key === 'Enter' && setZoneLeft(true)} onChange={(e) => set({ zone: e.target.value })} />
               </FormField>
               <datalist id={`${id}-zones`}>
                 {zones.map((zone) => <option key={zone} value={zone} />)}
