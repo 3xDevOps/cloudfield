@@ -261,7 +261,7 @@ func (e *engine) resumeGuest(ctx context.Context, rec *record) error {
 		err = os.RemoveAll(e.path(rec.Key, snapshotDir))
 	}
 	if err == nil {
-		err = e.units.SetProperty(ctx, unitName(rec.Key), "MemoryMax="+strconv.FormatInt(unitMemoryMiB(rec)<<20, 10))
+		err = e.units.SetProperty(context.WithoutCancel(ctx), unitName(rec.Key), "MemoryMax="+strconv.FormatInt(unitMemoryMiB(rec)<<20, 10))
 	}
 	if err != nil {
 		return fmt.Errorf("it runs, and its unit keeps no memory limit: %w", err)
