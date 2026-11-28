@@ -355,8 +355,19 @@ func (s *Scheduler) endLoginSignIn(sign *loginSignIn, login domain.AgentLogin, e
 	s.mu.Unlock()
 	// A merge that committed while the login was added gave its row to the
 	// survivor and left the directory, which its reconcile skipped then.
-	if err == nil {
-		if reconcileErr := s.ReconcileLogins(context.Background(), sign.member); reconcileErr != nil {
+	// Close cancels this reconcile and waits for it, so nothing of the
+	// sign-in works on the store once Close has returned.
+	s.mu.Lock()
+	reconcile := err == nil && s.superCtx.Err() == nil
+	if reconcile {
+		s.wg.Add(1)
+	}
+	s.mu.Unlock()
+	if reconcile {
+		defer s.wg.Done()
+		ctx, cancel := context.WithTimeout(s.superCtx, time.Minute)
+		defer cancel()
+		if reconcileErr := s.ReconcileLogins(ctx, sign.member); reconcileErr != nil && s.superCtx.Err() == nil {
 			slog.Warn("scheduler: reconcile the logins of a finished sign-in", "login", sign.id, "error", reconcileErr)
 		}
 	}

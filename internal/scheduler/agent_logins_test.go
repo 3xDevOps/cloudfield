@@ -204,6 +204,97 @@ func TestSignInAddsTheLoginItSavedAndTouchesNoOtherLogin(t *testing.T) {
 	}
 }
 
+// signInWithSlowReconcile signs a login in for a member who has a login
+// directory no row names, which the reconcile after the sign-in removes. It
+// returns once that reconcile is removing the directory's volume, where it
+// stays until release is closed; cancelled is closed if its context ends
+// first.
+func signInWithSlowReconcile(t *testing.T) (e *signInEnv, orphan string, release, cancelled chan struct{}) {
+	t.Helper()
+	e = newSignInEnv(t)
+	orphan, err := e.logins.Add(e.member.ID, "claude", "lgn-orphan0000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciling, release, cancelled := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	e.rt.mu.Lock()
+	e.rt.removeVolumeHook = func(ctx context.Context) {
+		close(reconciling)
+		select {
+		case <-ctx.Done():
+			close(cancelled)
+			<-release
+		case <-release:
+		}
+	}
+	e.rt.mu.Unlock()
+	if _, _, err = e.signIn(t, "work", func(spec runtime.Spec) {
+		dir, pathErr := e.logins.Path(e.member.ID, "claude", domain.LoginID(strings.TrimPrefix(spec.Name, "aether-login-")))
+		if pathErr != nil {
+			t.Error(pathErr)
+			return
+		}
+		writeHomeFile(t, dir, memberhome.LoginCredentials, addedLoginFile)
+		writeHomeFile(t, dir, memberhome.LoginConfig, cachedAccount("ada@work.example.test", "org-work"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-reconciling:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the sign-in's reconcile never reached the orphaned login")
+	}
+	return e, orphan, release, cancelled
+}
+
+// A sign-in's result does not wait for the reconcile that follows it, which
+// still removes the member's login directories no row names.
+func TestSignInResultComesBeforeItsReconcile(t *testing.T) {
+	_, orphan, release, _ := signInWithSlowReconcile(t)
+	if _, err := os.Lstat(orphan); err != nil {
+		t.Fatalf("the orphaned login directory while its reconcile is held: %v; want it there, the result having come first", err)
+	}
+	close(release)
+	waitFor(t, "the reconcile removing the orphaned login directory", func() bool {
+		_, err := os.Lstat(orphan)
+		return errors.Is(err, fs.ErrNotExist)
+	})
+}
+
+// Close cancels the reconcile a finished sign-in started and waits for it,
+// so nothing of the sign-in works on the store once Close has returned.
+func TestCloseWaitsForAFinishedSignInsReconcile(t *testing.T) {
+	e, _, release, cancelled := signInWithSlowReconcile(t)
+	closed := make(chan struct{})
+	go func() {
+		_ = e.sched.Close()
+		close(closed)
+	}()
+	select {
+	case <-cancelled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close did not cancel the sign-in's reconcile")
+	}
+	select {
+	case <-closed:
+		t.Fatal("Close returned while the sign-in's reconcile was running")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close did not return once the reconcile ended")
+	}
+}
+
 // A sign-in that saved a Console API key, saved nothing, or signed in to the
 // account of a login the member already has adds no login and leaves no
 // directory.
@@ -283,12 +374,13 @@ func TestAMemberWithoutAddedLoginsGetsNoRowOrFile(t *testing.T) {
 // stopped during, goes; one with a row stays.
 func TestReconcileRemovesOnlyLoginsWithoutARow(t *testing.T) {
 	e := newSignInEnv(t)
-	kept, _, err := e.signIn(t, "work", func(spec runtime.Spec) {
-		dir, _ := e.logins.Path(e.member.ID, "claude", domain.LoginID(strings.TrimPrefix(spec.Name, "aether-login-")))
-		writeHomeFile(t, dir, memberhome.LoginCredentials, addedLoginFile)
-		writeHomeFile(t, dir, memberhome.LoginConfig, cachedAccount("ada@work.example.test", "org-work"))
-	})
-	if err != nil {
+	// The kept login is added without a sign-in, whose own reconcile would
+	// run beside this test's.
+	const kept = domain.LoginID("lgn-kept000000")
+	if _, err := e.logins.Add(e.member.ID, "claude", kept); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.AddAgentLogin(t.Context(), domain.AgentLogin{MemberID: e.member.ID, Agent: "claude", ID: kept, Name: "work", CreatedAt: time.Now()}, ""); err != nil {
 		t.Fatal(err)
 	}
 	orphan, err := e.logins.Add(e.member.ID, "claude", "lgn-orphan0000")
