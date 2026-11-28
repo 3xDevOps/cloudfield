@@ -1,14 +1,15 @@
-// A template is picked from the library list, schedules from its menu and
-// launches with a value typed over a parameter default; the schedule preview
-// is whatever the real server's cron parser answered.
+// A template is picked from the library list, schedules from its Schedule
+// button and launches with a value typed over a parameter default; the
+// schedule preview is whatever the real server's cron parser answered.
 
 import { expect, test } from './fixtures'
 import { dockerReachable } from './harness/server'
 import { seedWorkspace } from './harness/setup'
 
 test.skip(!dockerReachable(), 'launching the template needs a reachable Docker daemon')
+test.use({ timezoneId: 'Europe/Berlin' })
 
-test('a template schedules from its menu and launches with a parameter filled in', async ({ page, aether }) => {
+test('a template schedules weekly in the browser zone and launches with a parameter filled in', async ({ page, aether }) => {
   const alice = await aether.member('alice')
   const repo = await aether.seedRepo('project')
   await seedWorkspace(alice, aether.server.addr, repo)
@@ -30,18 +31,19 @@ test('a template schedules from its menu and launches with a parameter filled in
   await expect(detail).toContainText('2 of 2 filled')
   await expect(page.getByRole('form')).toHaveCount(0)
 
-  await detail.getByRole('button', { name: 'More for nightly' }).click()
-  await page.getByRole('menuitem', { name: 'Schedule…' }).click()
+  await detail.getByRole('button', { name: 'Schedule', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Schedule nightly' })
-  await dialog.getByLabel('Schedule (UTC)').fill('0 6 * * *')
+  await dialog.getByRole('radio', { name: 'Weekly' }).click()
+  await dialog.getByLabel('At', { exact: true }).fill('06:00')
+  await expect(dialog.getByText('CRON_TZ=Europe/Berlin 0 6 * * 1', { exact: true })).toBeVisible()
   await dialog.getByRole('button', { name: 'Schedule', exact: true }).click()
-  await expect(dialog.getByText(/^Next launch/)).toContainText('06:00:00 GMT')
+  await expect(dialog.getByText(/^Next launch/)).toContainText(/06:00( AM)? your time/)
   await page.keyboard.press('Escape')
-  await expect(detail).toContainText('Scheduled 0 6 * * * UTC')
+  await expect(detail).toContainText(/Scheduled Mondays at 06:00( AM)? Europe\/Berlin/)
   const { schedules } = await alice.api.rpc<{ schedules: { template: string; cron: string }[] }>('schedule.list', {
     workspace_id: workspaces[0].id,
   })
-  expect(schedules).toEqual([expect.objectContaining({ template: 'nightly', cron: '0 6 * * *' })])
+  expect(schedules).toEqual([expect.objectContaining({ template: 'nightly', cron: 'CRON_TZ=Europe/Berlin 0 6 * * 1' })])
 
   await detail.getByRole('textbox', { name: /^scope/ }).fill('weekly')
   await expect(detail.getByRole('region', { name: 'Preview' })).toHaveText('run the weekly sweep on main')

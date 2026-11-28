@@ -22,7 +22,7 @@ func TestApplyConfigFilePrecedence(t *testing.T) {
 	if err := fs.Parse([]string{"-addr", ":2400"}); err != nil {
 		t.Fatal(err)
 	}
-	from, err := applyConfigFile(fs, path, false)
+	_, from, err := applyConfigFile(fs, path, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestApplyConfigFileMissingOptionalPathIsSilent(t *testing.T) {
 	if err := fs.Parse(nil); err != nil {
 		t.Fatal(err)
 	}
-	from, err := applyConfigFile(fs, filepath.Join(t.TempDir(), "absent.conf"), true)
+	_, from, err := applyConfigFile(fs, filepath.Join(t.TempDir(), "absent.conf"), true)
 	if err != nil {
 		t.Fatalf("a missing config at the default path must not fail: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestApplyConfigFileMissingRequiredPathFails(t *testing.T) {
 	if err := fs.Parse(nil); err != nil {
 		t.Fatal(err)
 	}
-	_, err := applyConfigFile(fs, filepath.Join(t.TempDir(), "absent.conf"), false)
+	_, _, err := applyConfigFile(fs, filepath.Join(t.TempDir(), "absent.conf"), false)
 	if err == nil {
 		t.Fatal("a config path the operator named that does not exist must be an error")
 	}
@@ -199,7 +199,7 @@ func TestBrowserImageConfigRoundTripAndPrecedence(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tc.config {
-				if _, err := applyConfigFile(fs, path, false); err != nil {
+				if _, _, err := applyConfigFile(fs, path, false); err != nil {
 					t.Fatal(err)
 				}
 			}

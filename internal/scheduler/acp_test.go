@@ -664,7 +664,7 @@ func TestEnhancedRunCancel(t *testing.T) {
 	e, _ := newACPEnv(t)
 	run := e.launchACP(t, acpmock.PromptWait)
 	e.waitAgentWorking(t, run.ID)
-	if err := e.sched.ACPCancel(t.Context(), run.ID); err != nil {
+	if err := e.interrupt(t, run); err != nil {
 		t.Fatal(err)
 	}
 	waitItems(t, e.sched, run.ID, "cancelled turn", turnEnded("cancelled", 1))

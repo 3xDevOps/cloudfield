@@ -1017,6 +1017,7 @@ call is refused with `-32602`, and with a lease another session holds with
 | `run.acp.history` | `{run_id, before_seq, limit}` (View); `before_seq` 0 reads from the newest, `limit` at most 1000 | `{frames: [...], oldest_seq, truncated_before?}`, oldest first, cut like stream frames; metadata and items are one atomic retained page |
 | `run.acp.item` | `{run_id, seq}` (View) | `{item: {...}}`, whole; expired IDs return unavailable with an explicit retained-history expiry message, missing IDs return not-found |
 | `run.mode.switch` | `{run_id, mode, control_session_id, control_generation}`; `mode` is `tui` (Standard) or `acp` (Enhanced); the lease may be omitted while nobody holds the session's control | `{run: {...}}` once the switch is done; see [Switching a running agent](enhanced-sessions.md#switching-a-running-agent) |
+| `run.interrupt` | `{run_id}`; **Steer**, no lease | `{}`; a session with no turn running answers the same |
 
 Use the option IDs and values from the session's `config_options` snapshot,
 including selectors synthesized from an agent's separate `models` or `modes`.
@@ -1040,6 +1041,30 @@ server is not installed. Any other session it cannot switch now answers
 `acp`) while a switch is in flight; a `run.mode` event
 `{mode, previous, switching, reason}` with the same `switching` opens each
 switch, and one without `switching` closes it.
+`run.interrupt` stops the agent's current turn for a caller with no stream,
+such as `cloudfield interrupt`. It is admitted as
+[`run.input.respond`](#methods-for-an-external-assistant) is: with nobody in
+control, or the caller in control from another tab or terminal, it acts;
+while another member holds control it answers `-32003` with
+`data: {"reason":"control_held","member_id":"..."}` and the controller's name
+in the message. An enhanced session is cancelled as by `run.acp.cancel`. A
+Standard Codex session takes `turn/interrupt` through its app-server, and the
+call answers once Codex has stopped the turn. One that is paused, or whose VM
+the server froze for memory, answers `-32002`, and one whose app-server is
+not connected answers `-32004`. A session of either kind that fell asleep
+idle has no turn and answers `{}`.
+One the server saved to disk for memory while it worked, or while its VM was
+frozen
+([Recover from memory pressure](failure-handling.md#recover-from-memory-pressure)),
+keeps any turn for the wake, so it answers `-32002` and names
+`cloudfield resume <session-id>`, which wakes it. A Standard session that is
+not `running` or `needs-attention` answers `-32002` with its status. Any
+other Standard session answers `-32002`: its agent stops only on its own key,
+so the message names `cloudfield attach <session-id>` and no key is typed into
+the terminal. A connector is refused it (`-32001`), and the gateway does not
+replay it. Every call not refused above records a `note` entry on the
+workspace timeline, `sent an interrupt`, with the caller as the event's
+`actor_id`.
 `run.inject` takes `steer: true` to add a message to the agent's running
 turn, and `control_session_id`/`control_generation` to deliver it at once
 rather than after the room's moderation delay; its result's `outcome` is

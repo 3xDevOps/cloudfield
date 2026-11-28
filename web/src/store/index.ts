@@ -10,7 +10,7 @@ import { createBoardSlice, type BoardSlice } from '@/store/board'
 import { createCostSlice, type CostSlice } from '@/store/cost'
 import { createDevicesSlice, type DevicesSlice } from '@/store/devices'
 import { createDiffSlice, type DiffSlice } from '@/store/diff'
-import { createEdgeSlice, type EdgeSlice } from '@/store/edge'
+import { createEdgeSlice, type EdgeSlice, watchEdge } from '@/store/edge'
 import { createFilesSlice, type FilesSlice } from '@/store/files'
 import { createEnvTerminalSlice, type EnvTerminalSlice } from '@/store/env-terminal'
 import { createLanesSlice, normalizeLaneHidden, normalizeLaneWindow, type LanesSlice } from '@/store/lanes'
@@ -284,6 +284,7 @@ export function createRootStore() {
       if (scope.kind === 'run' && !(scope.runID in state.runs) && !messageListViewed(key)) state.dropMessageList(key)
     }
   })
+  watchEdge(store)
   return store
 }
 
