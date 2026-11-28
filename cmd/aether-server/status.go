@@ -32,32 +32,30 @@ func statusCmd(args []string) error {
 	pid, _ := strconv.Atoi(unitPID())
 	now := time.Now()
 	machine := scheduler.MeasureMachine(pid, *o.dataDir, *o.minFreeDisk)
-	vms, counted, hours, historyErr := statusHistory(context.Background(), server.StorePath(*o.dataDir), now)
-	printStatus(os.Stdout, sshd.CapacityResult(machine, vms, hours, now), counted, now, historyErr)
+	vms, counted, vmsErr, hours, countsErr := statusHistory(context.Background(), server.StorePath(*o.dataDir), now)
+	printStatus(os.Stdout, sshd.CapacityResult(machine, vms, hours, now), counted, now, vmsErr, countsErr)
 	_, _ = fmt.Fprintf(os.Stdout, "\nMeasured by this command with the options in %s: a server started before they changed still runs with its own.\n", configPath)
 	return nil
 }
 
 // statusHistory reads what the server recorded, from a database it only
-// reads: a server of another version may be using it.
-func statusHistory(ctx context.Context, path string, now time.Time) (domain.VMCounts, time.Time, []domain.CapacityCount, error) {
+// reads: a server of another version may be using it, and may lack one of
+// the two tables.
+func statusHistory(ctx context.Context, path string, now time.Time) (vms domain.VMCounts, counted time.Time, vmsErr error, hours []domain.CapacityCount, countsErr error) {
 	db, err := store.OpenReadOnly(path)
 	if err != nil {
-		return domain.VMCounts{}, time.Time{}, nil, err
+		return vms, counted, err, nil, err
 	}
 	defer db.Close() //nolint:errcheck // opened for reading
-	vms, counted, err := db.VMCounts(ctx)
-	if err != nil {
-		return domain.VMCounts{}, time.Time{}, nil, err
-	}
-	hours, err := db.CapacityCounts(ctx, now.Add(-sshd.CapacityFortnight))
-	return vms, counted, hours, err
+	vms, counted, vmsErr = db.VMCounts(ctx)
+	hours, countsErr = db.CapacityCounts(ctx, now.Add(-sshd.CapacityFortnight))
+	return vms, counted, vmsErr, hours, countsErr
 }
 
 // printStatus prints r as measured at now. counted is when the server last
-// wrote its session VM counts, zero when it never did, and historyErr why
-// the database could not be read, when it could not.
-func printStatus(w io.Writer, r protocol.ServerCapacityResult, counted, now time.Time, historyErr error) {
+// wrote its session VM counts, zero when it never did. vmsErr and countsErr
+// are why those counts, and the refusals and counters, could not be read.
+func printStatus(w io.Writer, r protocol.ServerCapacityResult, counted, now time.Time, vmsErr, countsErr error) {
 	p := func(format string, args ...any) { _, _ = fmt.Fprintf(w, format+"\n", args...) }
 	if r.MemoryError != "" {
 		p("memory   not measured: %s", r.MemoryError)
@@ -92,16 +90,19 @@ func printStatus(w io.Writer, r protocol.ServerCapacityResult, counted, now time
 	if !r.DiskUnchecked {
 		p("         (the running server also checks the filesystems of its container or VM runtime, which this command does not measure)")
 	}
-	if historyErr != nil {
-		p("history  not read, so the session VMs, the refusals and the counts below are unknown: %v", historyErr)
-		return
-	}
-	if counted.IsZero() {
+	switch {
+	case vmsErr != nil:
+		p("VMs      not read: %v", vmsErr)
+	case counted.IsZero():
 		p("VMs      not counted yet by a running server")
-	} else {
-		p("VMs      %d awake, %d frozen by the memory brake, %d asleep in memory, %d asleep on disk, %d asleep with nothing kept",
-			r.VMs.Awake, r.VMs.Frozen, r.VMs.Paused, r.VMs.Saved, r.VMs.Stopped)
-		p("         (counted by the server %s ago, at %s; it counts at least every minute while it runs)", now.Sub(counted).Round(time.Second), counted.Format(time.RFC3339))
+	default:
+		p("VMs      %d awake, %d frozen by the memory brake, %d asleep in memory, %d asleep on disk, %d asleep with nothing kept; %d of closed sessions still in memory",
+			r.VMs.Awake, r.VMs.Frozen, r.VMs.Paused, r.VMs.Saved, r.VMs.Stopped, r.VMs.Closed)
+		p("         (counted by the server %s ago, at %s; a running server that can write counts at least every minute)", now.Sub(counted).Round(time.Second), counted.Format(time.RFC3339))
+	}
+	if countsErr != nil {
+		p("history  not read, so the refusals and the counts are unknown: %v", countsErr)
+		return
 	}
 	refusal := func(what string, last *protocol.ServerCapacityRefusal) {
 		if last == nil {
@@ -155,7 +156,7 @@ func printStatus(w io.Writer, r protocol.ServerCapacityResult, counted, now time
 		return fmt.Sprintf("%.0f%%", 100*float64(c.IdleHourBytes)/float64(c.UsedBytes))
 	}
 	p("")
-	p("%-34s %10s %10s", "memory held by session VMs idle over an hour or closed, of the memory in use at memory refusals", share(dayRefused), share(refused))
+	p("%-34s %10s %10s", "memory held by session VMs idle over an hour or closed, of the memory in use at memory and stall refusals", share(dayRefused), share(refused))
 	wait := func(c protocol.ServerCapacityCount) string {
 		if c.Count == 0 {
 			return "-"

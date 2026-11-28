@@ -102,7 +102,7 @@ func MeasureMachine(serverPID int, dataDir string, minFree int64) MachineStatus 
 
 func (m *MachineStatus) setMemory(total, available uint64, err error) {
 	if err != nil {
-		m.MemoryError = err.Error()
+		m.MemoryError, m.MemoryTotalBytes, m.MemoryAvailableBytes, m.MemoryFloorBytes = err.Error(), 0, 0, 0
 		return
 	}
 	m.MemoryTotalBytes, m.MemoryAvailableBytes, m.MemoryFloorBytes = total, available, memoryFloor(total)
@@ -122,22 +122,22 @@ func (s *Scheduler) Machine(ctx context.Context) MachineStatus {
 	total, available, err := s.hostMemoryTotal()
 	m.MemoryError = ""
 	m.setMemory(total, available, err)
-	if m.DiskUnchecked = s.cfg.MinFreeBytes < 0; m.DiskUnchecked {
-		return m
-	}
+	m.DiskUnchecked = s.cfg.MinFreeBytes < 0
 	probeCtx, cancel := context.WithTimeout(ctx, capacityProbeTimeout)
 	defer cancel()
+	// Admission asks the runtime with the disk check off too, and refuses
+	// every launch while it cannot answer.
 	filesystems, _, err := s.measureCapacity(probeCtx)
-	if err != nil {
+	switch {
+	case err != nil:
 		m.DiskError = err.Error()
-	} else {
+	case !m.DiskUnchecked:
 		m.setFilesystems(filesystems, s.cfg.MinFreeBytes)
 	}
 	return m
 }
 
-// VMs counts the session VMs of open sessions by what they hold of the
-// host.
+// VMs counts the session VMs by what they hold of the host.
 func (s *Scheduler) VMs() domain.VMCounts {
 	frozen := map[runtime.ID]bool{}
 	if vms, ok := s.cfg.Runtime.(runtime.FreezeRuntime); ok {
@@ -149,10 +149,16 @@ func (s *Scheduler) VMs() domain.VMCounts {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, e := range s.runs {
-		if _, vm := s.saver(e.containerID); !vm || e.retained {
+		if _, vm := s.saver(e.containerID); !vm {
 			continue
 		}
 		switch {
+		case e.retained:
+			// A closed session's VM counts while it can still hold memory:
+			// running until the guard stops it, or asleep in memory.
+			if e.asleepSince.IsZero() || e.asleepResident {
+				c.Closed++
+			}
 		case e.asleepSince.IsZero() && frozen[e.containerID]:
 			c.Frozen++
 		case e.asleepSince.IsZero():

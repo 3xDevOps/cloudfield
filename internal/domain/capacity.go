@@ -65,16 +65,18 @@ type CapacityCount struct {
 	LastText  string
 }
 
-// VMCounts are the session VMs of open sessions by what they hold of the
-// host: awake (one a member paused too), awake and frozen by the memory
+// VMCounts are the session VMs by what they hold of the host. Of open
+// sessions: awake (one a member paused too), awake and frozen by the memory
 // brake, asleep and paused in memory, asleep and saved to disk, and asleep
-// with neither: stopped, or still being saved.
+// with neither: stopped, or still being saved. Closed are the VMs of closed
+// sessions that can still hold memory.
 type VMCounts struct {
 	Awake   int
 	Frozen  int
 	Paused  int
 	Saved   int
 	Stopped int
+	Closed  int
 }
 
 // SumCapacityCounts adds the hours of each counter together, in the order

@@ -57,7 +57,7 @@ func CapacityResult(m scheduler.MachineStatus, vms domain.VMCounts, hours []doma
 		StartMemoryBytes: m.StartMemoryBytes, MemoryError: m.MemoryError,
 		ServerStall: m.ServerStall, ServerStallLimit: m.ServerStallLimit, HostStall: m.HostStall, HostStallLimit: m.HostStallLimit, StallError: m.StallError,
 		Disks: []protocol.ServerCapacityDisk{}, StartDiskBytes: m.StartDiskBytes, DiskError: m.DiskError, DiskUnchecked: m.DiskUnchecked,
-		VMs: protocol.ServerCapacityVMs{Awake: vms.Awake, Frozen: vms.Frozen, Paused: vms.Paused, Saved: vms.Saved, Stopped: vms.Stopped},
+		VMs: protocol.ServerCapacityVMs{Awake: vms.Awake, Frozen: vms.Frozen, Paused: vms.Paused, Saved: vms.Saved, Stopped: vms.Stopped, Closed: vms.Closed},
 	}
 	for _, f := range m.Filesystems {
 		result.Disks = append(result.Disks, protocol.ServerCapacityDisk{Name: f.Name, TotalBytes: f.TotalBytes, FreeBytes: f.FreeBytes, ReserveBytes: f.ReserveBytes})

@@ -55,7 +55,7 @@ func TestServerCapacityReportsTheMachineAndWhatWasCounted(t *testing.T) {
 		StartDiskBytes: 1 << 30,
 	}
 	e := newScopedTestEnv(t, func(c *Config) {
-		c.Runs = machineRuns{RunController: c.Runs, status: status, vms: domain.VMCounts{Awake: 3, Frozen: 1, Paused: 2, Saved: 4, Stopped: 5}}
+		c.Runs = machineRuns{RunController: c.Runs, status: status, vms: domain.VMCounts{Awake: 3, Frozen: 1, Paused: 2, Saved: 4, Stopped: 5, Closed: 6}}
 	})
 	_, member := addMember(t, e, "Grace", domain.RoleCollaborator, false)
 	now := time.Now().UTC()
@@ -86,7 +86,7 @@ func TestServerCapacityReportsTheMachineAndWhatWasCounted(t *testing.T) {
 	got := read(e.member.ID)
 	if got.MemoryAvailableBytes != 1<<30 || got.MemoryFloorBytes != 3<<30 || got.ServerStall == nil || *got.ServerStall != 12.5 || got.HostStall != nil ||
 		got.StallError != "host pressure: unreadable" || len(got.Disks) != 1 || got.Disks[0].ReserveBytes != 5<<30 ||
-		got.VMs != (protocol.ServerCapacityVMs{Awake: 3, Frozen: 1, Paused: 2, Saved: 4, Stopped: 5}) {
+		got.VMs != (protocol.ServerCapacityVMs{Awake: 3, Frozen: 1, Paused: 2, Saved: 4, Stopped: 5, Closed: 6}) {
 		t.Fatalf("machine = %+v", got)
 	}
 	if last := got.LastLaunchRefusal; last == nil || last.RunID != "run-new" || last.Op != "launch-retry" || last.Text != "scheduler: insufficient host memory headroom: 1 available bytes" {
