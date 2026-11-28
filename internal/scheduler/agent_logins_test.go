@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -205,23 +204,32 @@ func TestSignInAddsTheLoginItSavedAndTouchesNoOtherLogin(t *testing.T) {
 	}
 }
 
-// A sign-in's result comes after the reconcile that follows it, so nothing
-// of the sign-in works on the store or the login directories once its
-// caller has heard. The reconcile here removes a directory no login row
-// names, slowly.
-func TestSignInResultWaitsForItsReconcile(t *testing.T) {
-	e := newSignInEnv(t)
-	if _, err := e.logins.Add(e.member.ID, "claude", "lgn-orphan0000"); err != nil {
+// signInWithSlowReconcile signs a login in for a member who has a login
+// directory no row names, which the reconcile after the sign-in removes. It
+// returns once that reconcile is removing the directory's volume, where it
+// stays until release is closed.
+func signInWithSlowReconcile(t *testing.T) (e *signInEnv, orphan string, release chan struct{}) {
+	t.Helper()
+	e = newSignInEnv(t)
+	orphan, err := e.logins.Add(e.member.ID, "claude", "lgn-orphan0000")
+	if err != nil {
 		t.Fatal(err)
 	}
-	var reconciled atomic.Bool
+	reconciling, release := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
 	e.rt.mu.Lock()
 	e.rt.removeVolumeHook = func() {
-		time.Sleep(100 * time.Millisecond)
-		reconciled.Store(true)
+		close(reconciling)
+		<-release
 	}
 	e.rt.mu.Unlock()
-	if _, _, err := e.signIn(t, "work", func(spec runtime.Spec) {
+	if _, _, err = e.signIn(t, "work", func(spec runtime.Spec) {
 		dir, pathErr := e.logins.Path(e.member.ID, "claude", domain.LoginID(strings.TrimPrefix(spec.Name, "aether-login-")))
 		if pathErr != nil {
 			t.Error(pathErr)
@@ -232,8 +240,47 @@ func TestSignInResultWaitsForItsReconcile(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if !reconciled.Load() {
-		t.Fatal("the sign-in's result came while its reconcile was still removing a login directory")
+	select {
+	case <-reconciling:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the sign-in's reconcile never reached the orphaned login")
+	}
+	return e, orphan, release
+}
+
+// A sign-in's result does not wait for the reconcile that follows it, which
+// still removes the member's login directories no row names.
+func TestSignInResultComesBeforeItsReconcile(t *testing.T) {
+	_, orphan, release := signInWithSlowReconcile(t)
+	if _, err := os.Lstat(orphan); err != nil {
+		t.Fatalf("the orphaned login directory while its reconcile is held: %v; want it there, the result having come first", err)
+	}
+	close(release)
+	waitFor(t, "the reconcile removing the orphaned login directory", func() bool {
+		_, err := os.Lstat(orphan)
+		return errors.Is(err, fs.ErrNotExist)
+	})
+}
+
+// Close waits for the reconcile a finished sign-in started, so nothing of
+// the sign-in works on the store once Close has returned.
+func TestCloseWaitsForAFinishedSignInsReconcile(t *testing.T) {
+	e, _, release := signInWithSlowReconcile(t)
+	closed := make(chan struct{})
+	go func() {
+		_ = e.sched.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Fatal("Close returned while the sign-in's reconcile was running")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close did not return once the reconcile ended")
 	}
 }
 
@@ -316,12 +363,13 @@ func TestAMemberWithoutAddedLoginsGetsNoRowOrFile(t *testing.T) {
 // stopped during, goes; one with a row stays.
 func TestReconcileRemovesOnlyLoginsWithoutARow(t *testing.T) {
 	e := newSignInEnv(t)
-	kept, _, err := e.signIn(t, "work", func(spec runtime.Spec) {
-		dir, _ := e.logins.Path(e.member.ID, "claude", domain.LoginID(strings.TrimPrefix(spec.Name, "aether-login-")))
-		writeHomeFile(t, dir, memberhome.LoginCredentials, addedLoginFile)
-		writeHomeFile(t, dir, memberhome.LoginConfig, cachedAccount("ada@work.example.test", "org-work"))
-	})
-	if err != nil {
+	// The kept login is added without a sign-in, whose own reconcile would
+	// run beside this test's.
+	const kept = domain.LoginID("lgn-kept000000")
+	if _, err := e.logins.Add(e.member.ID, "claude", kept); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.AddAgentLogin(t.Context(), domain.AgentLogin{MemberID: e.member.ID, Agent: "claude", ID: kept, Name: "work", CreatedAt: time.Now()}, ""); err != nil {
 		t.Fatal(err)
 	}
 	orphan, err := e.logins.Add(e.member.ID, "claude", "lgn-orphan0000")
