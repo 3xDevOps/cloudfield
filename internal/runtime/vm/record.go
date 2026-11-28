@@ -123,6 +123,9 @@ type record struct {
 	// the guest synced.
 	CacheRan    bool `json:"cache_ran,omitempty"`
 	CacheSynced bool `json:"cache_synced,omitempty"`
+	// CacheUnpublished keeps the cache disk out of its pool when the VM
+	// stops for good: it is a spare session's, which no member has used.
+	CacheUnpublished bool `json:"cache_unpublished,omitempty"`
 	// ExitCode is the last boot's until the next boot exits.
 	Exited   bool      `json:"exited,omitempty"`
 	ExitCode int       `json:"exit_code,omitempty"`

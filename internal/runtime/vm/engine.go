@@ -296,7 +296,8 @@ func (e *engine) create(ctx context.Context, key string, spec runtime.Spec, opts
 		WorkingDir: cmp.Or(spec.WorkingDir, base.Config.WorkingDir, "/"), Command: spec.Command, TTY: spec.TTY,
 		SetupScript: spec.SetupScript, SecretEnv: spec.SecretEnv, NestedDocker: spec.NestedDocker, Sudo: spec.Sudo,
 		CPUs: cpus, CPULimit: limit, MemoryMiB: memMiB, PidsLimit: spec.PidsLimit, Checkouts: shared, CheckoutDisks: disks, Mounts: spec.Mounts, Programs: spec.Programs, Net: index, Egress: spec.Egress,
-		NoSwap: opts.NoSwap, Lifetime: opts.Lifetime, OwnedDirs: opts.OwnedDirs, Serves: opts.Serves,
+		CacheUnpublished: spec.CacheUnpublished,
+		NoSwap:           opts.NoSwap, Lifetime: opts.Lifetime, OwnedDirs: opts.OwnedDirs, Serves: opts.Serves,
 	}
 	if opts.Browser {
 		if err = e.attachBrowser(ctx, rec); err != nil {

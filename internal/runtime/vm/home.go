@@ -59,9 +59,9 @@ func cachePool(m runtime.Mount) string {
 // becomes that newest first, so the member's next session starts from it:
 // it is linked under the key's lock, then copied and published in the
 // background. A save alone never retires, and an Isolated session's cache,
-// an overlay in a container, never goes back.
+// an overlay in a container, never goes back, nor does a spare session's.
 func (e *engine) retireCache(rec *record) {
-	if m, ok := cacheMount(rec.Mounts); ok && rec.CacheRan && rec.CacheSynced && m.Overlay == "" {
+	if m, ok := cacheMount(rec.Mounts); ok && rec.CacheRan && rec.CacheSynced && m.Overlay == "" && !rec.CacheUnpublished {
 		snapshot, err := e.cfg.Images.SnapshotCache(rec.Cache)
 		if err != nil {
 			slog.Warn("vm runtime: link the cache of a stopped VM", "vm", rec.Key, "error", err)

@@ -131,3 +131,75 @@ func TestAStoppedVMKeepsNoCacheDisk(t *testing.T) {
 		t.Errorf("restore a saved VM after a server start: %v", err)
 	}
 }
+
+// A spare session's VM never publishes its cache disk, however it stops for
+// good: no member has used it. Once a launch claims the session, the flag is
+// lifted and the cache is published as any session's.
+func TestAnUnpublishedCacheIsPromotedOnlyOncePublished(t *testing.T) {
+	h := newHarness(t)
+	h.images.promoted = make(chan string, 4)
+	cache := runtime.Mount{HostPath: "/data/cache/m1/runs", ContainerPath: "/aether-cache", Kind: runtime.MountCache}
+	promoted := func() string {
+		h.engine.promotions.Wait()
+		select {
+		case got := <-h.images.promoted:
+			return got
+		default:
+			return ""
+		}
+	}
+	spare := func(key string) {
+		spec := sessionSpec(key)
+		spec.Mounts, spec.CacheUnpublished = []runtime.Mount{cache}, true
+		h.createStarted(key, spec)
+	}
+
+	spare("run-stopped")
+	if err := h.engine.stop(t.Context(), "run-stopped", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if got := promoted(); got != "" {
+		t.Errorf("a stopped spare promoted %q", got)
+	}
+
+	spare("run-saved")
+	if err := h.engine.save(t.Context(), "run-saved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.engine.destroy(t.Context(), "run-saved"); err != nil {
+		t.Fatal(err)
+	}
+	if got := promoted(); got != "" {
+		t.Errorf("a saved spare that was deleted promoted %q", got)
+	}
+
+	h.createWithCheckoutDisk("run-lingering", cache)
+	rec, err := h.engine.load("run-lingering")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.CacheUnpublished = true
+	if err = h.engine.store(rec); err != nil {
+		t.Fatal(err)
+	}
+	if err = h.engine.stop(t.Context(), "run-lingering", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err = h.engine.destroy(t.Context(), "run-lingering"); err != nil {
+		t.Fatal(err)
+	}
+	if got := promoted(); got != "" {
+		t.Errorf("a lingering spare that was deleted promoted %q", got)
+	}
+
+	spare("run-claimed")
+	if err = h.engine.publishCache("run-claimed"); err != nil {
+		t.Fatal(err)
+	}
+	if err = h.engine.stop(t.Context(), "run-claimed", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := promoted(), cachePool(cache)+" cache.img.snapshot"; got != want {
+		t.Errorf("promoted %q once the cache was published, want %q", got, want)
+	}
+}

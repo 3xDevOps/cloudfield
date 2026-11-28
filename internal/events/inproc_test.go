@@ -658,3 +658,27 @@ func TestEphemeralEventsReachLiveSubscribersOnly(t *testing.T) {
 		}
 	}
 }
+
+// A spare session is unknown to everyone: nothing published about a hidden
+// run reaches a subscriber or the log, until it is shown.
+func TestAHiddenRunPublishesNothingUntilShown(t *testing.T) {
+	log := newTestLog(t)
+	b := newTestBus(t, log)
+	sub, err := b.Subscribe(context.Background(), SubscribeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Hide("run-spare")
+	publish(t, b, statusEvent("w1", "run-spare", domain.RunRunning))
+	seen := publish(t, b, statusEvent("w1", "run-other", domain.RunRunning))
+	b.Show("run-spare")
+	shown := publish(t, b, statusEvent("w1", "run-spare", domain.RunQueued))
+	got := collect(t, sub, 2)
+	if got[0].RunID != "run-other" || got[1].RunID != "run-spare" || got[1].Seq != shown.Seq || shown.Seq != seen.Seq+1 {
+		t.Fatalf("subscriber got %+v; want the other run's event, then the shown run's, with no sequence number spent on the hidden one", got)
+	}
+	logged, err := log.Read(context.Background(), Filter{}, 0, 0, 10)
+	if err != nil || len(logged) != 2 {
+		t.Fatalf("log holds %d events, %v; want the two that were published", len(logged), err)
+	}
+}
