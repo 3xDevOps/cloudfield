@@ -1,4 +1,4 @@
-import { clearLaunchDraft, launchDraftLinkStatusPending, readLaunchDraft } from '@/components/launch/draft'
+import { clearLaunchDraft, launchDraftLinkStatusPending, recoverLaunchDrafts } from '@/components/launch/draft'
 import { bareVersion } from '@/lib/format'
 import { compareVersions } from '@/lib/version'
 import type { ConnectionState } from '@/lib/stream'
@@ -256,9 +256,16 @@ export const createServerSlice: SliceCreator<ServerSlice> = (set) => {
       if (s.identityKey === identityKey) return { identityKey }
       const edgeLinked = Boolean(s.linkStatus?.edge_url)
       const linkStatusPending = s.capabilities === null || (s.capabilities.local?.includes('link.status') && !s.linkStatus)
-      const restored = readLaunchDraft(identityKey, !edgeLinked && !linkStatusPending)
       const storageError = edgeLinked ? clearLaunchDraft(identityKey) : null
-      const inMemoryDraft = s.identityKey === null ? s.launchDraft : null
+      const inMemory = {
+        launchDraft: s.identityKey === null ? s.launchDraft : null,
+        savedLaunchDrafts: s.identityKey === null ? s.savedLaunchDrafts : [],
+      }
+      const drafts = edgeLinked || linkStatusPending
+        ? { ...inMemory, launchDraftError: storageError
+            ? `Could not remove launch draft from this browser: ${storageError}`
+            : !edgeLinked ? launchDraftLinkStatusPending : null }
+        : recoverLaunchDrafts(identityKey, inMemory.launchDraft, inMemory.savedLaunchDrafts)
       const runViewMemory = s.savedRunViews[identityKey] ?? {}
       const saved = s.savedTiles[identityKey] ?? emptyTiles()
       const tiles = s.route.name === 'run' && s.route.params.runId
@@ -272,16 +279,13 @@ export const createServerSlice: SliceCreator<ServerSlice> = (set) => {
         savedTiles: { ...s.savedTiles, [identityKey]: tiles },
         paletteLaunchTask: '',
         paletteLaunchLinear: null,
-        launchDraft: inMemoryDraft ?? restored.draft,
-        launchDraftError: inMemoryDraft ? null : storageError
-          ? `Could not remove launch draft from this browser: ${storageError}`
-          : linkStatusPending ? launchDraftLinkStatusPending : restored.error,
+        ...drafts,
+        ...(s.paletteDialog === 'launch-drafts' && !drafts.savedLaunchDrafts.length ? { paletteDialog: null } : {}),
       }
     }),
     setCapabilities: (capabilities) => set((s) => {
       if (s.launchDraftError !== launchDraftLinkStatusPending || !s.identityKey || capabilities === null) return { capabilities }
       if (capabilities.local?.includes('link.status') && !s.linkStatus) return { capabilities }
-      if (s.paletteDialog === 'launch' || s.launchDraft) return { capabilities }
       if (s.linkStatus?.edge_url) {
         const error = clearLaunchDraft(s.identityKey)
         return {
@@ -289,8 +293,7 @@ export const createServerSlice: SliceCreator<ServerSlice> = (set) => {
           launchDraftError: error ? `Could not remove launch draft from this browser: ${error}` : null,
         }
       }
-      const restored = readLaunchDraft(s.identityKey)
-      return { capabilities, launchDraft: restored.draft, launchDraftError: restored.error }
+      return { capabilities, ...recoverLaunchDrafts(s.identityKey, s.launchDraft, s.savedLaunchDrafts) }
     }),
     setConnection: (connection) => set({ connection }),
     noteSeq: (seq) =>

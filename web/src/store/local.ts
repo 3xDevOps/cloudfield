@@ -4,7 +4,7 @@ import type {
   SyncSessionStatus,
   UpdateStatus,
 } from '@/lib/types'
-import { clearLaunchDraft, launchDraftLinkStatusPending, readLaunchDraft } from '@/components/launch/draft'
+import { clearLaunchDraft, launchDraftLinkStatusPending, recoverLaunchDrafts } from '@/components/launch/draft'
 import type { SliceCreator } from '@/store/slice'
 
 /**
@@ -71,9 +71,8 @@ export const createLocalSlice: SliceCreator<LocalSlice> = (set, get) => ({
       })
       return
     }
-    if (state.launchDraftError === launchDraftLinkStatusPending && state.identityKey && state.paletteDialog !== 'launch' && !state.launchDraft) {
-      const restored = readLaunchDraft(state.identityKey)
-      set({ linkStatus, launchDraft: restored.draft, launchDraftError: restored.error })
+    if (state.launchDraftError === launchDraftLinkStatusPending && state.identityKey && state.capabilities !== null) {
+      set({ linkStatus, ...recoverLaunchDrafts(state.identityKey, state.launchDraft, state.savedLaunchDrafts) })
       return
     }
     set({ linkStatus })

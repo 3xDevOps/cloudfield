@@ -2782,16 +2782,22 @@ in progress, the outside click slides the form away and leaves a resume
 arrow. The outside click still reaches the view behind the form. **Escape**
 also leaves the arrow, unless a picker handles Escape first. The arrow sits
 at the sidebar edge or, when the sidebar is hidden, the window edge. The arrow
-and **New session** restore the draft. **X** and **Cancel** discard the draft
-and keep saved launch defaults.
+and **New session** reopen the collapsed form.
+
+**X** and **Cancel** offer **Save draft** or **Delete draft**. **Save draft**
+closes the form and adds it to the chooser. When there is no collapsed form,
+**New session** opens the chooser if there are saved drafts. Continue or
+delete a draft from its row, or choose **Start new session** for a blank form.
+Continuing moves the draft back into the launch form. When there are no saved
+drafts, **New session** opens the form directly.
 
 The task and launch settings save on change in browser-local storage, scoped
 to the server and signed-in member. Refreshing or reopening the dashboard in
-the same browser profile restores a collapsed draft; another device, browser
+the same browser profile restores the collapsed form and saved drafts; another device, browser
 profile or the desktop app has separate storage. Edge-linked gateways keep
 the draft in memory only because another app could serve script from the
 gateway's loopback port. A read error is shown; the current form is kept in
-memory until the user starts a fresh draft. Clearing site data removes it. A
+memory until the user starts a fresh draft or explicitly saves it. Clearing site data removes it. A
 successful launch clears the draft; a failed launch keeps it. Collapsing
 during launch keeps the pending request, so reopening does not launch twice.
 Shared text waits while a draft exists rather than replacing it.

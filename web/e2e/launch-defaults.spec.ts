@@ -60,6 +60,7 @@ test('saved launch choices follow a member to every device, and each member keep
   await expect(dialog.getByText('Saved for every device.')).toBeVisible()
   if (shots) await bobDesktop.screenshot({ path: `${shots}/dialog-saved-desktop.png` })
   await dialog.getByRole('button', { name: 'Cancel' }).click()
+  await bobDesktop.getByRole('dialog', { name: 'Close new session?' }).getByRole('button', { name: 'Delete draft' }).click()
 
   const bobPhone = await contextPage(browser, phone, `${bob.url}&page=settings&id=saved-launch-defaults`)
   const accountSelect = bobPhone.getByRole('combobox', { name: 'Account' })

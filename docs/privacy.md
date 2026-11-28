@@ -50,17 +50,19 @@ request ([What an edge stores](#what-an-edge-stores)).
   preferences in origin-local `aether.ui` storage: they are separate for each
   server origin, including its port. Nothing reads them but the dashboard,
   and they last until you uninstall the app. Both are private to the app.
-- **The unfinished New session form**, in `localStorage` under
+- **New session drafts**, in `localStorage` under
   `aether.launch-draft.v1:<encoded identity>`. The identity includes the
   dashboard origin, server hostname and signed-in member. It holds the task,
   repository choices, agent, account and fallback choices, mode, model,
   effort, permission, subsession choice and resource limits. Changes save
-  immediately. X, Cancel, a successful launch or clicking outside the desktop
-  form with a blank task deletes the draft. Outside clicks with task text,
-  active dictation or a launch in progress keep it, as does Escape.
+  immediately in the open form. **X** and **Cancel** let you save or delete
+  the form. **New session** lets you continue or delete saved drafts. A
+  successful launch or an outside click on a blank desktop form clears the
+  current form. Outside clicks with task text, active dictation or a launch
+  in progress keep it, as does Escape.
   Edge-linked pages keep drafts in memory only because another app could serve
   script from the gateway's loopback port. Elsewhere, reopening the same dashboard in the
-  same browser profile restores it collapsed. It is not
+  same browser profile restores the collapsed form and saved drafts. Drafts are not
   synchronized to another browser, device or the desktop app. Clearing site
   data deletes it; private browsing usually deletes it when the private
   session ends. Storage errors are shown; the form still keeps its in-memory

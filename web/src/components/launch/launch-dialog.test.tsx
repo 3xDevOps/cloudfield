@@ -40,6 +40,7 @@ beforeEach(() => {
     paletteLaunchTask: '',
     paletteLaunchLinear: null,
     launchDraft: null,
+    savedLaunchDrafts: [],
     launchDraftError: null,
     linkStatus: null,
     identityKey: null,
@@ -82,6 +83,7 @@ describe('reopening', () => {
     render(<PaletteDialogs />)
     fireEvent.change(await screen.findByLabelText('Task'), { target: { value: 'first task' } })
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete draft' }))
     act(() => useStore.getState().openPaletteDialog('launch'))
     expect(((await screen.findAllByLabelText('Task')).at(-1) as HTMLTextAreaElement).value).toBe('')
     expect(screen.getAllByRole('dialog')).toHaveLength(1)
@@ -210,6 +212,7 @@ describe('saved launch draft', () => {
     await waitFor(() => expect(launchButton().disabled).toBe(false))
     setTask('discard me')
     await userEvent.click(screen.getByRole('button', { name }))
+    await userEvent.click(screen.getByRole('button', { name: 'Delete draft' }))
     await waitFor(() => expect(screen.queryByLabelText('Task')).toBeNull())
     expect(screen.queryByRole('button', { name: 'Resume new session draft' })).toBeNull()
     act(() => {
