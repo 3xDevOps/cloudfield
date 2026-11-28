@@ -921,13 +921,13 @@ func TestAVMSavedWhileItWorkedSurvivesLowDiskAndWakesOnceThereIsRoom(t *testing.
 	}
 
 	var free atomic.Uint64
-	free.Store(5 << 30)
+	free.Store(512 << 20)
 	setFreeBytes(e, &free)
 	e.sched.reclaimDisk(t.Context(), "")
 	mr.setAvailable(2*memoryFloor(32<<30) + 4<<30)
 	e.guard(t)
 	if !mr.isSaved(working) || !e.asleep(run) || e.memorySaved(run) != 3<<30 {
-		t.Fatalf("with the disk at its reserve: saved %v, asleep %v, mark %d; want the saved turn kept and marked",
+		t.Fatalf("with less disk free than a wake needs: saved %v, asleep %v, mark %d; want the saved turn kept and marked",
 			mr.isSaved(working), e.asleep(run), e.memorySaved(run))
 	}
 	free.Store(80 << 30)

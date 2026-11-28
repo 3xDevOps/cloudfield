@@ -103,6 +103,9 @@ func memoryFloor(total uint64) uint64 {
 // show as used yet.
 type memoryClaim struct {
 	bytes uint64
+	// wake starts a container whose disks exist, so it is not held to the
+	// disk reserve: refusing it would keep a saved VM's memory on disk.
+	wake bool
 	// vm is the saved VM a wake restores, which goes on loading its memory
 	// once the wake returns. held is the most of bytes it has held, grew is
 	// when that last rose, and released is set once the wake returned.
@@ -130,7 +133,8 @@ func (s *Scheduler) reserveCapacity(ctx context.Context) (func(), error) {
 }
 
 // reserveWake admits the wake of a sleeping container: a saved VM must fit
-// the memory its restore loads back.
+// the memory its restore loads back, and the disk needs startupDiskBytes
+// free but not the reserve.
 func (s *Scheduler) reserveWake(ctx context.Context, cid runtime.ID) (func(), error) {
 	return s.reserve(ctx, s.wakeClaim(cid))
 }
@@ -167,7 +171,7 @@ func (s *Scheduler) reserveBoot(ctx context.Context, cid runtime.ID) (func(), er
 // disk, or the most it may when that cannot be read, and no less than a
 // start.
 func (s *Scheduler) wakeClaim(cid runtime.ID) *memoryClaim {
-	claim := &memoryClaim{bytes: startupMemoryBytes}
+	claim := &memoryClaim{bytes: startupMemoryBytes, wake: true}
 	saver, ok := s.saver(cid)
 	if !ok {
 		return claim
@@ -319,6 +323,9 @@ func (s *Scheduler) tryReserveCapacity(ctx context.Context, claim *memoryClaim) 
 			return fmt.Errorf("%w: %s disk measurement is invalid", ErrCapacityUnknown, fs.Name)
 		}
 		floor := disk.Reserve(fs.TotalBytes, s.cfg.MinFreeBytes)
+		if claim.wake {
+			floor = 0
+		}
 		if !hasProvisioningHeadroom(fs.FreeBytes, floor, startupDiskBytes, s.capacityReservations) {
 			return fmt.Errorf("%w: %s has %d free bytes; reserve %d bytes plus %d bytes per provisioning (%d already in flight)",
 				ErrDiskFull, fs.Name, fs.FreeBytes, floor, startupDiskBytes, s.capacityReservations)
