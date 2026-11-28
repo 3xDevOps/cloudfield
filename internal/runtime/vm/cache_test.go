@@ -1,11 +1,13 @@
 package vm
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/3xDevOps/cloudfield/internal/guest"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
 
@@ -129,5 +131,76 @@ func TestAStoppedVMKeepsNoCacheDisk(t *testing.T) {
 	}
 	if err := next.restore(t.Context(), "run-saved"); err != nil {
 		t.Errorf("restore a saved VM after a server start: %v", err)
+	}
+}
+
+// A stop promotes a cache only when the guest counts other than it did
+// before the first boot on the disk, also when the VM was saved in between.
+// A guest that gives no count promotes as one whose cache grew.
+func TestAVMThatAddedNothingPromotesNoCache(t *testing.T) {
+	h := newHarness(t)
+	cache := runtime.Mount{HostPath: "/data/cache/m1/runs", ContainerPath: "/aether-cache", Kind: runtime.MountCache}
+	h.images.promoted = make(chan string, 8)
+	seed, grown := guest.CacheUse{FreeBlocks: 900, FreeInodes: 90}, guest.CacheUse{FreeBlocks: 800, FreeInodes: 90}
+	count := func(key string, use guest.CacheUse, err error) {
+		g := h.guest(key)
+		g.mu.Lock()
+		g.cacheUse, g.cacheUseErr = use, err
+		g.mu.Unlock()
+	}
+	session := func(key string) {
+		count(key, seed, nil)
+		spec := sessionSpec(key)
+		spec.Mounts = []runtime.Mount{cache}
+		h.createStarted(key, spec)
+	}
+	stopped := func(key string) int {
+		t.Helper()
+		if err := h.engine.stop(t.Context(), key, time.Second); err != nil {
+			t.Fatal(err)
+		}
+		h.engine.promotions.Wait()
+		n := len(h.images.promoted)
+		for range n {
+			<-h.images.promoted
+		}
+		return n
+	}
+
+	session("run-idle")
+	if n := stopped("run-idle"); n != 0 {
+		t.Errorf("a session that added nothing to its cache promoted it %d times", n)
+	}
+	if got, _ := filepath.Glob(h.engine.path("run-idle", cacheDisk+"*")); len(got) != 0 {
+		t.Errorf("a stopped VM that promoted nothing still holds %v", got)
+	}
+	// Started again it is on a new disk, which it counts anew.
+	count("run-idle", grown, nil)
+	if err := h.engine.start(t.Context(), "run-idle"); err != nil {
+		t.Fatal(err)
+	}
+	if n := stopped("run-idle"); n != 0 {
+		t.Errorf("a session started again on a new disk, which it left as it found, promoted it %d times", n)
+	}
+
+	session("run-grew")
+	count("run-grew", grown, nil)
+	if n := stopped("run-grew"); n != 1 {
+		t.Errorf("a session that added to its cache promoted it %d times, want once", n)
+	}
+
+	session("run-saved")
+	count("run-saved", grown, nil)
+	if err := h.engine.save(t.Context(), "run-saved"); err != nil {
+		t.Fatal(err)
+	}
+	if n := stopped("run-saved"); n != 1 {
+		t.Errorf("a session saved after it added to its cache, then stopped, promoted it %d times, want once", n)
+	}
+
+	session("run-mute")
+	count("run-mute", guest.CacheUse{}, errors.New("unimplemented"))
+	if n := stopped("run-mute"); n != 1 {
+		t.Errorf("a session whose guest gives no count promoted its cache %d times, want once", n)
 	}
 }
