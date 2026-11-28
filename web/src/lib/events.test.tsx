@@ -34,6 +34,19 @@ describe('event words', () => {
     expect(words('workspace.room_message', { ...note, resolution: 'done' }, alice.id)).toBe(`${alice.display_name} completed a note`)
     expect(words('workspace.room_message', { ...note, resolution: 'deleted' }, alice.id)).toBe(`${alice.display_name} deleted a note`)
   })
+
+  it('names both logins when a session moves between logins, and nothing new between default logins', () => {
+    expect(words('run.account', { account_member_id: alice.id, previous_account_member_id: bob.id }))
+      .toBe(`Moved from your account to ${alice.display_name}'s account`)
+    expect(words('run.account', { account_member_id: alice.id, previous_account_member_id: bob.id, login: 'default', previous_login: 'default' }))
+      .toBe(`Moved from your account to ${alice.display_name}'s account`)
+    expect(words('run.account', { account_member_id: bob.id, previous_account_member_id: bob.id, login: 'lgn-console0001', previous_login: '', login_name: 'console', previous_login_name: '', per_use: true }))
+      .toBe('Moved from login default to login consolePer use · yoursBilled per use to your account, login console')
+    expect(words('run.account', { account_member_id: alice.id, previous_account_member_id: alice.id, login: 'lgn-console0001', previous_login: '', login_name: 'console', previous_login_name: '', per_use: true }))
+      .toBe(`Moved from login default to login consolePer use · ${alice.display_name}'sBilled per use to ${alice.display_name}'s account, login console`)
+    expect(words('run.account', { account_member_id: alice.id, previous_account_member_id: bob.id, login: 'lgn-work0000001', previous_login: '', login_name: 'work', previous_login_name: '' }))
+      .toBe(`Moved from your account, login default to ${alice.display_name}'s account, login work`)
+  })
 })
 
 describe('feed rows', () => {

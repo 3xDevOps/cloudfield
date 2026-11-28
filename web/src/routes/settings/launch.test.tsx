@@ -75,6 +75,14 @@ describe('saved launch defaults settings', () => {
     }))
   })
 
+  it('names a saved fallback of your own account alone your logins only, not a move to your own account', async () => {
+    show(['*'], { revision: 2, defaults: { agent: 'claude', fallback: { policy: 'ordered', order: [alice.id] } } })
+    const fallback = await screen.findByRole('combobox', { name: 'Fallback' })
+    await waitFor(() => expect(fallback.textContent).toBe('Your logins only'))
+    expect(screen.getByText(/^A Claude Code launch moves only/).textContent).toBe("A Claude Code launch moves only between your own logins, never to another account; any other agent's launch does not move. Change it in the launch dialog under Options, then Save as my default.")
+    expect(screen.queryByText(/moves to Your own account/)).toBeNull()
+  })
+
   it('starts over when a different member signs in', async () => {
     const user = userEvent.setup()
     const client = show()

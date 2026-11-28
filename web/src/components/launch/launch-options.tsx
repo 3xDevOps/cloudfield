@@ -8,6 +8,7 @@ import { accessLabel, asFallback, type Readiness, ReadinessText } from '@/compon
 import { limitsText, type LimitsDraft, parseLimits, RunLimitsFields } from '@/components/launch/run-limits'
 import { AgentsError, offersAgents, SubsessionAgents } from '@/components/launch/subsession-agents'
 import type { ChildSettings, Member, RunLimits, Workspace } from '@/lib/types'
+import { cn } from '@/lib/utils'
 
 /** `order` stays null, the server's automatic order, until the reader reorders or unticks an account. */
 export type Fallback = { off: boolean; order: string[] | null; excluded: string[] }
@@ -24,18 +25,27 @@ function ticked(fallback: Fallback, id: string): boolean {
   return !fallback.excluded.includes(id) && (!fallback.order || fallback.order.includes(id))
 }
 
-export function fallbackParams(fallback: Fallback, accounts: Member[], skip: string): { fallback_account_member_ids?: string[]; no_fallback?: boolean } {
+/** `logins`: the launch is on an account with several logins, which a session still moves between with every other account unticked. */
+export function fallbackParams(fallback: Fallback, accounts: Member[], skip: string, logins = false): { fallback_account_member_ids?: string[]; no_fallback?: boolean } {
   if (fallback.off) return { no_fallback: true }
   if (!fallback.order) return {}
   const ids = candidates(fallback, accounts, skip).filter((id) => ticked(fallback, id))
-  // An empty list reads as automatic on the server, so unticking every account means off.
-  return ids.length ? { fallback_account_member_ids: ids } : { no_fallback: true }
+  if (ids.length) return { fallback_account_member_ids: ids }
+  // An empty list reads as automatic on the server; the launch account alone reads as its own logins only.
+  return logins ? { fallback_account_member_ids: [skip] } : { no_fallback: true }
+}
+
+/** Whether `fallback` names `account` alone: with several logins on that account, its own logins only; else Off. */
+export function ownLoginsOnly(fallback: Fallback, accounts: Member[], account: string): boolean {
+  const ids = fallbackParams(fallback, accounts, account, true).fallback_account_member_ids
+  return ids?.length === 1 && ids[0] === account
 }
 
 export function FallbackOptions({
   accounts,
   ownAccountID,
   account,
+  logins = false,
   fallback,
   onFallback,
   status,
@@ -43,13 +53,20 @@ export function FallbackOptions({
   accounts: Member[]
   ownAccountID: string
   account: string
+  /**
+   * The launch is on the member's own account and it has several logins, which a session also moves between. The dialog's
+   * move switch then holds whether it moves at all, and this holds only the other accounts' order, or nothing.
+   */
+  logins?: boolean
   fallback: Fallback
   onFallback: (fallback: Fallback) => void
   status: (member: Member) => Readiness | null
 }) {
   const ids = candidates(fallback, accounts, account)
   const owner = accounts.find((member) => member.id === account)?.display_name ?? account
-  const params = fallbackParams(fallback, accounts, account)
+  const params = fallbackParams(fallback, accounts, account, logins)
+  const ownOnly = ownLoginsOnly(fallback, accounts, account)
+  const target = fallback.order ? 'the first ticked account, top to bottom, with usage left' : 'the ticked account with the most usage left'
   // Editing the shown list keeps the hidden launch account's place and tick
   // (last, ticked, coming from automatic), and leaves every account it did
   // not show ticked unticked.
@@ -70,22 +87,39 @@ export function FallbackOptions({
     const next = ordered(ids)
     onFallback({ ...fallback, order: next.order, excluded: on ? next.excluded.filter((other) => other !== id) : [...next.excluded, id] })
   }
+  if (logins && (ids.length === 0 || params.no_fallback)) return null
   return (
     <Collapsible>
       <CollapsibleTrigger>
-        <span className="shrink-0 font-medium">Fallback</span>
-        <span className="shrink-0 text-muted">· {params.no_fallback ? 'Off' : params.fallback_account_member_ids ? 'Ordered' : 'Automatic'} · if</span>
-        <span className="min-w-0 truncate text-muted">{owner}</span>
-        <span className="shrink-0 text-muted">runs out</span>
+        {logins ? (
+          <>
+            {/* "after your logins" never breaks: shut, it is the one place that says the member's logins come first. */}
+            <span className="min-w-0">
+              <span className="font-medium">Fallback accounts</span>{' '}
+              <span className="text-muted">
+                · {ownOnly ? <>None · <span className="whitespace-nowrap">your logins only</span></> : <>{params.fallback_account_member_ids ? 'In your order' : 'Most usage left first'} · <span className="whitespace-nowrap">after your logins</span></>}
+              </span>
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="shrink-0 font-medium">Fallback</span>
+            <span className="shrink-0 text-muted">· {params.no_fallback ? 'Off' : params.fallback_account_member_ids ? 'Ordered' : 'Automatic'} · if</span>
+            <span className="min-w-0 truncate text-muted">{owner}</span>
+            <span className="shrink-0 text-muted">runs out</span>
+          </>
+        )}
       </CollapsibleTrigger>
       <CollapsibleContent className="flex flex-col gap-1 pt-2 pl-5">
-        <label className="flex min-h-7 cursor-pointer items-center gap-2 text-ui coarse:min-h-11">
-          <Checkbox checked={!fallback.off} onCheckedChange={(on) => onFallback({ ...fallback, off: on !== true })} />
-          Fall back to another account
-        </label>
+        {!logins && (
+          <label className="flex min-h-7 cursor-pointer items-center gap-2 text-ui coarse:min-h-11">
+            <Checkbox checked={!fallback.off} onCheckedChange={(on) => onFallback({ ...fallback, off: on !== true })} />
+            Fall back to another account
+          </label>
+        )}
         {!fallback.off && (
           <>
-            <ul aria-label="Fallback accounts" className="flex flex-col pl-6">
+            {ids.length > 0 && <ul aria-label="Fallback accounts" className={cn('flex flex-col', !logins && 'pl-6')}>
               {ids.map((id, index) => {
                 const member = accounts.find((item) => item.id === id)
                 const name = member?.display_name ?? id
@@ -110,9 +144,11 @@ export function FallbackOptions({
                   </li>
                 )
               })}
-            </ul>
+            </ul>}
             <p className="text-ui-sm text-muted">
-              If {owner}&apos;s usage is 95% or more at launch, or the vendor reports the limit mid-session, the session moves to {fallback.order ? 'the first ticked account, top to bottom, with usage left' : 'the ticked account with the most usage left'}.
+              {logins
+                ? `If a login's usage is 95% or more at launch, or the vendor reports its limit mid-session, the session moves to the first other automatic login in your order with usage left${ownOnly ? '' : `, then to ${target}`}.`
+                : `If ${owner}'s usage is 95% or more at launch, or the vendor reports the limit mid-session, the session moves to ${target}.`}
             </p>
           </>
         )}

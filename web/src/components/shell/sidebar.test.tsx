@@ -422,6 +422,29 @@ describe('run rows', () => {
       }
     })
 
+    it('names the account in the details only for a server with logins or a run that carries one', () => {
+      vi.useFakeTimers()
+      try {
+        seed({ account_member_id: bob.id, requested_account_member_id: alice.id })
+        const view = render(<AppShell />)
+        const shownDetails = () => {
+          fireEvent.pointerMove(row())
+          act(() => {
+            vi.advanceTimersByTime(400)
+          })
+          return within(details()!)
+        }
+        expect(shownDetails().queryByText('Account')).toBeNull()
+        view.unmount()
+
+        useStore.setState((s) => ({ info: s.info && { ...s.info, features: ['logins'] } }))
+        render(<AppShell />)
+        expect(shownDetails().getByText('Account').nextElementSibling?.textContent).toBe("On Bob's account (fallback)")
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
     it('lists seven lines of people at most in the details, after the control line, and counts the rest', () => {
       vi.useFakeTimers()
       try {

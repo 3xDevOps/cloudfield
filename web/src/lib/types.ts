@@ -213,6 +213,12 @@ export interface Run {
   account_member_id?: string
   /** The account the launcher chose, present only when usage fallback moved the run to `account_member_id`. */
   requested_account_member_id?: string
+  /** The account's login the run is on; empty or `default` is the default login. */
+  account_login?: string
+  /** That login's name; empty for the default login. */
+  account_login_name?: string
+  /** The run is on a login billed per use: a Console login, or a default login kept as an API key or a Console profile or signed in by `~/.claude/settings.json`. */
+  account_login_per_use?: boolean
   /** The run's fallback order; absent means automatic, or a server too old to say. */
   fallback_account_member_ids?: string[]
   no_fallback?: boolean
@@ -388,6 +394,25 @@ export interface AccountAccess {
   /** Members the caller has allowed to use their account. */
   shared_with: Member[]
 }
+
+/** One of the member's own logins of an agent, from agent.login.list. Only Claude Code has added logins. */
+export interface AgentLogin {
+  /** `default`, the login in the member's home, or an added login's `lgn-…` id. */
+  id: string
+  name: string
+  /** `api_key` is the default login's only; absent when no login is found. */
+  kind?: 'subscription' | 'console' | 'api_key'
+  plan?: string
+  email?: string
+  organization_id?: string
+  organization_name?: string
+  /** Billed per use: a Console login, or a default login kept as an API key. */
+  per_use?: boolean
+  automatic: boolean
+  /** Whether the owner's account shares reach this login. */
+  shared: boolean
+  position: number
+}
 export type UsageProviderName = 'claude' | 'codex'
 
 export type UsageProviderStatus =
@@ -419,6 +444,7 @@ export interface UsageProvider {
 /** account.usage: read-only subscription quota measurements. */
 export interface UsageResult {
   account_member_id: string
+  login?: string
   providers: UsageProvider[]
 }
 
@@ -1034,6 +1060,14 @@ export interface RunAccountPayload {
   account_member_id: string
   previous_account_member_id: string
   requested_account_member_id?: string
+  /** Login ids; empty or `default` is the default login. */
+  login?: string
+  previous_login?: string
+  /** Login names; empty for the default login. */
+  login_name?: string
+  previous_login_name?: string
+  /** The login that now pays is billed per use. */
+  per_use?: boolean
 }
 /** Null means the run was restored. */
 export interface RunArchivedPayload {
@@ -1691,6 +1725,15 @@ export interface MergeMember {
   runs: number
   schedules: number
   settings: MergeSettings
+  /** The member's added logins; absent from a server without them. */
+  logins?: MergeLogin[]
+}
+
+/** An added login a merge moves: the absorbed member's go to the survivor. */
+export interface MergeLogin {
+  agent: string
+  id: string
+  name: string
 }
 
 /** Keeping `keep_settings_of`'s settings absorbs `absorbed_id` and

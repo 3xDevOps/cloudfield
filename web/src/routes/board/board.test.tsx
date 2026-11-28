@@ -358,6 +358,25 @@ describe('Needs you actions', () => {
     expect(composer.getByRole('textbox')).toHaveProperty('value', 'hello')
   })
 
+  it('keeps the draft and shows the reason when the server does not send a reply', async () => {
+    seed([stopped])
+    const moving = 'ptyhost: no terminal for session: scheduler: the session is moving to another account or login; send the message when it finishes'
+    vi.mocked(api.runInject).mockResolvedValueOnce({
+      message: roomMessage({ kind: 'steer_request', state: 'not_sent', failure: { code: 'session_unavailable', message: moving } }),
+      receipt: 'not_sent',
+    })
+    renderBoard()
+
+    fireEvent.click(cardOf('waiting on you').getByRole('button', { name: 'Reply' }))
+    const composer = within(await screen.findByRole('dialog'))
+    await userEvent.type(composer.getByRole('textbox'), 'hello')
+    fireEvent.click(composer.getByRole('button', { name: 'Send' }))
+
+    expect(await composer.findByRole('alert')).toHaveProperty('textContent', `Message not sent: ${moving}`)
+    expect(composer.getByRole('textbox')).toHaveProperty('value', 'hello')
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
   it('keeps an open reply and its draft while its group starts and stops virtualizing', async () => {
     sizedViewport(600, 100)
     const others = Array.from({ length: virtualizeAbove - 1 }, (_, i) => run({ ...stopped, id: `run_wait_${i}`, task: `ask ${i}` }))

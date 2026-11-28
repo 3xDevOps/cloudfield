@@ -72,7 +72,8 @@ function OpenInStandard({ run, switchable, nav }: { run: RunRecord; switchable: 
       }
       // The run's owner keeps the account they chose, its fallback and its
       // child-run setting; a teammate's launch runs on their own, as any
-      // launch of theirs does.
+      // launch of theirs does. The run does not say whether its login was
+      // named or chosen, so the replacement names none.
       const own = run.member_id === useStore.getState().info?.member.id
       const account = run.requested_account_member_id ?? run.account_member_id
       const extras = run.repos?.filter((repo) => !repo.primary).map((repo) => repo.workspace_id) ?? []

@@ -246,8 +246,10 @@ describe('needs you conditions', () => {
     expect(needsYou(broken, stateContext())?.id).toBe('needs-input')
   })
 
-  it("shows why a session on a revoked account stopped", () => {
-    const reason = "account share revoked: Alice revoked access to their account; the session is on Bob's account and its conversation could not be restored: resume failed"
+  it.each([
+    "account share revoked: Alice revoked access to their account; the session is on Bob's account and its conversation could not be restored: resume failed",
+    'login share revoked: Alice turned use for shares off for login work; no other account can run claude',
+  ])('shows why a session on a revoked account or login stopped: %s', (reason) => {
     const parked = record({ status: 'needs-attention', state: 'needs-you', reason })
     expect(needsYou(parked, stateContext())?.id).toBe('needs-input')
     expect(presentRun(parked, stateContext()).reason).not.toBe('Open the session to see its request')

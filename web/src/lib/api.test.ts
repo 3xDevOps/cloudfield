@@ -173,3 +173,39 @@ describe('linear methods', () => {
     expect(fetchSpy.mock.calls[2][1]?.body).toBe(JSON.stringify({ team: 'ENG', query: 'x' }))
   })
 })
+
+describe('Claude Code login methods', () => {
+  beforeEach(() => {
+    window.sessionStorage.setItem('aether.token', 'tok_logins')
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    window.sessionStorage.clear()
+  })
+
+  it('posts each agent.login method with the server\'s field names and opens the sign-in terminal by login id', async () => {
+    const fetchSpy = fakeFetch({ agent: 'claude', logins: [], login_id: 'lgn-new00000001' })
+    vi.stubGlobal('fetch', fetchSpy)
+
+    await api.agentLoginList('claude')
+    await api.agentLoginAdd('claude', 'work')
+    await api.agentLoginResult('claude', 'lgn-new00000001')
+    await api.agentLoginRename('claude', 'lgn-new00000001', 'office')
+    await api.agentLoginRemove('claude', 'lgn-new00000001')
+    await api.agentLoginOrder('claude', ['lgn-new00000001', 'default'])
+    await api.agentLoginAutomatic('claude', 'default', false)
+    await api.agentLoginShare('claude', 'default', false)
+
+    expect(fetchSpy.mock.calls.map(([path, init]) => [path, JSON.parse(init?.body as string)])).toEqual([
+      ['/api/v1/agent.login.list', { agent: 'claude' }],
+      ['/api/v1/agent.login.add', { agent: 'claude', name: 'work' }],
+      ['/api/v1/agent.login.result', { agent: 'claude', login_id: 'lgn-new00000001' }],
+      ['/api/v1/agent.login.rename', { agent: 'claude', login_id: 'lgn-new00000001', name: 'office' }],
+      ['/api/v1/agent.login.remove', { agent: 'claude', login_id: 'lgn-new00000001' }],
+      ['/api/v1/agent.login.order', { agent: 'claude', login_ids: ['lgn-new00000001', 'default'] }],
+      ['/api/v1/agent.login.automatic', { agent: 'claude', login_id: 'default', automatic: false }],
+      ['/api/v1/agent.login.share', { agent: 'claude', login_id: 'default', shared: false }],
+    ])
+    expect(api.agentLoginSocket('lgn-new00000001')).toContain('/ws/terminal?agent_login=lgn-new00000001&token=tok_logins')
+  })
+})

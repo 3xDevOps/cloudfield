@@ -1,5 +1,7 @@
-import { type ComponentProps, useRef, useState } from 'react'
+import { type ComponentProps, useEffect, useRef, useState } from 'react'
 import { AddAgent } from '@/components/agents/add-agent'
+import { AddLogin } from '@/components/agents/add-login'
+import { LoginList, loginAgent, useAgentLogins } from '@/components/agents/agent-logins'
 import { defaultMode, enhancedSupported, label } from '@/components/agents/agent-copy'
 import { AgentExtras } from '@/components/agents/agent-extras'
 import { AgentList } from '@/components/agents/agent-list'
@@ -19,18 +21,21 @@ import { PageBody } from '@/components/ui/page-body'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ViewHeader } from '@/components/view-header'
 import { api, type Api } from '@/lib/api'
+import { message } from '@/lib/format'
 import { useDelayed } from '@/lib/hooks'
 import { cn } from '@/lib/utils'
-import type { AgentInfo, GitHubConnectResult, LaunchMode } from '@/lib/types'
+import type { AgentInfo, GitHubConnectResult, LaunchMode, Member } from '@/lib/types'
 import { useAgentList } from '@/routes/agents/use-agents'
 import { GitHubConnect } from '@/routes/onboarding/github-connect'
 import { registerRoute, type RouteProps } from '@/routes/registry'
 import { useStore } from '@/store'
 import { rememberChoice, rememberedChoice, useLaunchDefaults, useLaunchDefaultsRead } from '@/store/launch-defaults'
-import { useCapability } from '@/store/hooks'
+import { useCapability, useLoginsServer } from '@/store/hooks'
+import { noteLoginSignInOpened, rememberLoginSignIn, useLoginSignIn, useLoginSignInWait } from '@/store/login-sign-in'
 
 const addScreen = '@add'
 const githubScreen = '@github'
+const loginScreen = '@login'
 
 function DefaultMode({ agent }: { agent: AgentInfo }) {
   const saved = useLaunchDefaults((s) => s.result)
@@ -53,9 +58,19 @@ function DefaultMode({ agent }: { agent: AgentInfo }) {
   )
 }
 
-function AgentRows({ agents, ...actions }: { agents: AgentInfo[] } & Pick<ComponentProps<typeof AgentList>, 'onSetUp' | 'onRun' | 'onRemove' | 'returnFocusTo'>) {
+function AgentRows({ agents, onAddLogin, ...actions }: { agents: AgentInfo[]; onAddLogin?: () => void } & Pick<ComponentProps<typeof AgentList>, 'onSetUp' | 'onRun' | 'onRemove' | 'returnFocusTo' | 'below' | 'logins'>) {
   const list = (shown: AgentInfo[], label?: string) => (
-    <AgentList agents={shown} label={label} extra={(agent) => agent.installed === true && <DefaultMode agent={agent} />} {...actions} />
+    <AgentList
+      agents={shown}
+      label={label}
+      extra={(agent) => agent.installed === true && (
+        <>
+          <DefaultMode agent={agent} />
+          {agent.name === loginAgent && onAddLogin && <Button size="sm" variant="secondary" onClick={onAddLogin}>Add login</Button>}
+        </>
+      )}
+      {...actions}
+    />
   )
   const installed = agents.filter((agent) => agent.installed === true)
   const more = agents.filter((agent) => agent.installed !== true)
@@ -102,6 +117,39 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
   const [compare, setCompare] = useState(false)
   const [removing, setRemoving] = useState<AgentInfo | null>(null)
   const addButton = useRef<HTMLButtonElement>(null)
+  const claudeInstalled = agents?.some((agent) => agent.name === loginAgent && agent.installed === true) ?? false
+  const loginsServer = useLoginsServer()
+  const identity = useStore((s) => s.identityKey)
+  const logins = useAgentLogins(client, claudeInstalled && loginsServer)
+  // The server keeps a lone default login's row while a switch is off, and lists it so it can be turned back on.
+  const listed = (logins.logins?.length ?? 0) > 1 || (logins.logins?.some((login) => !login.automatic || !login.shared) ?? false)
+  // Turning that lone row's switch back on drops it on the server; it stays until the page is left, so the switch is not pulled from under the pointer.
+  const [keptLone, setKeptLone] = useState<string | null | undefined>(undefined)
+  if (listed && logins.logins?.length === 1 && keptLone !== identity) setKeptLone(identity)
+  const shown = listed || keptLone === identity
+  const [shared, setShared] = useState<{ identity: string | null; members: Member[] | null; error: string | null }>({ identity: null, members: null, error: null })
+  const wantShared = shown || screen === loginScreen
+  useEffect(() => {
+    if (!wantShared) return
+    let live = true
+    const at = useStore.getState().identityKey
+    client.accountList().then(
+      (access) => live && setShared({ identity: at, members: access.shared_with, error: null }),
+      (err: unknown) => live && setShared({ identity: at, members: null, error: message(err) }),
+    )
+    return () => { live = false }
+  }, [client, wantShared, identity])
+  const sharedWith = shared.identity === identity ? shared : { members: null, error: null }
+  const signIn = useLoginSignIn((s) => s.running)
+  const signInEnded = useLoginSignIn((s) => s.ended)
+  const [resume, setResume] = useState(false)
+  useLoginSignInWait(client, loginAgent, () => void logins.reload(), loginsServer)
+  // A server that stops keeping logins takes the panel with it, and every agent.login.* call.
+  if (screen === loginScreen && !loginsServer) setScreen('')
+  const addLogin = (again: boolean) => {
+    setResume(again)
+    setScreen(loginScreen)
+  }
   const loading = useDelayed(agents === null && error === null)
   const canSetUp = caps.hasMethod('agent.install') || caps.hasWS('terminal')
   const settingUp = agents?.find((agent) => agent.name === screen)
@@ -135,7 +183,9 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <PageBody width="lg" className="gap-6">
-          {screen === githubScreen ? (
+          {screen === loginScreen ? (
+            <AddLogin key={identity} client={client} sharedWith={sharedWith.members} logins={logins.logins} onChanged={logins.reload} running={signIn} ended={signInEnded} resume={resume} onRunning={rememberLoginSignIn} onOpened={noteLoginSignInOpened} onClose={() => { void logins.reload(); close() }} />
+          ) : screen === githubScreen ? (
             <GitHubConnect client={client} caps={caps} onConnected={setGithub} onClose={close} />
           ) : screen === addScreen ? (
             <AddAgent client={client} onAdded={(agent) => { reload(); openSetup(agent.name) }} onCancel={close} />
@@ -163,6 +213,24 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
                   onSetUp={canSetUp ? (agent) => openSetup(agent.name) : undefined}
                   onRun={caps.hasMethod('run.launch') ? run : undefined}
                   onRemove={caps.hasMethod('agent.remove') ? setRemoving : undefined}
+                  onAddLogin={logins.logins && caps.hasWS('terminal') ? () => addLogin(false) : undefined}
+                  logins={(agent) => (agent.name === loginAgent ? logins.logins ?? undefined : undefined)}
+                  below={(agent) => agent.name === loginAgent && (
+                    <>
+                      {signIn && loginsServer && (
+                        <p className="flex basis-full flex-wrap items-center gap-x-2 gap-y-1 text-ui-sm text-muted sm:pl-11">
+                          <span>Sign-in for <span className="font-code">{signIn.name}</span> is still running.</span>
+                          <Button size="sm" variant="secondary" onClick={() => addLogin(true)}>Return to the sign-in</Button>
+                        </p>
+                      )}
+                      {logins.error && (
+                        <Callout tone="failed" role="alert" className="basis-full" actions={<Button size="sm" variant="secondary" onClick={logins.reload}>Retry</Button>}>
+                          Logins not read: <span className="font-code">{logins.error}</span>
+                        </Callout>
+                      )}
+                      {shown && logins.logins && <LoginList key={identity} logins={logins.logins} sharedWith={sharedWith.members} sharedError={sharedWith.error} client={client} onChanged={logins.reload} />}
+                    </>
+                  )}
                   returnFocusTo={returnFocusTo}
                 />
               )}

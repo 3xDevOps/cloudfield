@@ -1,4 +1,4 @@
-import type { Run, RunInputRequest, RunReviewPayload, RunStatus, RunStatusPayload } from '@/lib/types'
+import type { Run, RunAccountPayload, RunInputRequest, RunReviewPayload, RunStatus, RunStatusPayload } from '@/lib/types'
 import { nextActivity, type AgentPayload, type ToolActivity } from '@/store/activity'
 import type { SliceCreator } from '@/store/slice'
 import { closeRun, tilesAfter } from '@/store/tiles'
@@ -14,7 +14,11 @@ export type RunRecord = Omit<Run, 'status_changed_at'> & {
   stateChangedAtPredicted?: boolean
   /** Client-side only: what the agent did last, from `run.agent` events. */
   toolActivity?: ToolActivity
+  /** Client-side only: the `status_seq` held when a `run.account` event last set the account fields. */
+  accountSeq?: number
 }
+
+const accountFields = ['account_member_id', 'requested_account_member_id', 'account_login', 'account_login_name', 'account_login_per_use', 'accountSeq'] as const
 
 export function toRecord(snapshot: Run, previous?: RunRecord): RunRecord {
   // A snapshot read before an applied status event must not undo what that event set.
@@ -126,7 +130,7 @@ export interface RunsSlice {
   applyRunEffort: (runID: string, effort: string) => void
   applyRunProtected: (runID: string, isProtected: boolean) => void
   applyRunController: (runID: string, memberID: string, lastMemberID?: string) => void
-  applyRunAccount: (runID: string, accountID: string, requestedID?: string) => void
+  applyRunAccount: (runID: string, p: RunAccountPayload) => void
   applyRunArchived: (
     runID: string,
     archivedAt: string | null,
@@ -156,6 +160,11 @@ export const createRunsSlice: SliceCreator<RunsSlice> = (set) => ({
       // A late route/launch snapshot must not resurrect a resolved request.
       const next = toRecord(run, current)
       next.pending_inputs = isTerminal(next.status) ? [] : current?.pending_inputs ?? run.pending_inputs
+      // A move bumps no sequence, so a snapshot read before an applied run.account
+      // event can be told only by a status change since; until then the event stands.
+      if (current?.accountSeq !== undefined && run.status_seq <= current.accountSeq) {
+        for (const field of accountFields) Object.assign(next, { [field]: current[field] })
+      }
       return { runs: { ...s.runs, [run.id]: next } }
     }),
   removeRun: (runID) =>
@@ -318,14 +327,22 @@ export const createRunsSlice: SliceCreator<RunsSlice> = (set) => ({
         },
       }
     }),
-  applyRunAccount: (runID, accountID, requestedID) =>
+  applyRunAccount: (runID, p) =>
     set((s) => {
       const current = s.runs[runID]
       if (!current) return {}
       return {
         runs: {
           ...s.runs,
-          [runID]: { ...current, account_member_id: accountID, requested_account_member_id: requestedID },
+          [runID]: {
+            ...current,
+            account_member_id: p.account_member_id,
+            requested_account_member_id: p.requested_account_member_id,
+            account_login: p.login,
+            account_login_name: p.login_name,
+            account_login_per_use: p.per_use,
+            accountSeq: current.status_seq,
+          },
         },
       }
     }),

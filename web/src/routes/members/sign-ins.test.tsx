@@ -5,7 +5,7 @@ import type { MemberMerge, MergeMember, MergePlan, MergeProposal, MergeSettings 
 import { ProfileDialog } from '@/routes/members/personal'
 import { ProposeForm, SignInsSection } from '@/routes/members/sign-ins'
 import { useStore } from '@/store'
-import { alice, bob, fakeApi, serverInfo, workspace } from '@/test/fixtures'
+import { agentInfo, alice, bob, fakeApi, serverInfo, workspace } from '@/test/fixtures'
 
 const settings = (display_name: string, extra: Partial<MergeSettings> = {}): MergeSettings => ({
   display_name,
@@ -136,13 +136,70 @@ describe('propose a merge', () => {
     expect(discarded()).toEqual(['Display name Alice on GitHub', 'Colour #e6194b', 'Git name Alice G', 'Agent account shared with Bob'])
     expect(merge.disabled).toBe(true)
     fireEvent.click(screen.getByRole('radio', { name: 'Alice on GitHub (the other sign-in)' }))
-    expect(discarded()).toEqual(['Display name Alice', 'Colour #e6194b', 'Saved environment image aether/mem_alice:saved', 'Home on the server (agent logins, files) and git signing key, archived on the server'])
+    expect(discarded()).toEqual(['Display name Alice', 'Colour #e6194b', 'Saved environment image aether/mem_alice:saved', 'Home on the server (default agent logins, files) and git signing key, archived on the server'])
     fireEvent.click(screen.getByRole('checkbox', { name: 'Discard the listed settings' }))
     expect(merge.disabled).toBe(false)
     fireEvent.click(merge)
 
     await waitFor(() => expect(onProposed).toHaveBeenCalledWith(proposal))
     expect(client.memberMergePropose).toHaveBeenCalledWith({ code: 'ABCD-EFGH', keep_settings_of: minted.id, plan_digest: 'digest-1', discard_ack: true })
+  })
+
+  it("lists the absorbed member's added logins as they arrive, off for shares and renamed where the survivor has the name", () => {
+    seed()
+    useStore.setState({ agentList: { identity: null, agents: [agentInfo({ name: 'claude', display_name: 'Claude Code' })] } })
+    const long = 'a'.repeat(32)
+    const withLogins: MergePlan = {
+      ...plan,
+      minted: { ...minted, logins: [
+        { agent: 'claude', id: 'lgn-gh000000001', name: 'work' },
+        { agent: 'claude', id: 'lgn-gh000000002', name: 'spare' },
+        { agent: 'claude', id: 'lgn-gh000000003', name: long },
+      ] },
+      proposer: { ...proposer, logins: [
+        { agent: 'claude', id: 'lgn-al000000001', name: 'work' },
+        { agent: 'claude', id: 'lgn-al000000002', name: 'work-2' },
+        { agent: 'claude', id: 'lgn-al000000003', name: long },
+      ] },
+    }
+    render(<ProposeForm client={fakeApi()} self={alice} code="C" plan={withLogins} onProposed={() => {}} onRefused={() => {}} />)
+    expect(within(within(screen.getByRole('region', { name: 'The other sign-in' })).getByRole('list', { name: 'Added logins' })).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      'work · Claude Code · lgn-gh000000001',
+      'spare · Claude Code · lgn-gh000000002',
+      `${long} · Claude Code · lgn-gh000000003`,
+    ])
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Alice (this sign-in)' }))
+    expect(screen.queryByText(/default logins are archived/)).toBeNull()
+    expect(screen.getByText(/added logins move to/).textContent).toBe("Alice on GitHub's added logins move to Alice, each off for shares until Alice turns Use for shares on. If Alice already has a login with the same name, the moved login is renamed <name>-2, or the next free number:")
+    expect(within(screen.getByRole('list', { name: 'Logins that move' })).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      'Claude Code login work, renamed work-3: Alice has a login named work',
+      'Claude Code login spare',
+      `Claude Code login ${long}, renamed ${'a'.repeat(30)}-2: Alice has a login named ${long}`,
+    ])
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Alice on GitHub (the other sign-in)' }))
+    expect(screen.getByText(/default logins are archived/).textContent).toBe("Alice's default logins are archived with its home; no session uses them after the merge.")
+    expect(within(screen.getByRole('list', { name: 'Logins that move' })).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      'Claude Code login work, renamed work-2: Alice on GitHub has a login named work',
+      'Claude Code login work-2, renamed work-2-2: Alice on GitHub has a login named work-2',
+      `Claude Code login ${long}, renamed ${'a'.repeat(30)}-2: Alice on GitHub has a login named ${long}`,
+    ])
+  })
+
+  it('says nothing of logins in a plan from a server without them, though it archives a home', () => {
+    seed()
+    render(<ProposeForm client={fakeApi()} self={alice} code="C" plan={plan} onProposed={() => {}} onRefused={() => {}} />)
+    fireEvent.click(screen.getByRole('radio', { name: 'Alice on GitHub (the other sign-in)' }))
+    expect(discarded()).toContain('Home on the server (default agent logins, files) and git signing key, archived on the server')
+    expect(screen.queryByText(/default logins are archived/)).toBeNull()
+  })
+
+  it('says nothing of logins when the absorbed member has none', () => {
+    seed()
+    render(<ProposeForm client={fakeApi()} self={alice} code="C" plan={plan} onProposed={() => {}} onRefused={() => {}} />)
+    fireEvent.click(screen.getByRole('radio', { name: 'Alice (this sign-in)' }))
+    expect(screen.queryByRole('list', { name: 'Logins that move' })).toBeNull()
   })
 
   it('states the resulting role and offers keeping admin to the admin side only', () => {

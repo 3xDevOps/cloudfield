@@ -17,7 +17,7 @@ describe('the header state of a launched Enhanced session', () => {
 
   it('reads Starting until its agent runs', () => {
     act(() => useStore.getState().acpAck('run_1', { ...ack, live: false, starting: true }))
-    render(<StateLine run={record} agentName="Claude Code" narrow={false} controls />)
+    render(<StateLine run={record} agentName="Claude Code" narrow={false} compact={false} squeeze={false} controls />)
     expect(screen.getByRole('status').textContent).toBe('Starting')
     expect(screen.getByRole('status').parentElement!.title).toMatch(/^Starting since .* A message you send now is delivered when the agent is ready\./)
 
@@ -27,7 +27,7 @@ describe('the header state of a launched Enhanced session', () => {
 
   it('drops a Starting its closed stream can no longer correct', () => {
     act(() => useStore.getState().acpAck('run_1', { ...ack, live: false, starting: true }))
-    render(<StateLine run={record} agentName="Claude Code" narrow={false} controls />)
+    render(<StateLine run={record} agentName="Claude Code" narrow={false} compact={false} squeeze={false} controls />)
     act(() => useStore.getState().acpStream('run_1', 'connecting'))
     expect(screen.getByRole('status').textContent).toBe('Running')
   })

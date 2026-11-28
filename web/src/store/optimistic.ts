@@ -32,8 +32,12 @@ export type Outcome<T> =
  * within <bound>". Neither says whether the server committed; `data.refusal`
  * marks only the edge-path refusals among them, so the text stays the test. */
 export function refusedByServer(cause: unknown): boolean {
-  return cause instanceof ApiError && cause.code !== undefined && !cause.data?.refusal &&
-    !/(server|network) unreachable: |server did not answer /.test(cause.message)
+  return cause instanceof ApiError && cause.code !== undefined && !cause.data?.refusal && !unanswered(cause)
+}
+
+/** The local gateway's own answer for a call the server did not answer, which says nothing of whether it ran. */
+export function unanswered(cause: ApiError): boolean {
+  return /(server|network) unreachable: |server did not answer /.test(cause.message)
 }
 
 /** Each mutation's first answered result; once one attempt is answered, no attempt of it reverts. */
