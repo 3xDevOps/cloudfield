@@ -16,6 +16,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/codexapp"
 	"github.com/3xDevOps/cloudfield/internal/codexapp/codexmock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/events"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
 
@@ -86,12 +87,15 @@ func dialed(t *testing.T, srv *codexmock.Server, n int) {
 	waitFor(t, "the client to connect", func() bool { return len(srv.Requests("thread/loaded/list")) >= n })
 }
 
-func newCodexEnv(t *testing.T) (*testEnv, *codexRuntime, *fakeCoordinator) {
+func newCodexEnv(t *testing.T, opts ...func(*Config)) (*testEnv, *codexRuntime, *fakeCoordinator) {
 	t.Helper()
 	rt := &codexRuntime{fakeRuntime: newFakeRuntime(), servers: make(map[runtime.ID]*codexmock.Server)}
 	e := newTestEnv(t, func(cfg *Config) {
 		cfg.ServerBinary = fakeServerBinary(t, "#!/bin/sh\necho aether\n")
 		cfg.Runtime = rt
+		for _, opt := range opts {
+			opt(cfg)
+		}
 	})
 	e.rt = rt.fakeRuntime
 	coord, _ := withCoordination(t, e)
@@ -511,6 +515,137 @@ func TestStandardCodexWithoutItsAppServerShowsWhy(t *testing.T) {
 	if len(e.pty.injects) != 1 || e.pty.injects[0].message != "hello" {
 		t.Fatalf("terminal injects = %+v, want the message typed into the terminal", e.pty.injects)
 	}
+}
+
+func TestInterruptStopsAStandardCodexTurnAndTypesNoKeyElsewhere(t *testing.T) {
+	t.Parallel()
+	e, rt, _ := newCodexEnv(t)
+	run, _ := e.launchOn(t, "codex")
+	srv, _ := rt.bridge(t, 1)
+	dialed(t, srv, 1)
+	srv.StartThread("thread-1", false, "")
+	waitFor(t, "the connected client", func() bool { return e.sched.Wakeable(run.ID) })
+	if _, err := e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "add a test"}, false, nil); err != nil {
+		t.Fatalf("Inject: %v", err)
+	}
+	e.waitStoreStatus(t, run.ID, domain.RunRunning)
+	sub := e.subscribe(t)
+	if err := e.interrupt(t, run); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	if ev := waitTimelineEvent(t, sub, run.ID, events.TimelineNote); ev.ActorID != e.member.ID || ev.Payload.(events.TimelinePayload).Message != "sent an interrupt" {
+		t.Fatalf("timeline note = %+v, want the interrupt recorded with who sent it", ev)
+	}
+	interrupts := srv.Requests("turn/interrupt")
+	if len(interrupts) != 1 || string(interrupts[0]) != `{"threadId":"thread-1","turnId":"turn-1"}` {
+		t.Fatalf("turn/interrupt = %s, want one for turn-1 of thread-1", interrupts)
+	}
+	e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
+
+	other, _ := e.launchOn(t, "claude")
+	err := e.interrupt(t, other)
+	if !errors.Is(err, ErrNoInterrupt) || !strings.Contains(err.Error(), "cloudfield attach "+string(other.ID)) {
+		t.Fatalf("Interrupt of a Standard Claude Code session = %v, want ErrNoInterrupt naming cloudfield attach", err)
+	}
+	e.pty.mu.Lock()
+	defer e.pty.mu.Unlock()
+	if len(e.pty.injects) != 0 {
+		t.Fatalf("terminal injects = %+v, want no key typed into a terminal", e.pty.injects)
+	}
+}
+
+func TestInterruptOfAStandardCodexSessionItCannotReachGivesTheRealReason(t *testing.T) {
+	t.Parallel()
+	e, rt, _ := newCodexEnv(t)
+	rt.startErr = errors.New("no such container")
+	run, _ := e.launchOn(t, "codex")
+	e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
+	sub := e.subscribe(t)
+	if err := e.interrupt(t, run); !errors.Is(err, ErrAppServerUnavailable) {
+		t.Fatalf("Interrupt with no app-server client = %v, want ErrAppServerUnavailable", err)
+	}
+	if err := e.sched.Pause(t.Context(), run.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.interrupt(t, run); !errors.Is(err, ErrInvalidTransition) || !strings.Contains(err.Error(), "the session is paused") {
+		t.Fatalf("Interrupt of a paused session = %v, want it refused as paused", err)
+	}
+	e.sched.mu.Lock()
+	e.sched.runs[run.ID].asleepSince = time.Now().UTC()
+	e.sched.mu.Unlock()
+	if err := e.interrupt(t, run); err != nil {
+		t.Fatalf("Interrupt of a sleeping session = %v, want no turn to stop", err)
+	}
+	e.sched.mu.Lock()
+	e.sched.runs[run.ID].memorySaved = 1
+	e.sched.mu.Unlock()
+	if err := e.interrupt(t, run); !errors.Is(err, ErrInvalidTransition) || !strings.Contains(err.Error(), "cloudfield resume "+string(run.ID)) {
+		t.Fatalf("Interrupt of a session saved while it worked = %v, want it refused naming cloudfield resume", err)
+	}
+	e.sched.mu.Lock()
+	e.sched.runs[run.ID].memorySaved, e.sched.runs[run.ID].activity = 0, domain.ActivityWorking
+	e.sched.mu.Unlock()
+	if err := e.interrupt(t, run); !errors.Is(err, ErrInvalidTransition) || !strings.Contains(err.Error(), "cloudfield resume "+string(run.ID)) {
+		t.Fatalf("Interrupt of a working session whose failed wake dropped the guard's mark = %v, want it refused naming cloudfield resume", err)
+	}
+	for _, status := range []domain.RunStatus{domain.RunProvisioning, domain.RunCompleted} {
+		gone := *run
+		gone.Status = status
+		if err := e.interrupt(t, &gone); !errors.Is(err, ErrNoLiveEnvironment) || !strings.Contains(err.Error(), "the session is "+string(status)) {
+			t.Fatalf("Interrupt of a %s session = %v, want ErrNoLiveEnvironment naming its status", status, err)
+		}
+	}
+	marker, err := e.bus.Publish(t.Context(), events.Event{
+		WorkspaceID: e.ws.ID, RunID: run.ID,
+		Payload: events.TimelinePayload{Kind: events.TimelineNote, Message: "end of interrupts"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded := 0
+	for ev := waitTimelineEvent(t, sub, run.ID, events.TimelineNote); ev.ID != marker.ID; ev = waitTimelineEvent(t, sub, run.ID, events.TimelineNote) {
+		if ev.Payload.(events.TimelinePayload).Message == "sent an interrupt" {
+			recorded++
+		}
+	}
+	if recorded != 1 {
+		t.Fatalf("interrupts on the timeline = %d, want only the one that was not refused", recorded)
+	}
+}
+
+func TestInterruptOfAStandardCodexVMTheMemoryBrakeFrozeIsRefusedUnasked(t *testing.T) {
+	t.Parallel()
+	fr := &frozenVMs{}
+	e, rt, _ := newCodexEnv(t, func(cfg *Config) {
+		cfg.Runtime = struct {
+			*codexRuntime
+			*frozenVMs
+		}{cfg.Runtime.(*codexRuntime), fr}
+		cfg.hostMemory = func() (total, available uint64, err error) { return 32 << 30, 24 << 30, nil }
+	})
+	run, c := e.launchOn(t, "codex")
+	srv, _ := rt.bridge(t, 1)
+	dialed(t, srv, 1)
+	srv.StartThread("thread-1", false, "")
+	waitFor(t, "the connected client", func() bool { return e.sched.Wakeable(run.ID) })
+	fr.mu.Lock()
+	fr.frozen = []runtime.ID{c.id}
+	fr.mu.Unlock()
+	if err := e.interrupt(t, run); !errors.Is(err, ErrInvalidTransition) || !strings.Contains(err.Error(), "froze the session's VM") {
+		t.Fatalf("Interrupt of a session whose VM the memory brake froze = %v, want it refused as frozen", err)
+	}
+	if asked := srv.Requests("thread/turns/list"); len(asked) != 0 {
+		t.Fatalf("requests to the frozen app-server = %s, want none", asked)
+	}
+}
+
+func (e *testEnv) interrupt(t *testing.T, run *domain.Run) error {
+	t.Helper()
+	stopped, err := e.sched.Interrupt(t.Context(), run, e.member.ID)
+	if err != nil {
+		return err
+	}
+	return stopped()
 }
 
 func promptTexts(t *testing.T, params []json.RawMessage) []string {

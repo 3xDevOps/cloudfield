@@ -17,7 +17,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/version"
 )
 
-// sendTimeout bounds a message's turn request once it is sent.
+// sendTimeout bounds a turn request once it is sent.
 const sendTimeout = 15 * time.Second
 
 // Status is what the app-server reports of the terminal's thread.
@@ -193,7 +193,7 @@ func (c *Client) send(ctx context.Context, text string, steer bool) error {
 	if thread == "" {
 		return errors.New("codex app-server: the terminal has not opened a thread yet")
 	}
-	turn := c.runningTurn(ctx, thread)
+	turn, _ := c.runningTurn(ctx, thread)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -218,9 +218,39 @@ func (c *Client) send(ctx context.Context, text string, steer bool) error {
 	return nil
 }
 
+// Interrupt asks the app-server to stop the running turn of the terminal's
+// thread, and does nothing when none runs. stopped waits for the answer,
+// which Codex gives only once the turn has stopped.
+func (c *Client) Interrupt(ctx context.Context) (stopped func() error, err error) {
+	// A frozen app-server answers nothing, and a running one never answers
+	// an interrupt that reaches its turn after the turn ended.
+	ctx, cancel := context.WithTimeout(ctx, sendTimeout)
+	thread := c.Thread()
+	turn, err := c.runningTurn(ctx, thread)
+	if turn == "" {
+		defer cancel()
+		if err != nil && (c.Busy() || ctx.Err() != nil) {
+			return nil, fmt.Errorf("codex app-server: find the turn to interrupt: %w", err)
+		}
+		return func() error { return nil }, nil
+	}
+	answer := make(chan error, 1)
+	go func() {
+		defer cancel()
+		_, sendErr := acp.SendRequest[json.RawMessage](c.conn, ctx, "turn/interrupt", map[string]any{"threadId": thread, "turnId": turn})
+		answer <- sendErr
+	}()
+	return func() error {
+		if sendErr := <-answer; sendErr != nil && c.Busy() {
+			return fmt.Errorf("codex app-server: interrupt the turn: %w", sendErr)
+		}
+		return nil
+	}, nil
+}
+
 // runningTurn is empty when the thread has no turn in progress, or none yet:
 // the app-server lists no turns before the first message.
-func (c *Client) runningTurn(ctx context.Context, thread string) string {
+func (c *Client) runningTurn(ctx context.Context, thread string) (string, error) {
 	turns, err := acp.SendRequest[struct {
 		Data []struct {
 			ID     string `json:"id"`
@@ -228,9 +258,9 @@ func (c *Client) runningTurn(ctx context.Context, thread string) string {
 		} `json:"data"`
 	}](c.conn, ctx, "thread/turns/list", map[string]any{"threadId": thread, "limit": 1, "itemsView": "notLoaded"})
 	if err != nil || len(turns.Data) == 0 || turns.Data[0].Status != "inProgress" {
-		return ""
+		return "", err
 	}
-	return turns.Data[0].ID
+	return turns.Data[0].ID, nil
 }
 
 // LastMessage is the last agent message of thread's last turn, empty unless

@@ -142,7 +142,7 @@ func (s *Scheduler) Relaunch(ctx context.Context, run domain.RunID, actor domain
 			}
 		}
 		if asleep && !reserved {
-			release, capErr := s.reserveWake(ctx, cid)
+			release, capErr := s.reserveWake(ctx, run, cid)
 			if capErr != nil {
 				return nil, capErr
 			}

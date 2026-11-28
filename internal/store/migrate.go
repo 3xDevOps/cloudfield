@@ -2701,6 +2701,28 @@ ALTER TABLE run_account_segments ADD COLUMN account_login TEXT NOT NULL DEFAULT 
 ALTER TABLE run_children ADD COLUMN account_login TEXT NOT NULL DEFAULT '';
 ALTER TABLE runs ADD COLUMN account_login_per_use INTEGER NOT NULL DEFAULT 0;
 `,
+	// v118: what the server did for want of memory or disk, counted per
+	// hour and counter (store/capacity.go).
+	`
+CREATE TABLE capacity_counts (
+	hour               INTEGER NOT NULL,
+	kind               TEXT NOT NULL,
+	op                 TEXT NOT NULL,
+	cause              TEXT NOT NULL,
+	count              INTEGER NOT NULL,
+	available_bytes    INTEGER NOT NULL,
+	floor_bytes        INTEGER NOT NULL,
+	used_bytes         INTEGER NOT NULL,
+	idle_hour_bytes    INTEGER NOT NULL,
+	vm_bytes           INTEGER NOT NULL,
+	waited_seconds     INTEGER NOT NULL,
+	max_waited_seconds INTEGER NOT NULL,
+	last_at            INTEGER NOT NULL,
+	last_run           TEXT NOT NULL,
+	last_text          TEXT NOT NULL,
+	PRIMARY KEY (hour, kind, op, cause)
+) WITHOUT ROWID;
+`,
 }
 
 // existingDatabaseMigrations run after their version's migration, in the

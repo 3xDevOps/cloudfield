@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -38,6 +39,10 @@ type fakeRuns struct {
 	killed   []domain.RunID
 	closed   []domain.RunID
 	paused   map[domain.RunID]bool
+	// full is the capacity refusal every launch gets while set, and
+	// attempts counts the launches asked for.
+	full     error
+	attempts int
 	// childRefusal is what ChildLogin refuses with, when set.
 	childRefusal error
 	// payerReads counts LoginPayer's calls.
@@ -48,9 +53,26 @@ type fakeRuns struct {
 	perUse bool
 }
 
+var errNoRoom = errors.New("scheduler: insufficient host memory headroom")
+
+func (f *fakeRuns) tried() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.attempts
+}
+
+func (f *fakeRuns) CapacityRefused(err error) bool { return errors.Is(err, errNoRoom) }
+
 func (f *fakeRuns) LaunchWithOptions(ctx context.Context, ws domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode, opts domain.LaunchOptions) (*domain.Run, error) {
 	f.inflight.Add(1)
 	defer f.inflight.Add(-1)
+	f.mu.Lock()
+	f.attempts++
+	full := f.full
+	f.mu.Unlock()
+	if full != nil {
+		return nil, full
+	}
 	r := &domain.Run{ID: opts.ReservedRunID, WorkspaceID: ws, MemberID: member, AccountMemberID: account, Task: task, Harness: harness,
 		Mode: mode, Model: opts.Model, Status: domain.RunRunning, BaseCommit: opts.FromCommit}
 	if err := f.db.CreateRunWithID(ctx, r); err != nil {
@@ -337,7 +359,10 @@ func (h *harness) settle() {
 		if err != nil {
 			h.t.Fatal(err)
 		}
-		if len(launching) == 0 && h.runs.inflight.Load() == 0 {
+		h.svc.mu.Lock()
+		held := len(h.svc.inFlight)
+		h.svc.mu.Unlock()
+		if len(launching) == 0 && h.runs.inflight.Load() == 0 && held == 0 {
 			h.svc.reconcile(h.ctx)
 			return
 		}
@@ -1281,5 +1306,147 @@ func TestDispatchWhereAPayerSignsInStaysOnTheOwnersAccount(t *testing.T) {
 	h.svc.cfg.Usage = usageByLogin{domain.AccountOf(h.ada.ID): 100, domain.AccountOf(h.bob.ID): 10}
 	if got := h.options(parent.ID)["claude"]; got.Status != choiceExhausted {
 		t.Fatalf("claude on Ada's spent account = %s (%s); want exhausted, as its usage reads", got.Status, got.Detail)
+	}
+}
+
+// A subsession the server has no room for is not lost: it returns to the
+// queue with the refusal, its parent is told once, one waiting subsession
+// is tried again no sooner than capacityRetryEvery, and each starts when
+// there is room.
+func TestSubsessionWithNoRoomWaitsAndStartsLater(t *testing.T) {
+	h := newHarness(t)
+	h.enable(h.ada.ID, protocol.ChildSettingsParams{Enabled: on()})
+	parent, other := h.run(h.ada.ID, domain.LaunchACP, "parent"), h.run(h.ada.ID, domain.LaunchACP, "other parent")
+	refusal := fmt.Errorf("%w: 100 available bytes; reserve 200 bytes", errNoRoom)
+	h.runs.full = refusal
+	h.mail.db = h.db
+	first := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "first"})
+	h.settle()
+	second := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "second"})
+	h.settle()
+	third := h.mustStart(other.ID, protocol.ChildStartParams{Harness: "codex", Task: "third"})
+	h.settle()
+	h.settle()
+	child, err := h.db.GetChild(h.ctx, domain.RunID(first.RunID))
+	if err != nil || child.State != domain.ChildQueued || child.Error != refusal.Error() {
+		t.Fatalf("subsession with no room = %+v, %v; want it queued with the refusal", child, err)
+	}
+	if got := h.runs.tried(); got != 2 {
+		t.Fatalf("launch attempts inside the retry time = %d, want 2: the first one's and the other parent's, not its younger sibling's", got)
+	}
+	for _, m := range h.mail.sent {
+		if !strings.Contains(m.body, "is waiting to start") || !strings.Contains(m.body, refusal.Error()) {
+			t.Fatalf("notice = %+v, want only waiting notices with the refusal", m)
+		}
+	}
+	if len(h.mail.sent) != 2 {
+		t.Fatalf("waiting notices = %d, want one for each subsession tried", len(h.mail.sent))
+	}
+
+	// The next refusal names other figures; the parent is not told again,
+	// and only the oldest waiting subsession was tried.
+	h.runs.mu.Lock()
+	h.runs.full = fmt.Errorf("%w: 150 available bytes; reserve 200 bytes", errNoRoom)
+	h.runs.mu.Unlock()
+	h.now = h.now.Add(capacityRetryEvery)
+	h.settle()
+	h.settle()
+	if child, err = h.db.GetChild(h.ctx, domain.RunID(first.RunID)); err != nil || !strings.Contains(child.Error, "150 available") {
+		t.Fatalf("subsession refused again = %+v, %v; want the latest refusal", child, err)
+	}
+	if got := h.runs.tried(); got != 3 {
+		t.Fatalf("launch attempts after the retry time = %d, want 3: one more, for the oldest", got)
+	}
+	if len(h.mail.errs) != 0 || len(h.mail.sent) != 2 {
+		t.Fatalf("notices = %d, refused by the mailbox %v; want none sent twice", len(h.mail.sent), h.mail.errs)
+	}
+
+	// With room again, one start lets the next waiting one follow at once.
+	h.runs.mu.Lock()
+	h.runs.full = nil
+	h.runs.mu.Unlock()
+	h.now = h.now.Add(capacityRetryEvery)
+	// Each start lets the next one follow in a later pass.
+	for range 3 {
+		h.settle()
+	}
+	for _, id := range []string{first.RunID, second.RunID, third.RunID} {
+		child, err = h.db.GetChild(h.ctx, domain.RunID(id))
+		if err != nil || child.State != domain.ChildStarted || child.Error != "" {
+			t.Fatalf("subsession once there is room = %+v, %v; want it started with no error", child, err)
+		}
+	}
+	if len(h.runs.launched) != 3 {
+		t.Fatalf("started %d sessions, want 3", len(h.runs.launched))
+	}
+	// The second subsession never met a refusal of its own, so two waited.
+	counts, err := h.db.CapacityCounts(h.ctx, h.now.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	for _, c := range counts {
+		got[c.Kind+" "+c.Op+" "+c.Cause] += c.Count
+		if c.Kind == domain.CapacityWaitEnd && c.MaxWaited < capacityRetryEvery {
+			t.Fatalf("longest wait counted = %s, want at least a retry time", c.MaxWaited)
+		}
+	}
+	if want := map[string]int64{"wait subsession ": 2, "wait-end subsession started": 2}; !maps.Equal(got, want) {
+		t.Fatalf("counted waits = %v, want %v", got, want)
+	}
+}
+
+// After capacityWaitLimit a capacity refusal is final, as it was at once
+// before subsessions waited.
+func TestSubsessionWithNoRoomIsRefusedAfterADay(t *testing.T) {
+	h := newHarness(t)
+	h.enable(h.ada.ID, protocol.ChildSettingsParams{Enabled: on()})
+	parent := h.run(h.ada.ID, domain.LaunchACP, "parent")
+	h.runs.full = errNoRoom
+	c := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex"})
+	h.settle()
+	h.now = h.now.Add(capacityWaitLimit + time.Minute)
+	h.settle()
+	child, err := h.db.GetChild(h.ctx, domain.RunID(c.RunID))
+	if err != nil || child.State != domain.ChildRefused || child.Error != errNoRoom.Error() {
+		t.Fatalf("subsession with no room for a day = %+v, %v; want it refused with the last refusal", child, err)
+	}
+	if last := h.mail.sent[len(h.mail.sent)-1]; !strings.Contains(last.body, "did not start") {
+		t.Fatalf("last notice = %q, want the refusal", last.body)
+	}
+}
+
+// A reservation left launching with no launch holding it, as when the
+// database could not record how its attempt ended, returns to the queue
+// and starts.
+func TestReservationNoLaunchHoldsReturnsToTheQueue(t *testing.T) {
+	h := newHarness(t)
+	h.enable(h.ada.ID, protocol.ChildSettingsParams{Enabled: on()})
+	parent := h.run(h.ada.ID, domain.LaunchACP, "parent")
+	h.runs.full = errNoRoom
+	c := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex"})
+	h.settle()
+	launching := func() {
+		t.Helper()
+		if err := h.db.SetChildState(h.ctx, domain.RunID(c.RunID), domain.ChildLaunching, errNoRoom.Error(), domain.ChildQueued); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A restart returns it to the queue with the refusal it waited on.
+	launching()
+	if err := h.svc.recover(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if child, err := h.db.GetChild(h.ctx, domain.RunID(c.RunID)); err != nil || child.State != domain.ChildQueued || child.Error != errNoRoom.Error() {
+		t.Fatalf("reservation recovered after a restart = %+v, %v; want it queued with its refusal", child, err)
+	}
+	launching()
+	h.runs.mu.Lock()
+	h.runs.full = nil
+	h.runs.mu.Unlock()
+	h.now = h.now.Add(capacityRetryEvery)
+	h.settle()
+	if child, err := h.db.GetChild(h.ctx, domain.RunID(c.RunID)); err != nil || child.State != domain.ChildStarted {
+		t.Fatalf("reservation left launching = %+v, %v; want it started", child, err)
 	}
 }

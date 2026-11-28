@@ -1528,6 +1528,35 @@ export interface ServerEdge {
   owner: { provider: string; login: string } | null
   connected: boolean
   claimed: boolean
+  /** What the pinned edge key signed about edge_url; absent when it said nothing. */
+  notice?: EdgeNotice
+  /** What it signed about the edge-url a restart applies, when that address is leaving too. */
+  pending?: EdgePending
+}
+
+/** The edge-url the server's options file names for the next restart is itself retiring or retired. */
+export interface EdgePending {
+  state: 'retiring' | 'retired'
+  /** YYYY-MM-DD, text for people. */
+  date?: string
+  /** Super admins only: that edge-url, the address the edge names for it, and whether the notice came on first use. */
+  edge_url?: string
+  replacement?: string
+  first_use?: boolean
+}
+
+/** The server's edge address is retiring or retired; `replacement` is the address of the same edge to move to. */
+export interface EdgeNotice {
+  state: 'retiring' | 'retired'
+  replacement: string
+  /** YYYY-MM-DD, text for people. */
+  date?: string
+  /** Came with the connection that pinned the edge key: trusted on first use only. */
+  first_use?: boolean
+  /** The server's options file names another edge-url than edge_url: moved, not yet restarted. */
+  restart_pending?: boolean
+  /** Super admins only: that edge-url, canonical. */
+  moved_to?: string
 }
 
 /** server.edge.claimcode: a claim code bound to the calling admin. */
@@ -2312,6 +2341,21 @@ export interface Connector {
   scopes: string[]
   created_at: string
   last_used_at?: string
+  /** Set when the server's edge says the address of `resource` is retiring or retired. */
+  notice?: ConnectorNotice
+}
+
+/**
+ * What the server's edge says about the address a connector was added at:
+ * `retiring` still works, `retired` no longer does. `url` is the
+ * connector's path at the address the edge names instead, absent while
+ * the server does not take connectors there or the notice came with the
+ * edge's pin; `date`, YYYY-MM-DD, is text for people.
+ */
+export interface ConnectorNotice {
+  state: 'retiring' | 'retired'
+  url?: string
+  date?: string
 }
 
 /**
@@ -2320,7 +2364,8 @@ export interface Connector {
  * which differs from `url` until the member links a GitHub account;
  * `universal_urls` that URL at every address of the edge, `universal_url`
  * among them; `sign_in` means the consent page takes the edge sign-in,
- * no code.
+ * no code. `url` and `universal_url` avoid an address the edge names as
+ * retiring or retired when it takes connectors at the replacement.
  */
 export interface ConnectorList {
   connectors: Connector[]
