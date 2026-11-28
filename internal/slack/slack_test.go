@@ -188,6 +188,20 @@ func TestNeedWithoutButtons(t *testing.T) {
 	}
 }
 
+func TestStandardRequestPointsAtTheTerminal(t *testing.T) {
+	h := newHarness(t)
+	h.link()
+	run := h.newRun("Standard")
+	h.local.setItems(protocol.AttentionItem{Kind: protocol.AttentionKindQuestion, RunID: string(run.ID),
+		Request: &protocol.AttentionRequest{ID: "q1", Kind: protocol.AttentionKindQuestion}})
+
+	h.need(run, push.Need{Member: run.MemberID, Key: "k", Body: "Question: answer in the terminal", Answer: "q1"})
+	l := layoutOf(t, h.slack.waitPosts(1)[0])
+	if !strings.Contains(l.context, "Answer it in the session's terminal") || strings.Contains(l.context, "Reply in this thread") {
+		t.Fatalf("context = %q, want the terminal and no invitation to reply", l.context)
+	}
+}
+
 func TestAgentTextIsEscaped(t *testing.T) {
 	h := newHarness(t)
 	h.link()
@@ -229,6 +243,15 @@ func TestThreadReplyReachesRun(t *testing.T) {
 	posts = h.slack.posts()
 	if last := posts[len(posts)-1]; !strings.Contains(last.Text, "not linked") || len(h.local.calls(protocol.MethodRunInject)) != 1 {
 		t.Fatalf("unlinked user: reply %q, %d injects; want the not-linked message and no new inject", last.Text, len(h.local.calls(protocol.MethodRunInject)))
+	}
+
+	h.local.mu.Lock()
+	h.local.inject = `{"message":{"id":"m2","state":"not_sent","failure":{"code":"prompt_not_sent","message":"agent prompt was not sent: the agent is waiting for an answer in its terminal; answer it there, then send the message again"}}}`
+	h.local.mu.Unlock()
+	h.svc.handle(bg, eventEnvelope("e3", "Ev11", threadReply("U1", "use eu-west", ts)))
+	posts = h.slack.posts()
+	if last, want := posts[len(posts)-1], "The message is not sent: agent prompt was not sent: the agent is waiting for an answer in its terminal; answer it there, then send the message again."; last.Text != want {
+		t.Fatalf("refused reply = %q, want %q", last.Text, want)
 	}
 }
 

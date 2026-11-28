@@ -759,11 +759,15 @@ first: `{id, session_id: "aether-sudo", kind: "permission", title}`, where
 saved; a server restart ends the shim's wait. A report cannot open, close or
 replace one: the session ID and a `title` are refused.
 
-Repeated opens, closes, and unchanged replacements are idempotent. Turn
-completion, silence, prose, and idle execution do not clear outstanding input.
+Repeated opens, closes, and unchanged replacements are idempotent. Only an
+update clears outstanding input: a `waiting` state, silence, prose, and idle
+execution do not. Claude Code's reporter sends `replace` with `[]` when its
+main agent's turn ends with no background task it waits for: a dialog blocks
+the turn it opens in, so none is open then.
 The pending set is persisted independently from the last execution report and
 survives server restart for still-live sessions. Actual terminated or relaunched
-session lifetimes discard it; stale saved snapshots cannot restore a previous
+session lifetimes discard it, as does a move to another account, which starts
+a new agent; stale saved snapshots cannot restore a previous
 lifetime's requests. Persistence errors are returned to the reporter rather than
 announcing input state that was not saved.
 
@@ -1098,7 +1102,8 @@ or `unsupported_image`; each change publishes `workspace.room_message`
 A message the server could not hand to the agent at all is `not_sent` with
 `failure.message` the real error and `failure.code`: `session_unavailable`
 (no running agent, or a mode switch in flight), `prompt_not_sent` (such as a
-sleeping session that failed to wake), `unsupported_image`,
+sleeping session that failed to wake, or a Standard session with a request its
+agent reported still in `pending_inputs`), `unsupported_image`,
 `session_protected`, `steer_denied` or `access_revoked` (the sender lost
 **Steer** or membership before delivery), or `control_changed` (the session's
 control lease changed before delivery).

@@ -45,8 +45,20 @@ func (s *Service) dispatch(ctx context.Context) error {
 		}
 		for free := limits.MaxLive - counts.Busy; free > 0 && len(list) > 0; free-- {
 			c := list[0]
+			// The launch that queued it again has yet to end, or it waits
+			// for room and its attempt is not due. A younger one of its
+			// parent does not start ahead of it.
+			if s.held(c.RunID) || c.Error != "" && !s.retryDue() {
+				break
+			}
 			list = list[1:]
-			if err := s.cfg.Store.SetChildState(ctx, c.RunID, domain.ChildLaunching, "", domain.ChildQueued); err != nil {
+			s.setInFlight(c.RunID, true)
+			// A subsession tried again keeps the refusal it waits on in sight.
+			if err := s.cfg.Store.SetChildState(ctx, c.RunID, domain.ChildLaunching, c.Error, domain.ChildQueued); err != nil {
+				s.setInFlight(c.RunID, false)
+				if c.Error != "" {
+					s.retryNow()
+				}
 				if errors.Is(err, store.ErrConflict) {
 					free++
 					continue
@@ -54,6 +66,10 @@ func (s *Service) dispatch(ctx context.Context) error {
 				return err
 			}
 			go s.launch(ctx, c)
+			// Its younger siblings wait for how its attempt ends.
+			if c.Error != "" {
+				break
+			}
 		}
 	}
 	return nil
@@ -62,6 +78,15 @@ func (s *Service) dispatch(ctx context.Context) error {
 // launch re-admits a reserved child exactly as a run launch is admitted,
 // then hands it to the scheduler under its reserved ID.
 func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
+	defer s.setInFlight(c.RunID, false)
+	// An attempt that ended any other way than waiting again did not show
+	// the server full: the next one waiting is tried without the delay.
+	waits := false
+	defer func() {
+		if c.Error != "" && !waits {
+			s.retryNow()
+		}
+	}()
 	refuse := func(reason string) {
 		if err := s.cfg.Store.SetChildState(ctx, c.RunID, domain.ChildRefused, reason, domain.ChildLaunching); err != nil {
 			slog.Warn("subsessions: refuse subsession", "child", c.RunID, "error", err)
@@ -170,6 +195,7 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 	created := false
 	_, err = s.cfg.Runs.LaunchWithOptions(ctx, c.WorkspaceID, c.OwnerID, account, c.Task, c.Harness, c.Mode, domain.LaunchOptions{
 		Model: c.Model, Permission: parent.Permission, RequestedAccount: requested, AccountLogin: chosen.Login, Fallback: c.Fallback, ReservedRunID: c.RunID,
+		Retry:      c.Error != "",
 		FromCommit: c.BaseCommit, FromBranch: c.BaseBranch, ExtraWorkspaces: workspaces[1:], Admitted: unlock,
 		LinearIssueURL: cmp.Or(linear.FindIssueURL(c.Task), parent.LinearIssueURL),
 		Created: func(domain.RunID) {
@@ -180,11 +206,97 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 		},
 	})
 	if err != nil && !created {
+		// Queued again before the lock goes, so a cancel behind it finds
+		// the subsession in the queue.
+		waits = s.cfg.Runs.CapacityRefused(err) && s.cfg.Now().Sub(c.CreatedAt) < capacityWaitLimit && s.wait(ctx, c, err.Error())
 		unlock()
+		if waits {
+			s.toldWaiting(ctx, c, err.Error())
+			return
+		}
 		refuse(err.Error())
 		return
 	}
 	s.Kick()
+}
+
+const (
+	// capacityRetryEvery is the least time between two attempts to start
+	// any subsession the server had no room for: each attempt may reclaim
+	// disk or save idle VMs under the launch lock.
+	capacityRetryEvery = 30 * time.Second
+	// capacityWaitLimit is how long after it was asked for a subsession
+	// still waits for room; after it a capacity refusal is final.
+	capacityWaitLimit = 24 * time.Hour
+)
+
+// wait returns a subsession the server had no room for to the queue, to be
+// tried again after capacityRetryEvery, and reports whether it did.
+func (s *Service) wait(ctx context.Context, c *domain.ChildReservation, reason string) bool {
+	s.mu.Lock()
+	s.retryAt = s.cfg.Now().Add(capacityRetryEvery)
+	s.mu.Unlock()
+	if err := s.cfg.Store.SetChildState(ctx, c.RunID, domain.ChildQueued, reason, domain.ChildLaunching); err != nil {
+		slog.Warn("subsessions: queue a subsession the server had no room for", "child", c.RunID, "error", err)
+		return false
+	}
+	slog.Info("subsessions: no room to start a subsession; it waits", "child", c.RunID, "parent", c.ParentRunID, "reason", reason)
+	return true
+}
+
+// toldWaiting tells subscribers a subsession waits for room, and its parent
+// the first time it does.
+func (s *Service) toldWaiting(ctx context.Context, c *domain.ChildReservation, reason string) {
+	s.publish(ctx, c.ParentRunID, "")
+	key := "child-waiting:" + string(c.RunID)
+	if _, err := s.cfg.Store.GetRunMessageByIdempotency(ctx, c.ParentRunID, key); !errors.Is(err, store.ErrNotFound) {
+		return
+	}
+	// A cancel may have taken it from the queue since the launch lock went.
+	if now, err := s.cfg.Store.GetChild(ctx, c.RunID); err != nil || now.State == domain.ChildCancelled {
+		return
+	}
+	_ = s.notify(ctx, c.ParentRunID, c.ParentRunID,
+		fmt.Sprintf("Subsession %s (%s) is waiting to start: %s\nIt starts by itself when the server has room, and is refused if it has none within 24 hours of your request. To stop waiting: aether-internal subsession cancel --run-id %s",
+			c.RunID, c.Purpose, reason, c.RunID), key)
+}
+
+// retryDue reports whether a subsession that waits for room may be tried
+// now, and if so puts the next attempt capacityRetryEvery away.
+func (s *Service) retryDue() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.cfg.Now()
+	if now.Before(s.retryAt) {
+		return false
+	}
+	s.retryAt = now.Add(capacityRetryEvery)
+	return true
+}
+
+// retryNow lets the next subsession that waits for room be tried at once.
+func (s *Service) retryNow() {
+	s.mu.Lock()
+	s.retryAt = time.Time{}
+	s.mu.Unlock()
+}
+
+// held reports whether a launch goroutine holds run's reservation.
+func (s *Service) held(run domain.RunID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inFlight[run]
+}
+
+// setInFlight records whether a launch goroutine holds run's reservation.
+func (s *Service) setInFlight(run domain.RunID, on bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if on {
+		s.inFlight[run] = true
+	} else {
+		delete(s.inFlight, run)
+	}
 }
 
 // maxNoticeSummary bounds the report summary in a parent's notice, which a

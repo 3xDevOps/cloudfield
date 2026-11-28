@@ -991,7 +991,8 @@ runs every package that has them:
 | --- | --- | --- |
 | `internal/vmimage` | `TestKVMStandardImageRunsDocker` | The standard image from store disks, with Docker inside ([The guest kernel](#the-guest-kernel)) |
 | `internal/guest/helper` | `TestKVMHelper` | The helper as PID 1, driven through its client ([The VM helper](#the-vm-helper)) |
-| `internal/runtime/vm` | `TestKVM...` in each `kvm_*_test.go` | Sessions through the engine, with real systemd units and the server binary as monitor and helper: lifecycle, six saves and wakes of one VM, a guest reboot, the home, the checkout, the helper keeping the console and outliving connections hung up at birth, a redialing client noticing the helper before one left to its backoff, the network, Save environment, cold memory returning to the host, the memory a wake loads back, a freeze stopping VMs that fill their memory at once, a shutdown letting go of a frozen VM's agent keeper |
+| `internal/runtime/vm` | `TestKVM...` in each `kvm_*_test.go` | Sessions through the engine, with real systemd units and the server binary as monitor and helper: lifecycle, a guest reboot, the home, the checkout, the helper keeping the console and outliving connections hung up at birth, a redialing client noticing the helper before one left to its backoff, the network, Save environment, cold memory returning to the host, the memory a wake loads back, a freeze stopping VMs that fill their memory at once, a shutdown letting go of a frozen VM's agent keeper |
+| `internal/runtime/vm` | `TestKVMSleepWakeChain` | One 5 GiB session saved and woken twelve times, every other wake with its memory file out of the host page cache. After every wake the guest must be the one that slept: the same boot and processes, a 1024 MiB pattern whose every page names its index and the generation that last wrote it and most of which lies past 4 GiB of guest memory, where Cloud Hypervisor maps it apart from the first 3 GiB, the sha256 of a file in `/dev/shm`, a loop that takes and frees memory turning again, a kernel log with no trouble, the saved state deleted. On cycles 1, 6 and 12 the saved state is loaded as a wake loads it and saved again while paused; the two memory files may differ only in the 12 bytes at the address in the guest's `MSR_KVM_WALL_CLOCK_NEW`, which KVM rewrites on a restore. Two controls must fail: the generation check after a wake from the save before the last, and a wake from a memory file cut to half its length, which must end in an error or in a guest that fails the checks |
 
 It needs root on a Linux x86-64 host with `/dev/kvm`, `cloud-hypervisor`,
 `qemu-img`, `mkfs.ext4`, `virtiofsd` at `/usr/libexec/virtiofsd`, systemd,
@@ -1019,8 +1020,8 @@ The target builds the test binaries and `aether-server` with
 `CGO_ENABLED=0`: the binaries also run inside the VMs, where there are no
 libraries. It builds them, and keeps the disks, in a new private directory
 under `$TMPDIR` (default `/tmp`) that it removes at the end: root runs that
-server, so no other user may be able to replace it. A test's VM gets at most 2 GiB; on a CI runner the tests take
-about 13 minutes.
+server, so no other user may be able to replace it. A VM in the default run gets at most 5 GiB; on a CI runner the tests take
+about 24 minutes.
 
 On a KVM host without Go, build on your machine, copy the directory over,
 and run each test binary there with the variables `make test-kvm` sets:
