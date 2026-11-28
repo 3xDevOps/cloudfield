@@ -560,8 +560,10 @@ does only when it is done writing a snapshot, and once the files of a
 snapshot that saved nothing are removed: resumed with the limit under
 their page cache, the monitor was killed the same way
 (`TestKVMAResumeAfterASnapshotGivesTheUnitItsMemoryLimitBack`).
-`systemctl daemon-reload` during a snapshot is not covered: systemd writes
-a unit's `MemoryMax` again from its own state.
+A snapshot is not covered while systemd applies the unit's settings again,
+which writes `MemoryMax` back from its own state: `systemctl daemon-reload`
+does that, and so does a start or stop of another unit in the slice that
+changes the slice's enabled controllers.
 
 Cloud Hypervisor v54.1 can load that memory on demand instead
 (`memory_restore_mode=ondemand`): it resumes at once and copies each page in
