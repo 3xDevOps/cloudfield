@@ -122,7 +122,7 @@ describe('child run usage', () => {
     expect(waiting.textContent).not.toContain('Queued')
     const text = within(waiting).getByText(refused)
     expect(text.className).not.toContain('text-state-failed')
-    fireEvent.click(within(waiting).getByRole('button', { name: 'Show the machine' }))
+    fireEvent.click(within(waiting).getByRole('button', { name: 'Open Machines' }))
     expect(useStore.getState().route).toEqual({ name: 'settings', params: { section: 'machines' } })
     expect(within(failed).getByText('agent exited with code 1').className).toContain('text-state-failed')
   })
