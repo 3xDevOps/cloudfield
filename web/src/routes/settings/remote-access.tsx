@@ -6,8 +6,11 @@ import { Callout } from '@/components/ui/callout'
 import { Code } from '@/components/ui/code'
 import { type Api, ApiError } from '@/lib/api'
 import { message } from '@/lib/format'
+import { cn } from '@/lib/utils'
+import { edgeNotice, type EdgeNeed } from '@/lib/needs-you'
 import type { EdgeAccount, EdgeLogin, ServerEdge } from '@/lib/types'
 import { SettingRow, SettingsSection, TryAgain } from '@/routes/settings/layout'
+import { EdgeMoveSteps } from '@/routes/settings/remote-access-notice'
 import { useStore } from '@/store'
 import { loadEdge } from '@/store/edge'
 import { useCapability, useIsSuperAdmin } from '@/store/hooks'
@@ -25,41 +28,55 @@ function connection(edge: ServerEdge): string {
   return edge.claimed ? 'Connected' : 'Connected, but the edge has not recorded this server'
 }
 
+/** What a member who is not a super admin reads of the edge's notices. */
+function memberAddress(need: EdgeNeed): string {
+  const running = need.notice ? `${need.noticeReason}; the edge recommends ${need.notice.replacement}.` : ''
+  if (need.pending) return [`${need.reason}. A super admin moves the server.`, running].filter(Boolean).join(' ')
+  const next = need.notice?.restart_pending ? "A change of the server's edge address is configured and waits for a restart." : 'A super admin moves the server.'
+  return `${running} ${next}`
+}
+
 export function RemoteAccessSection({ client }: { client: Api }) {
   const edge = useStore((s) => s.edge)
   const admin = useIsSuperAdmin()
   const caps = useCapability()
-  const [error, setError] = useState<string | null>(null)
+  const error = useStore((s) => s.edgeError)
   const [attempt, setAttempt] = useState(0)
   useEffect(() => {
-    let live = true
-    loadEdge(useStore, client).then(
-      () => {
-        if (live) setError(null)
-      },
-      (err: unknown) => {
-        if (live) setError(message(err))
-      },
-    )
-    return () => {
-      live = false
-    }
+    // A failure lands in the store's edgeError.
+    loadEdge(useStore, client).catch(() => undefined)
   }, [client, attempt])
+  const retry = () => setAttempt((n) => n + 1)
   if (!edge) {
     return (
       <SettingsSection title="Edge" id="edge">
         <SettingRow label="Remote access" help={error ? null : 'Reading remote access…'}>
           {error && <Callout tone="failed" role="alert" className="whitespace-pre-wrap">{error}</Callout>}
-          {error && <TryAgain onClick={() => { setError(null); setAttempt((n) => n + 1) }} />}
+          {error && <TryAgain onClick={retry} />}
         </SettingRow>
       </SettingsSection>
     )
   }
   const connectable = admin && edge.edge_url !== '' && edge.owner === null
   const local = caps.hasLocal('edge.status') && caps.hasLocal('edge.login') && caps.hasLocal('edge.claim')
+  const notice = edgeNotice(edge)
   return (
     <SettingsSection title="Edge" id="edge">
+      {error && (
+        <Callout tone="failed" role="alert" title="Showing the last answer: reading the server's edge again failed"
+          className="whitespace-pre-wrap rounded-none rounded-t-[inherit] px-4 py-3" actions={<TryAgain onClick={retry} />}>
+          {error}
+        </Callout>
+      )}
+      {notice && admin && (
+        <Callout tone={notice.state === 'retired' ? 'failed' : 'needs-you'} role="status" title={notice.reason} className={cn('rounded-none px-4 py-3', !error && 'rounded-t-[inherit]')}>
+          <EdgeMoveSteps need={notice} />
+        </Callout>
+      )}
       <SettingRow label="Edge URL" help={edge.edge_url || 'Off'} />
+      {notice && !admin && (
+        <SettingRow label="Address" help={memberAddress(notice)} />
+      )}
       <SettingRow label="Server id">
         <CopyableCommand command={edge.server_id} />
       </SettingRow>
@@ -75,7 +92,6 @@ export function RemoteAccessSection({ client }: { client: Api }) {
           ))}
       </SettingRow>
       {edge.edge_url && <SettingRow label="Connection" help={connection(edge)} />}
-      {error && <Callout tone="failed" role="alert" className="whitespace-pre-wrap">{error}</Callout>}
     </SettingsSection>
   )
 }

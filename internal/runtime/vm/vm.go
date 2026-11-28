@@ -73,7 +73,7 @@ func New(cfg Config) (*Runtime, error) {
 		return nil, errors.New("vm runtime: Docker, the image store, the monitor command and the helper binary are required")
 	}
 	e := newEngine(cfg, SystemdUnits{}, dialHelper)
-	go e.lingering(context.Background())
+	go e.settle(context.Background())
 	e.warmBrowser()
 	return &Runtime{Docker: cfg.Docker, vms: e}, nil
 }

@@ -126,8 +126,8 @@ type ScheduleListResult struct {
 }
 
 // ScheduleSaveParams sets a template's cron rule, in standard five-field
-// cron syntax or a @descriptor. Rules are evaluated in UTC, like every
-// other instant Aether reports.
+// cron syntax or a @descriptor. Rules are evaluated in UTC unless they
+// start with "CRON_TZ=<IANA zone> ".
 type ScheduleSaveParams struct {
 	WorkspaceID string `json:"workspace_id"`
 	Template    string `json:"template"`

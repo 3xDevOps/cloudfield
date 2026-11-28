@@ -759,11 +759,15 @@ first: `{id, session_id: "aether-sudo", kind: "permission", title}`, where
 saved; a server restart ends the shim's wait. A report cannot open, close or
 replace one: the session ID and a `title` are refused.
 
-Repeated opens, closes, and unchanged replacements are idempotent. Turn
-completion, silence, prose, and idle execution do not clear outstanding input.
+Repeated opens, closes, and unchanged replacements are idempotent. Only an
+update clears outstanding input: a `waiting` state, silence, prose, and idle
+execution do not. Claude Code's reporter sends `replace` with `[]` when its
+main agent's turn ends with no background task it waits for: a dialog blocks
+the turn it opens in, so none is open then.
 The pending set is persisted independently from the last execution report and
 survives server restart for still-live sessions. Actual terminated or relaunched
-session lifetimes discard it; stale saved snapshots cannot restore a previous
+session lifetimes discard it, as does a move to another account, which starts
+a new agent; stale saved snapshots cannot restore a previous
 lifetime's requests. Persistence errors are returned to the reporter rather than
 announcing input state that was not saved.
 
@@ -1013,6 +1017,7 @@ call is refused with `-32602`, and with a lease another session holds with
 | `run.acp.history` | `{run_id, before_seq, limit}` (View); `before_seq` 0 reads from the newest, `limit` at most 1000 | `{frames: [...], oldest_seq, truncated_before?}`, oldest first, cut like stream frames; metadata and items are one atomic retained page |
 | `run.acp.item` | `{run_id, seq}` (View) | `{item: {...}}`, whole; expired IDs return unavailable with an explicit retained-history expiry message, missing IDs return not-found |
 | `run.mode.switch` | `{run_id, mode, control_session_id, control_generation}`; `mode` is `tui` (Standard) or `acp` (Enhanced); the lease may be omitted while nobody holds the session's control | `{run: {...}}` once the switch is done; see [Switching a running agent](enhanced-sessions.md#switching-a-running-agent) |
+| `run.interrupt` | `{run_id}`; **Steer**, no lease | `{}`; a session with no turn running answers the same |
 
 Use the option IDs and values from the session's `config_options` snapshot,
 including selectors synthesized from an agent's separate `models` or `modes`.
@@ -1036,18 +1041,45 @@ server is not installed. Any other session it cannot switch now answers
 `acp`) while a switch is in flight; a `run.mode` event
 `{mode, previous, switching, reason}` with the same `switching` opens each
 switch, and one without `switching` closes it.
+`run.interrupt` stops the agent's current turn for a caller with no stream,
+such as `cloudfield interrupt`. It is admitted as
+[`run.input.respond`](#methods-for-an-external-assistant) is: with nobody in
+control, or the caller in control from another tab or terminal, it acts;
+while another member holds control it answers `-32003` with
+`data: {"reason":"control_held","member_id":"..."}` and the controller's name
+in the message. An enhanced session is cancelled as by `run.acp.cancel`. A
+Standard Codex session takes `turn/interrupt` through its app-server, and the
+call answers once Codex has stopped the turn. One that is paused, or whose VM
+the server froze for memory, answers `-32002`, and one whose app-server is
+not connected answers `-32004`. A session of either kind that fell asleep
+idle has no turn and answers `{}`.
+One the server saved to disk for memory while it worked, or while its VM was
+frozen
+([Recover from memory pressure](failure-handling.md#recover-from-memory-pressure)),
+keeps any turn for the wake, so it answers `-32002` and names
+`cloudfield resume <session-id>`, which wakes it. A Standard session that is
+not `running` or `needs-attention` answers `-32002` with its status. Any
+other Standard session answers `-32002`: its agent stops only on its own key,
+so the message names `cloudfield attach <session-id>` and no key is typed into
+the terminal. A connector is refused it (`-32001`), and the gateway does not
+replay it. Every call not refused above records a `note` entry on the
+workspace timeline, `sent an interrupt`, with the caller as the event's
+`actor_id`.
 `run.inject` takes `steer: true` to add a message to the agent's running
 turn, and `control_session_id`/`control_generation` to deliver it at once
 rather than after the room's moderation delay; its result's `outcome` is
 `sent`, `queued` or `injected` for an enhanced session. A `queued` message
 carries `agent_delivery: "queued"` until the agent takes it
 (`"delivered"`), or turns `not_sent` with `failure.code` `agent_refused` or
-`agent_disconnected`; each change publishes `workspace.room_message`
+`agent_disconnected`, or, when it was held while the agent started and the
+server then could not hand it over, `session_unavailable`, `prompt_not_sent`
+or `unsupported_image`; each change publishes `workspace.room_message`
 ([enhanced-sessions.md](enhanced-sessions.md#permissions-and-input)).
 A message the server could not hand to the agent at all is `not_sent` with
 `failure.message` the real error and `failure.code`: `session_unavailable`
 (no running agent, or a mode switch in flight), `prompt_not_sent` (such as a
-sleeping session that failed to wake), `unsupported_image`,
+sleeping session that failed to wake, or a Standard session with a request its
+agent reported still in `pending_inputs`), `unsupported_image`,
 `session_protected`, `steer_denied` or `access_revoked` (the sender lost
 **Steer** or membership before delivery), or `control_changed` (the session's
 control lease changed before delivery).
@@ -2066,6 +2098,19 @@ does, with the same files in the config directory:
   dashboard turns a pasted or handed claim link into one.
 - `edge.logout` revokes the device token at the edge and forgets it, and
   drops a pending `edge.login` for that edge.
+- With `{"notices":true}`, an `edge.status` entry carries `retiring` when
+  its edge address says it is retiring, or refuses as retired:
+  `{"state":"retiring"|"retired","replacement":"https://...","date":"YYYY-MM-DD"}`.
+  It is the address's own, unauthenticated word, validated as a canonical
+  origin and a real date. The gateway asks every signed-in edge's
+  `GET /v1/edge` at once, with no token, waits 2 seconds at most in all, and
+  keeps nothing between calls; an edge that does not answer in time, or names
+  itself, has no `retiring`. The sign-in in `login` is read before the
+  entries, so a sign-in that ends meanwhile still shows as `pending`.
+- `edge.logout` at an address that answers `410` naming a replacement deletes
+  the token, though the edge did not revoke it. A refusal from such an
+  address carries `data.retired: {"replacement":"https://..."}` beside
+  `data.refusal`, whose `refusal` is the edge's text.
 - Errors carry the client's own message. Not signed in, or an edge refusal
   with a `4xx` status such as a revoked token or a claimed server, answers
   `-32002`. An edge that cannot be reached or answers `5xx` answers
@@ -2971,7 +3016,9 @@ does not run its agent over ACP`. Every frame is JSON text.
 
 2. Server answers one ack frame. `seq` is the high-water mark the client
    holds once the `replay` frames that follow are applied; `live` says
-   whether a session is running; `state` is its snapshot (turn in flight,
+   whether a session is running; `starting`, set with `live` false, says
+   the launched session's agent has not started yet, so a `run.inject`
+   sent now is held and delivered once it has; `state` is its snapshot (turn in flight,
    queued prompts, pending requests with their options, mode, config
    options, commands, the agent's `auth` status and `auth_methods`,
    `prompt_images`: whether the agent accepts ACP image content, and

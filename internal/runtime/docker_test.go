@@ -844,3 +844,37 @@ func TestCreateSubpathMountNeedsAPI145(t *testing.T) {
 		})
 	}
 }
+
+// A volume removal the daemon never answers ends at its bound with an
+// error, so the caller keeps the directory for the next try.
+func TestRemoveSubpathVolumeIsBoundedWhenTheDaemonHangs(t *testing.T) {
+	release := make(chan struct{})
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer api.Close()
+	defer close(release)
+	cli, err := client.New(client.WithHost("tcp://"+api.Listener.Addr().String()), client.WithAPIVersion("1.51"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cli.Close() }()
+	bound := volumeRemoveTimeout
+	volumeRemoveTimeout = 50 * time.Millisecond
+	defer func() { volumeRemoveTimeout = bound }()
+	done := make(chan error, 1)
+	go func() {
+		done <- (&Docker{cli: cli}).RemoveSubpathVolume(context.Background(), "/srv/logins/lgn-work000000")
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("RemoveSubpathVolume = %v; want the bound's deadline", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("RemoveSubpathVolume still waits on a daemon that does not answer")
+	}
+}

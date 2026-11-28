@@ -377,7 +377,8 @@ same session through that app-server: Codex reports the start and end of each
 turn, and mail and your messages from the dashboard or `cloudfield message` arrive
 as a new turn when Codex is idle, or as a steer added to the running turn. They
 show in the terminal as prompts, under Cloudfield's attribution banner. Press
-Esc in the terminal to stop a turn. Cloudfield loads no hooks into Standard
+Esc in the terminal to stop a turn, or run `cloudfield interrupt <session-id>`,
+which stops it through the app-server. Cloudfield loads no hooks into Standard
 Codex, so remove any copy of its hooks from `~/.codex/hooks.json`: it would
 announce mail twice.
 
@@ -1011,9 +1012,13 @@ its Stop hook blocks the stop and Claude Code shows **Stop hook feedback**
 asking the agent to report
 ([coordination.md](coordination.md#lifecycle-status-is-separate)). Enhanced
 sessions get a [report reminder](enhanced-sessions.md#report-reminder) prompt
-instead. Standard sessions of other agents are not held: Codex sessions load no
-hooks, and the app-server gives a thread the same `idle` status after a
-finished turn and after you press Esc. Only the turn's own status differs.
+instead. So does a Standard Codex session, through its app-server: the
+reminder shows in the terminal as a prompt and starts one more turn. It
+follows only a turn the app-server lists as `completed` with an agent
+message, so not a turn you cut off with Esc, a `!command` or `/compact`. A
+protected session and one whose terminal a member
+[controls](terminal.md#session-control) get none. Standard sessions of other
+agents are not held.
 
 When a Standard [subsession](teams.md#subsessions) of an agent with status
 reporting ends a turn without an outcome report, its parent gets a provisional

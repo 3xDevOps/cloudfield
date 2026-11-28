@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	edgeclient "github.com/3xDevOps/cloudfield/internal/edge/client"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/serversetup"
 )
 
 func init() {
@@ -17,7 +19,7 @@ func init() {
 	registerMethod(protocol.MethodServerEdgeClaimCode, (*Server).serverEdgeClaimCode)
 }
 
-func (s *Server) serverEdge(context.Context, domain.MemberID, json.RawMessage) (any, *protocol.Error) {
+func (s *Server) serverEdge(ctx context.Context, member domain.MemberID, _ json.RawMessage) (any, *protocol.Error) {
 	out := protocol.ServerEdgeResult{ServerID: edgeproto.ServerID(s.hostKey.PublicKey()), AccessPolicy: string(s.cfg.EdgeAccess)}
 	edge := s.currentEdgeOwner()
 	if edge == nil {
@@ -27,11 +29,68 @@ func (s *Server) serverEdge(context.Context, domain.MemberID, json.RawMessage) (
 	if err != nil {
 		return nil, &protocol.Error{Code: protocol.CodeUnavailable, Message: protocol.MethodServerEdge + ": " + err.Error()}
 	}
+	notices, err := edge.Notices()
+	var msg string
+	if err != nil {
+		msg = err.Error()
+	}
+	if last := s.noticesErr.Swap(&msg); err != nil && (last == nil || *last != msg) {
+		slog.Warn("sshd: server.edge shows no edge notice: the stored notices are unreadable", "error", err)
+	}
 	out.EdgeURL, out.Connected, out.Claimed = edge.Origin(), edge.Connected(), edge.EdgeState() == edgeproto.StateClaimed
 	if owner != nil {
 		out.Owner = &protocol.EdgeAccount{Provider: owner.Provider, Login: owner.Login}
 	}
+	var admin bool
+	var moved string
+	if len(notices.Notices) > 0 {
+		admin, moved = s.superAdmin(ctx, member), s.configuredEdgeURL(out.EdgeURL)
+	}
+	if n, ok := notices.For(out.EdgeURL); ok {
+		out.Notice = &protocol.EdgeNotice{State: n.State, Replacement: n.Replacement, Date: n.Date, FirstUse: notices.FirstUse}
+		if moved != "" {
+			out.Notice.RestartPending = true
+			if admin {
+				out.Notice.MovedTo = moved
+			}
+		}
+	}
+	if m, ok := notices.For(moved); moved != "" && ok {
+		out.Pending = &protocol.EdgePending{State: m.State, Date: m.Date}
+		if admin {
+			out.Pending.EdgeURL, out.Pending.Replacement, out.Pending.FirstUse = moved, m.Replacement, notices.FirstUse
+		}
+	}
 	return out, nil
+}
+
+// configuredEdgeURL is the canonical edge-url the options file names when
+// it is another origin than running, the one the server runs at; empty
+// when the file names running, none, or one that is not an origin, or
+// cannot be read, which is logged once per error.
+func (s *Server) configuredEdgeURL(running string) string {
+	if s.cfg.ConfigPath == "" {
+		return ""
+	}
+	values, err := serversetup.Load(s.cfg.ConfigPath)
+	var msg string
+	if err != nil {
+		msg = err.Error()
+	}
+	if last := s.configErr.Swap(&msg); err != nil && (last == nil || *last != msg) {
+		slog.Warn("sshd: server.edge cannot tell whether edge-url changed since the start", "error", err)
+	}
+	if err != nil || values["edge-url"] == "" {
+		return ""
+	}
+	configured, err := edgeclient.Canonical(values["edge-url"])
+	if err != nil {
+		return ""
+	}
+	if now, err := edgeclient.Canonical(running); err == nil && now == configured {
+		return ""
+	}
+	return configured
 }
 
 // serverEdgeClaimCode issues the calling super admin a claim code bound to

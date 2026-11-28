@@ -103,13 +103,14 @@ func sessionSpec(key string) runtime.Spec {
 }
 
 type fakeImages struct {
-	mu        sync.Mutex
-	rootDisks int
-	promoted  chan string
-	tags      map[string]vmimage.Base
-	saves     []fakeSave
-	saveErr   error
-	programs  map[string]bool
+	mu         sync.Mutex
+	rootDisks  int
+	cacheDisks int
+	promoted   chan string
+	tags       map[string]vmimage.Base
+	saves      []fakeSave
+	saveErr    error
+	programs   map[string]bool
 }
 
 type fakeSave struct {
@@ -210,7 +211,11 @@ func (f *fakeImages) NewDataDisk(_ context.Context, path string, _ int64) (vmima
 }
 
 func (f *fakeImages) NewCacheDisk(_ context.Context, _, path string) (vmimage.Disk, error) {
-	return vmimage.Disk{Path: path, Format: "qcow2", Backing: path + ".base"}, os.WriteFile(path, nil, 0o600)
+	f.mu.Lock()
+	f.cacheDisks++
+	f.mu.Unlock()
+	disk := vmimage.Disk{Path: path, Format: "qcow2", Backing: path + ".base"}
+	return disk, errors.Join(os.WriteFile(path, nil, 0o600), os.WriteFile(disk.Backing, nil, 0o600))
 }
 
 func (f *fakeImages) SnapshotCache(disk vmimage.Disk) (string, error) {
@@ -275,7 +280,7 @@ type fakeUnits struct {
 	rebootOnResume bool
 	resumeWrites   string
 	// cgroups is the cgroup root, which holds a memory.current, a
-	// memory.stat and a cgroup.freeze for each running unit.
+	// memory.stat, a cgroup.freeze and a memory.max for each running unit.
 	cgroups string
 }
 
@@ -309,6 +314,9 @@ func (u *fakeUnits) Start(_ context.Context, name string, argv, properties []str
 		return err
 	}
 	if err = os.WriteFile(filepath.Join(u.cgroup(name), "cgroup.freeze"), []byte("0\n"), 0o644); err != nil {
+		return err
+	}
+	if err = os.WriteFile(filepath.Join(u.cgroup(name), "memory.max"), nil, 0o644); err != nil {
 		return err
 	}
 	u.mu.Lock()
@@ -525,6 +533,9 @@ type fakeHelper struct {
 	syncs     int
 	// onSync, when set, runs during each Sync.
 	onSync func()
+	// cacheUse and cacheUseErr are what CacheUse answers.
+	cacheUse    guest.CacheUse
+	cacheUseErr error
 	// unresponsive makes calls fail as a guest that stopped answering does.
 	unresponsive bool
 	stats        guest.Stats
@@ -681,6 +692,12 @@ func (g *fakeHelper) Sync(context.Context) error {
 		onSync()
 	}
 	return g.syncErr
+}
+
+func (g *fakeHelper) CacheUse(context.Context) (guest.CacheUse, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.cacheUse, g.cacheUseErr
 }
 
 func (g *fakeHelper) Close() error { return nil }

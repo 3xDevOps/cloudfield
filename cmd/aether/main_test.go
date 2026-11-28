@@ -219,6 +219,7 @@ func TestSteerUsage(t *testing.T) {
 		{[]string{"unarchive"}, "usage: cloudfield unarchive <session-id>"},
 		{[]string{"pause"}, "usage: cloudfield pause <session-id>"},
 		{[]string{"resume"}, "usage: cloudfield resume <session-id>"},
+		{[]string{"interrupt"}, "usage: cloudfield interrupt <session-id>"},
 		{[]string{"message"}, "usage: cloudfield message [--steer] [--attach <path>]... <session-id> <message...>|-"},
 		{[]string{"message", "--steer", "run-1"}, "usage: cloudfield message [--steer] [--attach <path>]... <session-id> <message...>|-"},
 		{[]string{"close"}, "usage: cloudfield close <session-id> --outcome merged|abandoned"},

@@ -69,6 +69,23 @@ first prompt. An agent with no ACP command is refused:
 scheduler: harness "custom" has no command for mode "acp"
 ```
 
+The launch returns once the session's sandbox runs, without waiting for the
+agent to start. A message sent while the agent starts is held: `run.inject`
+answers `outcome: "queued"`, the message reads **Queued**, and the agent gets
+the task first, then each held message in the order sent. If the agent does
+not start, each held message reads `not_sent` with the error that stopped it
+([Restarts and failures](#restarts-and-failures)). A stop or an option
+change in that window runs once the start has ended, a switch to Standard
+is refused until the agent has reported its session, and a turn cancel or an
+answer is refused with `scheduler: the Enhanced agent is not running: the
+agent is still starting`. A server that shuts
+down in that window waits for the start to end. One killed in that window
+turns held messages `not_sent` with `agent connection closed`; the next
+server process starts the agent again, sets its mode, model and effort, and
+sends it the task. Background
+sessions still wait for the agent, so their launch reports a start that
+failed.
+
 `--model` is set after the session opens, so the launch itself still
 succeeds. If the agent rejects it, the session runs on the agent's default
 model, or the one it already had, and says so: the session's `model` becomes
@@ -104,6 +121,9 @@ the checkout ([terminal.md](terminal.md)).
 ## The Chat view
 
 An Enhanced session opens on **Chat**: one timeline, newest at the bottom.
+`cloudfield logs <session-id> --follow` prints the same conversation in a
+terminal as plain lines: messages, thoughts, plans, tool calls, requests and
+notices ([terminal.md](terminal.md#scrollback-and-history)).
 
 - Your messages are bubbles on the right. Everything the agent writes to
   you renders Markdown under them; its last message is the answer, with the
@@ -189,7 +209,10 @@ Steering, answering, interrupting and changing options need control of the sessi
 The owner's desktop tab takes it when it first shows Chat and nobody holds
 it. Without control you still get **Send**, and the message waits for the
 controller as in a Standard session ([Messages and
-notes](terminal.md#messages-and-notes)).
+notes](terminal.md#messages-and-notes)). `cloudfield interrupt <session-id>`
+stops the turn from a shell: it works while nobody holds control or you hold
+it in a tab, and while another member holds it the command fails with their
+name.
 
 **Attach files** adds files to the composer, at most eight: images up to 8 MiB,
 other files up to 64 MiB. Images go to the agent as image content and other files

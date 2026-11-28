@@ -6486,10 +6486,14 @@ selection is the address's `id`; with none, or a name the workspace lacks
 or duplicated template is selected once saved, and deleting the selected one
 selects the next.
 
-The detail shows the name, the mode, **Edit** and a menu with **Schedule…**,
+The detail shows the name, the mode, **Edit**, **Schedule** and a menu with
 **Duplicate** and **Delete**; a meta line with the agent, the model or
-"agent default", the effort when set, the schedule (`Scheduled <cron> UTC, next in 3 hours`) or
-when it was saved, and the advisory budget; then the task. Each `{{name}}`
+"agent default", the effort when set, the schedule or
+when it was saved, and the advisory budget; then the task. The schedule
+reads in words when the editor's fields can show its rule (`Scheduled
+weekdays at 09:30 Europe/Berlin, next in 3 hours`), with the time in the
+browser's locale format, and as the rule otherwise (`Scheduled */15 * * * *
+UTC`). Each `{{name}}`
 placeholder (the server's pattern in `internal/templates/render.go`) is an
 inline field at its first occurrence, prefilled with the template's default;
 later occurrences mirror it. "N of M filled" counts placeholders with a value
@@ -6506,9 +6510,29 @@ On a phone the list and the detail are one pane at a time, with
 **Templates** to go back. A failed `template.list` read shows the
 server's error with **Retry**.
 
-**Schedule…** opens the cron editor in a dialog; the preview is
-the `next_fire_at` that `schedule.save` returned, shown relative and in UTC,
-never computed in the browser. **Duplicate** opens the form prefilled under
+**Schedule** opens the schedule editor in a dialog
+(`schedule-editor.tsx`, rules in `schedule.ts`). **Repeats** picks Daily,
+Weekly, Monthly or Cron. Weekly ticks days, Monday first; Monthly picks a
+day from 1 to 28. All three take a time (default 09:00) and an IANA zone
+(the browser's for a new schedule, the rule's own when editing), and show
+the rule they save, such as `CRON_TZ=Europe/Berlin 30 9 * * 1-5`; a UTC rule
+has no prefix. The rule keeps the zone the server already took; any other
+Area/Location name is saved in the browser's canonical spelling, which
+Go's zone database loads (`europe/berlin` saves as `Europe/Berlin`).
+A name without a slash other than UTC is refused, since `Intl` maps
+abbreviations such as `BST` to surprising zones ("Use a full zone name
+such as America/Los_Angeles."), and so is an Area/Location name `Intl`
+does not take ("Not an IANA zone name. Check the spelling."). Save is
+disabled at once; the message shows when the field is left or Enter is
+pressed in it, when the editor opens with a refused zone, and when a rule
+carried from Cron brings one. Cron takes the rule as text and is where a
+rule the fields cannot show exactly opens. Switching to Cron fills in the
+rule the fields made, unless Cron holds a rule only it can show, and a
+rule typed in Cron carries back into the fields when they can show it.
+While the form shows the saved rule, the next launch is the `next_fire_at` that
+`schedule.save` returned, shown relative and in the viewer's local time
+("your time"), never computed in the browser. **Duplicate** opens the form
+prefilled under
 `<name> copy`. The form's agent select lists the agents from `agent.list` by
 display name and keeps the template's current agent as an extra option when
 the list omits it. An **Effort** field, as in New session, shows for an agent with
@@ -6543,7 +6567,7 @@ was. A form reopened before the first `template.list` read answers keeps
 what it saves.
 **Retry** in a dialog sends what the dialog shows now, so edits made after
 the deadline are not lost. A template whose save the server has not answered, past the deadline
-too, offers no **Launch**, **Delete** or **Schedule…**, since
+too, offers no **Launch**, **Delete** or **Schedule**, since
 `template.launch` sends the name and the filled-in parameters, never the
 task. **Unschedule** reads "Unscheduling…", then
 "Still waiting for the server…" past the deadline; while a schedule save for

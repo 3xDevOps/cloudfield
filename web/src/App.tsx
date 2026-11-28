@@ -31,6 +31,7 @@ export function App() {
   const streamDead = useStore((s) => s.streamDead)
   const unreachable = useStore((s) => s.unreachable)
   const approvalCode = useStore((s) => s.approvalCode)
+  const retiredText = useStore((s) => s.retiredText)
   const edge = useStore((s) => s.linkStatus?.edge_url)
   const serverID = useStore((s) => s.unreachableAt?.server_id ?? s.linkStatus?.server_id)
   const hydrated = useStore((s) => s.hydrated)
@@ -153,6 +154,7 @@ export function App() {
               edge={edge}
               serverID={serverID}
               approvalCode={approvalCode}
+              retired={!!retiredText}
               onRetry={retry}
             />
           ) : (
