@@ -11,8 +11,8 @@ import (
 )
 
 // counted returns the counter of kind, op and cause over the last hours,
-// once it holds count events.
-func (e *testEnv) counted(t *testing.T, kind, op, cause string, count int64) domain.CapacityCount {
+// once it holds one event.
+func (e *testEnv) counted(t *testing.T, kind, op, cause string) domain.CapacityCount {
 	t.Helper()
 	var found domain.CapacityCount
 	waitFor(t, "the "+kind+" "+op+" "+cause+" counter", func() bool {
@@ -32,7 +32,7 @@ func (e *testEnv) counted(t *testing.T, kind, op, cause string, count int64) dom
 				found.LastRun, found.LastText = c.LastRun, c.LastText
 			}
 		}
-		return found.Count == count
+		return found.Count == 1
 	})
 	return found
 }
@@ -57,7 +57,7 @@ func TestAMemoryRefusalIsCountedWithWhatIdleSessionsHeld(t *testing.T) {
 	if !errors.Is(err, ErrMemoryPressure) {
 		t.Fatalf("a launch with 100 MiB available = %v, want the memory refusal", err)
 	}
-	got := e.counted(t, domain.CapacityRefusal, opLaunch, "memory", 1)
+	got := e.counted(t, domain.CapacityRefusal, opLaunch, "memory")
 	want := domain.CapacityCount{Count: 1, AvailableBytes: 100 << 20, FloorBytes: memoryFloor(32 << 30), UsedBytes: 32<<30 - 100<<20,
 		IdleHourBytes: 2 << 30, LastRun: "run-reserved", LastText: err.Error()}
 	if got != want {
@@ -66,8 +66,8 @@ func TestAMemoryRefusalIsCountedWithWhatIdleSessionsHeld(t *testing.T) {
 	if _, err = e.sched.reserveLaunch(t.Context(), "run-reserved", true); !errors.Is(err, ErrMemoryPressure) {
 		t.Fatalf("the launch tried again = %v, want the memory refusal", err)
 	}
-	e.counted(t, domain.CapacityRefusal, opLaunchRetry, "memory", 1)
-	e.counted(t, domain.CapacityRefusal, opLaunch, "memory", 1)
+	e.counted(t, domain.CapacityRefusal, opLaunchRetry, "memory")
+	e.counted(t, domain.CapacityRefusal, opLaunch, "memory")
 }
 
 // A save by the memory guard and the refused wake of what it saved are
@@ -82,7 +82,7 @@ func TestAGuardSaveAndARefusedWakeAreCounted(t *testing.T) {
 	if !mr.isSaved(vm) {
 		t.Fatal("the guard did not save the idle VM")
 	}
-	saved := e.counted(t, domain.CapacitySave, "idle", "", 1)
+	saved := e.counted(t, domain.CapacitySave, "idle", "")
 	if saved.VMBytes != 6<<30 || saved.AvailableBytes != 3<<30 || saved.FloorBytes != memoryFloor(32<<30) || saved.LastRun != run {
 		t.Fatalf("counted save = %+v, want the VM's 6 GiB, the 3 GiB available before it and its session", saved)
 	}
@@ -92,15 +92,15 @@ func TestAGuardSaveAndARefusedWakeAreCounted(t *testing.T) {
 	if !errors.Is(err, ErrMemoryPressure) {
 		t.Fatalf("a wake one byte short = %v, want the memory refusal", err)
 	}
-	if refused := e.counted(t, domain.CapacityRefusal, opWake, "memory", 1); refused.LastRun != run {
+	if refused := e.counted(t, domain.CapacityRefusal, opWake, "memory"); refused.LastRun != run {
 		t.Fatalf("counted wake refusal = %+v, want it to name the session", refused)
 	}
 	// A wake the guard tries by itself is counted apart from one asked for.
 	if err = e.sched.WakeRun(context.WithValue(t.Context(), autoWake{}, true), run, ""); !errors.Is(err, ErrMemoryPressure) {
 		t.Fatalf("the guard's own wake one byte short = %v, want the memory refusal", err)
 	}
-	e.counted(t, domain.CapacityRefusal, opWakeAuto, "memory", 1)
-	e.counted(t, domain.CapacityRefusal, opWake, "memory", 1)
+	e.counted(t, domain.CapacityRefusal, opWakeAuto, "memory")
+	e.counted(t, domain.CapacityRefusal, opWake, "memory")
 }
 
 // The brake freezing the session VMs is counted once per shortage.
@@ -112,7 +112,7 @@ func TestAFreezeIsCountedOncePerShortage(t *testing.T) {
 	e.brake(fr, 4*floor)
 	e.brake(fr, floor-1)
 	e.brake(fr, floor-2)
-	if froze := e.counted(t, domain.CapacityFreeze, "", "", 1); froze.AvailableBytes != floor-1 || froze.FloorBytes != floor {
+	if froze := e.counted(t, domain.CapacityFreeze, "", ""); froze.AvailableBytes != floor-1 || froze.FloorBytes != floor {
 		t.Fatalf("counted freeze = %+v, want one, with the memory that caused it", froze)
 	}
 }
