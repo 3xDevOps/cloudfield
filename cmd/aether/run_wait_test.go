@@ -88,7 +88,7 @@ func TestAWaitedLaunchThatFailsIsAnError(t *testing.T) {
 	c := fakeControlMethods(t, map[string]*fakeReply{protocol.MethodRunLaunch: launch})
 	var said strings.Builder
 	_, err := launchWaiting(c, protocol.RunLaunchParams{Task: "wait", Wait: true}, &said, time.Millisecond, "aether session -- wait")
-	if err == nil || !strings.Contains(err.Error(), "run-w") || !strings.Contains(err.Error(), "image pull failed") {
+	if err == nil || !strings.Contains(err.Error(), "run-w") || !strings.Contains(err.Error(), "ended failed: image pull failed") {
 		t.Fatalf("a waited launch that failed = %v, want an error naming the session and why", err)
 	}
 }
@@ -117,24 +117,31 @@ func TestALostWaitSaysHowToFollowTheLaunch(t *testing.T) {
 	}
 }
 
-// An interrupt before the server's first answer still cancels a launch the
-// server turns out to be keeping.
-func TestInterruptBeforeTheAnswerCancelsAKeptLaunch(t *testing.T) {
-	asked := make(chan struct{})
+// Before the server's first answer the session may be provisioning, so an
+// interrupt ends the command at once, as it does for a launch that never
+// waits, and names the command that follows or cancels the launch.
+func TestInterruptBeforeTheAnswerEndsAtOnce(t *testing.T) {
+	asked, answer := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() { close(answer) })
 	launch := &fakeReply{byParams: func(json.RawMessage) any {
 		close(asked)
-		time.Sleep(100 * time.Millisecond)
-		return protocol.RunLaunchResult{Waiting: &protocol.LaunchWaiting{ID: "run-w", Refusal: "no room"}}
+		<-answer
+		return protocol.RunLaunchResult{}
 	}}
-	cancelled := &fakeReply{result: protocol.LaunchWaiting{ID: "run-w", State: "cancelled"}}
-	c := fakeControlMethods(t, map[string]*fakeReply{protocol.MethodRunLaunch: launch, protocol.MethodLaunchWaitingCancel: cancelled})
+	c := fakeControlMethods(t, map[string]*fakeReply{protocol.MethodRunLaunch: launch})
 	go func() {
 		<-asked
 		_ = syscall.Kill(os.Getpid(), syscall.SIGINT)
 	}()
 	var said strings.Builder
-	_, err := launchWaiting(c, protocol.RunLaunchParams{Task: "wait", Wait: true}, &said, time.Hour, "aether session -- wait")
-	if err == nil || !strings.Contains(err.Error(), "nothing started") || !strings.Contains(string(cancelled.params()), `"run-w"`) {
-		t.Fatalf("an interrupt before the answer = %v, cancel params %s; want the kept launch cancelled", err, cancelled.params())
+	params := protocol.RunLaunchParams{Harness: "claude", WorkspaceID: "ws_1", Task: "wait", IdempotencyKey: "k-w", Wait: true}
+	_, err := launchWaiting(c, params, &said, time.Hour, "aether session -- wait")
+	if !errors.Is(err, errInterrupted) {
+		t.Fatalf("an interrupt before the answer = %v, want the command interrupted", err)
+	}
+	var status *exitStatusError
+	if exit := launchError(err, params, false); !errors.As(exit, &status) || status.code != 130 ||
+		!strings.Contains(exit.Error(), "cancel it with Ctrl-C while it waits for room") || !strings.Contains(exit.Error(), "--idempotency-key k-w") {
+		t.Fatalf("exit = %v, want status 130 and the command that follows the launch", exit)
 	}
 }

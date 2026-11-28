@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/cli"
+	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 	"github.com/3xDevOps/cloudfield/internal/shellquote"
 )
@@ -94,7 +95,7 @@ func runRun(args []string) error {
 		return fmt.Errorf("invalid --children %q: want on or off", *children)
 	}
 	if *agent == "" || fs.NArg() > 1 || (task == "" && *mode == "headless") {
-		return fmt.Errorf("usage: cloudfield session [\"task\"|-] --agent <name> [--mode standard|enhanced|background] [--model <model>] [--effort <level>] [--permission root|default|isolated] [--workspace] [--account <member-id>] [--fallback <member-id>,... | --no-fallback] [--cached-base <full-sha>] [--repo <workspace> ...] [--children on|off] [--linear-issue <url>] [--idempotency-key <key>]\n   (a task is required with --mode background; - reads it from stdin)\n   or: cloudfield session --template <name> [--param k=v] [--workspace]\n   or: cloudfield session switch <session-id> --mode standard|enhanced")
+		return fmt.Errorf("usage: cloudfield session [\"task\"|-] --agent <name> [--mode standard|enhanced|background] [--model <model>] [--effort <level>] [--permission root|default|isolated] [--workspace] [--account <member-id>] [--fallback <member-id>,... | --no-fallback] [--cached-base <full-sha>] [--repo <workspace> ...] [--children on|off] [--linear-issue <url>] [--no-wait] [--idempotency-key <key>]\n   (a task is required with --mode background; - reads it from stdin)\n   or: cloudfield session --template <name> [--param k=v] [--workspace]\n   or: cloudfield session switch <session-id> --mode standard|enhanced")
 	}
 	fromStdin := task == "-"
 	task, err = stdinText(task, "task", os.Stdin)
@@ -168,6 +169,15 @@ type errWaitEnded struct {
 
 func (e *errWaitEnded) Error() string { return e.text }
 
+// An interrupted command may leave a call in flight, which withControl
+// must not wait behind.
+func (e *errWaitEnded) Unwrap() error {
+	if e.code == 130 {
+		return errInterrupted
+	}
+	return nil
+}
+
 // launchWaiting launches params. While the server keeps the launch because
 // it has no room, it says why on w, each time the server's refusal changes,
 // and asks again every interval until the session has started or the wait
@@ -178,7 +188,7 @@ func launchWaiting(c *protocol.Client, params protocol.RunLaunchParams, w io.Wri
 	interrupt := make(chan os.Signal, 2)
 	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(interrupt)
-	waiting, said := "", ""
+	waiting, said, started := "", "", ""
 	// left is how a command that stops watching says where the launch is.
 	left := func(why string, code int) error {
 		return &errWaitEnded{code: code, text: fmt.Sprintf("%s\nthe launch may still be waiting on the server and start later. To follow it, or cancel it with Ctrl-C, run:\n  %s", why, again)}
@@ -216,6 +226,9 @@ func launchWaiting(c *protocol.Client, params protocol.RunLaunchParams, w io.Wri
 					// The wait is over without a session: the server says how.
 					return protocol.RunLaunchResult{}, &errWaitEnded{code: 1, text: rpcErr.Message}
 				}
+				if started != "" {
+					return protocol.RunLaunchResult{}, &errWaitEnded{code: 1, text: fmt.Sprintf("session %s started once the server had room, and asking after it failed: %v", started, err)}
+				}
 				return protocol.RunLaunchResult{}, left(err.Error(), 1)
 			}
 			if err != nil {
@@ -225,25 +238,10 @@ func launchWaiting(c *protocol.Client, params protocol.RunLaunchParams, w io.Wri
 			if waiting != "" {
 				return protocol.RunLaunchResult{}, cancel()
 			}
-			if !params.Wait {
-				return protocol.RunLaunchResult{}, errInterrupted
-			}
-			// The server may be keeping this launch already: only its
-			// answer names what to cancel.
-			select {
-			case err := <-done:
-				if err != nil {
-					return protocol.RunLaunchResult{}, errInterrupted
-				}
-				if res.Waiting == nil {
-					return res, nil
-				}
-				waiting = res.Waiting.ID
-				return protocol.RunLaunchResult{}, cancel()
-			case <-interrupt:
-			case <-time.After(cancelWaitFor):
-			}
-			return protocol.RunLaunchResult{}, left("interrupted before the server answered", 130)
+			// Before the first answer the server may be provisioning the
+			// session, which takes minutes, or keeping the launch: the
+			// command ends as it always did and says how to find out.
+			return protocol.RunLaunchResult{}, errInterrupted
 		}
 		switch {
 		case res.Waiting != nil:
@@ -259,8 +257,9 @@ func launchWaiting(c *protocol.Client, params protocol.RunLaunchParams, w io.Wri
 		// before it is provisioned: a launch that did not wait answers
 		// only then, and this command reports the same.
 		case res.Run.Status == "queued" || res.Run.Status == "provisioning":
-		case res.Run.Status == "failed":
-			return protocol.RunLaunchResult{}, &errWaitEnded{code: 1, text: fmt.Sprintf("session %s started once the server had room and failed: %s", res.Run.ID, res.Run.Reason)}
+			started = res.Run.ID
+		case domain.RunStatus(res.Run.Status).Final():
+			return protocol.RunLaunchResult{}, &errWaitEnded{code: 1, text: fmt.Sprintf("session %s started once the server had room and ended %s: %s", res.Run.ID, res.Run.Status, res.Run.Reason)}
 		default:
 			// The replay is this command's own launch, not an earlier one.
 			res.Replayed = false
@@ -312,7 +311,7 @@ func launchError(err error, params protocol.RunLaunchParams, fromStdin bool) err
 	case errors.As(err, &ended):
 		return &exitStatusError{code: ended.code, err: err}
 	case errors.Is(err, errInterrupted):
-		return &exitStatusError{code: 130, err: fmt.Errorf("%w; a launch the server had already accepted keeps starting: aether sessions lists it, and aether kill <session-id> stops it once it is listed.\nto get its session id, or to launch it once if the server had not accepted it, run:\n  %s", errInterrupted, launchCommand(params, fromStdin))}
+		return &exitStatusError{code: 130, err: fmt.Errorf("%w; a launch the server had already accepted keeps starting, or waits for room when the server has none: aether sessions lists it once it has started, and aether kill <session-id> stops it then.\nto get its session id, to cancel it with Ctrl-C while it waits for room, or to launch it once if the server had not accepted it, run:\n  %s", errInterrupted, launchCommand(params, fromStdin))}
 	case errors.As(err, &rpcErr):
 		return cachedBaseLaunchError(err, params, fromStdin)
 	}

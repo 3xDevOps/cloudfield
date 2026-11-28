@@ -216,11 +216,15 @@ once the session runs. The output and exit status of a launch that succeeds
 are unchanged; a script that relied on a full server failing at once now
 blocks for up to a day, and passes `--no-wait` to keep the old behaviour.
 
-Ctrl-C or SIGTERM while it waits cancels the launch on the server and exits
-130: nothing starts later. When the server does not confirm the cancel
-within 10 seconds, or the connection is lost while waiting, the launch may
-still be kept: the command says so and prints the command that follows the
-same launch, where Ctrl-C cancels it. A command killed with SIGKILL cancels
+Ctrl-C or SIGTERM once it has printed that it waits cancels the launch on
+the server and exits 130: nothing starts later. Before that line the
+interrupt ends the command at once, as it always did, because the server
+may be provisioning the session. When the server does not confirm the
+cancel within 10 seconds, or the connection is lost while waiting, the
+launch may still be kept. In each of these cases the command says so and
+prints the command that follows the same launch, where Ctrl-C cancels it
+while it waits. A session that started after the wait and ended `failed`,
+`interrupted` or `abandoned` before it ran exits 1 with its reason. A command killed with SIGKILL cancels
 nothing; the launch stays waiting and starts when there is room.
 
 `--no-wait` fails at once with the refusal instead, as the command did
