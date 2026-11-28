@@ -35,6 +35,9 @@ service Guest {
   // Sync writes every filesystem's dirty data to its disk, then drops the
   // page cache, before a save.
   rpc Sync(SyncRequest) returns (SyncReply);
+  // CacheUse counts what the cache volume has free. A session that leaves
+  // both counts as it found them added nothing to its caches.
+  rpc CacheUse(CacheUseRequest) returns (CacheUseReply);
   // Browser starts, pauses, resumes or stops the development browser's
   // companion, which runs from the disk with serial "browser" in a root,
   // cgroup and IPC namespace of its own.
@@ -219,6 +222,13 @@ message FreezeSessionReply {}
 message SyncRequest {}
 
 message SyncReply {}
+
+message CacheUseRequest {}
+
+message CacheUseReply {
+  uint64 free_blocks = 1;
+  uint64 free_inodes = 2;
+}
 
 message BrowserRequest {
   enum Action {

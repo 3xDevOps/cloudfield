@@ -10,6 +10,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -87,6 +88,9 @@ func (e *engine) save(ctx context.Context, key string) error {
 		e.awaitReported(ctx, key)
 		synced = ctx.Err() == nil && e.syncGuest(ctx, key)
 	}
+	if synced && rec.Cache.Path != "" {
+		rec.CacheUse = e.cacheUse(ctx, key)
+	}
 	if !paused {
 		// The guest still runs, so a caller that gave up loses nothing. A
 		// frozen VM was thawed for this save and is saved all the same.
@@ -103,13 +107,19 @@ func (e *engine) save(ctx context.Context, key string) error {
 		if paused {
 			return fmt.Errorf("vm runtime: save VM %s: %w", key, cause)
 		}
-		return e.resumeAfter(ctx, api, key, cause)
+		return e.resumeAfter(ctx, rec, cause)
 	}
 	dir := e.path(key, snapshotDir)
 	if err = errors.Join(os.RemoveAll(dir), os.RemoveAll(e.path(key, usedSnapshotDir))); err != nil {
 		return resumeAfter(err)
 	}
 	if err = os.Mkdir(dir, 0o700); err != nil {
+		return resumeAfter(err)
+	}
+	// The snapshot's page cache is charged to the unit, and at the unit's
+	// limit the kernel kills the monitor. The guest is paused and takes no
+	// more memory, so the limit is off until resumeGuest runs it again.
+	if err = writeCgroup(e.memoryMaxFile(key), "max"); err != nil {
 		return resumeAfter(err)
 	}
 	// Not cut short with ctx: a monitor cut off goes on writing, and answers
@@ -230,11 +240,37 @@ func (e *engine) savedMemory(key string) (uint64, error) {
 	return uint64(n), nil
 }
 
-func (e *engine) resumeAfter(ctx context.Context, api chAPI, key string, cause error) error {
-	if err := api.resume(context.WithoutCancel(ctx)); err != nil {
-		return fmt.Errorf("vm runtime: save VM %s: %w; and it stays paused: %w", key, cause, err)
+func (e *engine) resumeAfter(ctx context.Context, rec *record, cause error) error {
+	if err := e.resumeGuest(context.WithoutCancel(ctx), rec); err != nil {
+		return fmt.Errorf("vm runtime: save VM %s: %w; and its resume: %w", rec.Key, cause, err)
 	}
-	return fmt.Errorf("vm runtime: save VM %s: %w", key, cause)
+	return fmt.Errorf("vm runtime: save VM %s: %w", rec.Key, cause)
+}
+
+func (e *engine) memoryMaxFile(key string) string {
+	return filepath.Join(e.cgroupRoot, runtime.SessionSlice, unitName(key), "memory.max")
+}
+
+// resumeGuest starts the stopped vCPUs of rec's VM and writes its unit's
+// memory limit, which a save turned off for its snapshot. A limit under the
+// snapshot's page cache gets the monitor killed, so the limit comes last: a
+// monitor still writing answers no resume until it is done, and the files
+// of a snapshot that saved nothing take their page cache with them.
+func (e *engine) resumeGuest(ctx context.Context, rec *record) error {
+	if err := newCHAPI(e.path(rec.Key, apiSocket)).resume(ctx); err != nil {
+		return err
+	}
+	var err error
+	if !rec.Saved {
+		err = os.RemoveAll(e.path(rec.Key, snapshotDir))
+	}
+	if err == nil {
+		err = writeCgroup(e.memoryMaxFile(rec.Key), strconv.FormatInt(unitMemoryMiB(rec)<<20, 10))
+	}
+	if err != nil {
+		return fmt.Errorf("it runs, and its unit keeps no memory limit: %w", err)
+	}
+	return nil
 }
 
 func (e *engine) awaitStopped(ctx context.Context, key string) error {
@@ -316,35 +352,10 @@ func (e *engine) restore(ctx context.Context, key string) error {
 		if up {
 			e.kill(ctx, key)
 		}
-		// The guest's mounts were made at boot: the shares keep the indexes
-		// they had then, whatever the host holds now.
-		var booted launch
-		if booted, err = readLaunch(e.dir(key)); err != nil {
+		if err = e.loadSaved(ctx, rec); err != nil {
 			return err
 		}
-		l := launch{Home: booted.Home, Reveal: booted.Reveal, Args: []string{
-			"--api-socket", "path=" + e.path(key, apiSocket), "--event-monitor", "path=" + e.path(key, eventsFile),
-			"--restore", "source_url=file://" + dir,
-		}}
-		if rec.Net != offline {
-			if err = e.ensureNetwork(ctx); err != nil {
-				return err
-			}
-		}
-		runtime.Step(ctx, "network")
-		if err = e.launch(ctx, rec, l); err != nil {
-			return err
-		}
-		runtime.Step(ctx, "unit")
-		loadCtx, cancel := context.WithTimeout(ctx, restoreTimeout+time.Duration(unitMemoryMiB(rec)<<20/snapshotRate)*time.Second)
-		err = e.awaitRestored(loadCtx, key, api)
-		cancel()
-		e.stepHypervisor(ctx, key)
-		runtime.Step(ctx, "restore")
-		if err == nil {
-			rec.Resumed, err = diskTimes(dir)
-		}
-		if err == nil {
+		if rec.Resumed, err = diskTimes(dir); err == nil {
 			rec.Exited = false
 			rec.CacheRan, rec.CacheSynced = rec.Cache.Path != "", false
 			err = e.store(rec)
@@ -413,6 +424,41 @@ func (e *engine) restore(ctx context.Context, key string) error {
 			slog.Warn("vm runtime: delete the saved state a wake used", "vm", key, "error", rmErr)
 		}
 	}()
+	return err
+}
+
+// loadSaved starts a monitor on rec's saved state and waits until it holds
+// the guest, still paused.
+func (e *engine) loadSaved(ctx context.Context, rec *record) error {
+	key := rec.Key
+	// The guest's mounts were made at boot: the shares keep the indexes
+	// they had then, whatever the host holds now.
+	booted, err := readLaunch(e.dir(key))
+	if err != nil {
+		return err
+	}
+	l := launch{Home: booted.Home, Reveal: booted.Reveal, Args: []string{
+		"--api-socket", "path=" + e.path(key, apiSocket), "--event-monitor", "path=" + e.path(key, eventsFile),
+		"--restore", "source_url=file://" + e.path(key, snapshotDir),
+	}}
+	if rec.Net != offline {
+		if err = e.ensureNetwork(ctx); err != nil {
+			return err
+		}
+	}
+	runtime.Step(ctx, "network")
+	if err = e.launch(ctx, rec, l); err != nil {
+		return err
+	}
+	runtime.Step(ctx, "unit")
+	loadCtx, cancel := context.WithTimeout(ctx, restoreTimeout+time.Duration(unitMemoryMiB(rec)<<20/snapshotRate)*time.Second)
+	err = e.awaitRestored(loadCtx, key, newCHAPI(e.path(key, apiSocket)))
+	cancel()
+	e.stepHypervisor(ctx, key)
+	runtime.Step(ctx, "restore")
+	if err != nil {
+		e.kill(context.WithoutCancel(ctx), key)
+	}
 	return err
 }
 
