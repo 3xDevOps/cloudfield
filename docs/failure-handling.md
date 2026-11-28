@@ -892,6 +892,8 @@ waits: it stays asleep with the refusal shown.
   `launch.waiting.list` for a day.
 - **Limits.** One member may have 8 launches waiting; one more is refused as
   a launch always was.
+- **What removes it.** Deleting its workspace or its member deletes their
+  waiting launches with them.
 - **A restart.** A waiting launch is in the database and waits on. One the
   server was trying when it stopped goes back to waiting, unless its session
   exists.
