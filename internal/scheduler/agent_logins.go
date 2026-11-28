@@ -172,7 +172,7 @@ func (s *Scheduler) StartLoginSignIn(ctx context.Context, member domain.MemberID
 	s.mu.Unlock()
 	att, err := s.startSignInContainer(ctx, sign, cols, rows)
 	if err == nil {
-		ending := &endingAttachment{Attachment: att, end: func() { go s.finishLoginSignIn(sign) }}
+		ending := &endingAttachment{Attachment: att, end: func() { s.startLoginSignInFinish(sign) }}
 		if err = s.cfg.PTY.StartSession(ctx, key, ending); err != nil {
 			_ = att.Close()
 		}
@@ -309,6 +309,23 @@ func (s *Scheduler) cleanUpSignIn(ctx context.Context, sign *loginSignIn) error 
 		slog.Warn("scheduler: remove a sign-in's transcript", "login", sign.id, "error", err)
 	}
 	return nil
+}
+
+// startLoginSignInFinish finishes sign off the terminal's path. Close waits
+// for a finish that began before it.
+func (s *Scheduler) startLoginSignInFinish(sign *loginSignIn) {
+	s.mu.Lock()
+	tracked := s.superCtx.Err() == nil
+	if tracked {
+		s.wg.Add(1)
+	}
+	s.mu.Unlock()
+	go func() {
+		if tracked {
+			defer s.wg.Done()
+		}
+		s.finishLoginSignIn(sign)
+	}()
 }
 
 // finishLoginSignIn runs once the sign-in command ended: it removes the

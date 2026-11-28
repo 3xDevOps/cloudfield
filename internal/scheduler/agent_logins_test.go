@@ -204,6 +204,46 @@ func TestSignInAddsTheLoginItSavedAndTouchesNoOtherLogin(t *testing.T) {
 	}
 }
 
+// Close waits for a sign-in whose command ended and whose finish is still
+// removing its container, so the finish never works on a closed store.
+func TestCloseWaitsForASignInThatIsFinishing(t *testing.T) {
+	e := newSignInEnv(t)
+	id, err := e.sched.BeginLoginSignIn(t.Context(), e.member.ID, "claude", "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	finishing, release := make(chan struct{}), make(chan struct{})
+	att := newSignInAttachment()
+	e.rt.mu.Lock()
+	e.rt.destroyHook = func(runtime.ID) {
+		close(finishing)
+		<-release
+	}
+	e.rt.execTTYHook = func(context.Context, runtime.ID, []string, string, uint, uint) (runtime.Attachment, error) {
+		return att, att.Close()
+	}
+	e.rt.mu.Unlock()
+	if _, err = e.sched.StartLoginSignIn(t.Context(), e.member.ID, id, 80, 24); err != nil {
+		t.Fatal(err)
+	}
+	<-finishing
+	closed := make(chan struct{})
+	go func() {
+		_ = e.sched.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Fatal("Close returned while the sign-in was finishing")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	<-closed
+	if _, err = e.sched.LoginSignInResult(t.Context(), e.member.ID, "claude", id); err == nil || !strings.Contains(err.Error(), "before Claude Code saved a login") {
+		t.Fatalf("the sign-in Close waited for ended with %v; want it settled as one that saved nothing", err)
+	}
+}
+
 // A sign-in that saved a Console API key, saved nothing, or signed in to the
 // account of a login the member already has adds no login and leaves no
 // directory.
