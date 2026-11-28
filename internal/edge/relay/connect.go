@@ -294,8 +294,15 @@ func (r *Relay) attachDevice(ctx context.Context, c *relayConn, msg edgeproto.Op
 	cancel()
 	if err == nil && c.kind == edgeproto.KindSSH {
 		actx, cancel = context.WithTimeout(ctx, directoryTimeout)
-		err = r.admitted(actx, c)
+		refusal, checkErr := r.admitted(actx, c)
 		cancel()
+		if err = refusal; checkErr != nil {
+			err = errUnchecked
+			// A client that went away is no fault of the store's.
+			if ctx.Err() == nil {
+				slog.Warn("relay: access of an opening connection not checked; refusing it", "server", c.serverID, "conn", c.id, "error", checkErr)
+			}
+		}
 	}
 	if err != nil {
 		c.cancel(err)

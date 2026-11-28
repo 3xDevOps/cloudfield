@@ -151,24 +151,19 @@ func TestMemberOfARemovedServerIsCutWhenItEnrollsAgain(t *testing.T) {
 	roundTrip(t, client, server, "the new owner's connection")
 }
 
-// A claim connection is admitted by the server's claim code. The pass at
-// an unclaimed enrollment, which ends ssh connections to a server the edge
-// does not know, leaves it open.
-func TestClaimConnectionOutlivesTheServerEnrollingAgain(t *testing.T) {
+// A claim connection is admitted by the server's claim code. A pass over
+// the connections to its server, which the edge does not know yet, leaves
+// it open.
+func TestPassLeavesAClaimConnection(t *testing.T) {
 	e := newEnv(t)
-	signer := newSigner(t)
-	a := enroll(t, e, signer)
+	a := enroll(t, e, newSigner(t))
 	a.attach = true
 	go a.run()
 	_, token := e.addDevice(t, account("7"), "dev-7")
 	client, server := e.connectPath(t, a, edgeproto.ClaimConnectPath(a.id), token)
 
-	enroll(t, e, signer)
-	// The pass runs beside the enrollment and asks nothing about a claim
-	// connection, so there is nothing to wait for but time.
-	roundTrip(t, client, server, "the claim connection after its server enrolled again")
-	time.Sleep(100 * time.Millisecond)
-	roundTrip(t, client, server, "the claim connection a moment later")
+	e.r.revoke(a.id)
+	roundTrip(t, client, server, "the claim connection after a pass")
 }
 
 // When a server reports that its owner changed or that it has none, the
@@ -203,7 +198,10 @@ func TestFormerOwnerIsCutUnlessTheDirectoryNamesThem(t *testing.T) {
 					}
 				}
 				if named {
+					// The report's pass runs beside the reader; one more,
+					// finished here, shows what a pass does to a member.
 					passed()
+					e.r.revoke(a.id)
 					roundTrip(t, client, server, "the former owner's connection, a member's still")
 					return
 				}
@@ -283,5 +281,75 @@ func TestConnectAdmittedBeforeItsAccountWasDroppedIsRefused(t *testing.T) {
 	}
 	if err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("a connect whose account was dropped while it opened: %v, %+v; want it refused as not a member", err, resp)
+	}
+}
+
+// Reports that arrive while a pass runs do not start a pass each: one
+// more runs when it ends.
+func TestPassesForOneServerDoNotPileUp(t *testing.T) {
+	e := newEnv(t)
+	a := claimedAgent(t, e)
+	owner := account("owner")
+	_, token := e.addDevice(t, owner, "dev-owner")
+	e.connect(t, a, token)
+
+	asking, answer := make(chan struct{}, 8), make(chan struct{})
+	e.dir.mu.Lock()
+	e.dir.admittedHook = func() {
+		asking <- struct{}{}
+		<-answer
+	}
+	e.dir.mu.Unlock()
+	for range 5 {
+		e.r.revokeSoon(a.id)
+	}
+	select {
+	case <-asking:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no pass ran")
+	}
+	select {
+	case <-asking:
+		t.Fatal("a second pass over the server's connections began while the first was running")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(answer)
+	select {
+	case <-asking:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pass asked for while one was running never ran")
+	}
+	eventually(t, "the passes ending", func() bool {
+		e.r.mu.Lock()
+		defer e.r.mu.Unlock()
+		return len(e.r.revoking) == 0
+	})
+	if n := len(asking); n != 0 {
+		t.Fatalf("%d passes more than the one running and the one asked for meanwhile", n)
+	}
+}
+
+// A connect whose second check gets no answer is refused, told why.
+func TestConnectTheEdgeCannotCheckIsRefused(t *testing.T) {
+	e := newEnv(t)
+	a := claimedAgent(t, e)
+	bob := account("2")
+	e.dir.addMember(a.id, bob)
+	_, token := e.addDevice(t, bob, "bob-laptop")
+	e.dir.mu.Lock()
+	e.dir.admitHook = func() {
+		e.dir.mu.Lock()
+		defer e.dir.mu.Unlock()
+		// The next Authenticate is the one after the connection registered.
+		e.dir.authHook = func() {
+			e.dir.mu.Lock()
+			defer e.dir.mu.Unlock()
+			e.dir.admittedErr = map[edgeproto.Principal]error{edgeproto.AccountPrincipal(bob): errors.New("store unavailable")}
+		}
+	}
+	e.dir.mu.Unlock()
+	status, body := e.get(t, a.id, bearerHeader(token))
+	if status != http.StatusServiceUnavailable || !strings.Contains(body, "could not check this connection's access") {
+		t.Fatalf("a connect the edge could not check: %d %q; want 503 and the reason", status, body)
 	}
 }

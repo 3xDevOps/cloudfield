@@ -227,7 +227,7 @@ func (r *Relay) enroll(ws *websocket.Conn, addr netip.Prefix, origin string) (*r
 	if !claimed {
 		// `aether-edge servers remove` forgets a server without telling
 		// the relay, which learns it here.
-		go r.revoke(id)
+		r.revokeSoon(id)
 	}
 
 	state := edgeproto.StateUnclaimed
@@ -473,7 +473,7 @@ func (r *Relay) claimReported(reg *registration, m edgeproto.Claimed) error {
 // channel's reader.
 func (r *Relay) ownerChanged(reg *registration, err error) error {
 	if err == nil {
-		go r.revoke(reg.id)
+		r.revokeSoon(reg.id)
 	}
 	return err
 }
@@ -652,26 +652,62 @@ func (r *Relay) revoke(serverID string) {
 	r.mu.Unlock()
 	ctx, cancel := context.WithTimeout(r.ctx, directoryTimeout)
 	defer cancel()
+	var unchecked int
+	var first error
 	for _, c := range conns {
-		if err := r.admitted(ctx, c); err != nil {
-			c.cancel(err)
+		refusal, err := r.admitted(ctx, c)
+		switch {
+		case err != nil:
+			c.cancel(errUnchecked)
+			if unchecked++; first == nil {
+				first = err
+			}
+		case refusal != nil:
+			c.cancel(refusal)
 		}
+	}
+	// A relay that is stopping ends its connections itself.
+	if unchecked > 0 && r.ctx.Err() == nil {
+		slog.Warn("relay: access of relayed connections not checked; closed them", "server", serverID, "connections", unchecked, "error", first)
 	}
 }
 
-// admitted returns nil when the edge would admit c's account to c's server
-// now, the refusal when it would not, and errUnchecked when it cannot tell.
-func (r *Relay) admitted(ctx context.Context, c *relayConn) error {
-	err := r.dir.Admitted(ctx, c.serverID, c.account)
-	var refusal edgeproto.Refusal
-	if err == nil || errors.As(err, &refusal) {
-		return err
+// revokeSoon runs revoke beside its caller. A server has one such pass at
+// a time: asked for again while it runs, it runs once more when it ends,
+// so reports cannot pile passes up.
+func (r *Relay) revokeSoon(serverID string) {
+	r.mu.Lock()
+	if _, running := r.revoking[serverID]; running {
+		r.revoking[serverID] = true
+		r.mu.Unlock()
+		return
 	}
-	// A caller that went away, or a relay that is stopping, is no fault.
-	if !errors.Is(err, context.Canceled) {
-		slog.Warn("relay: access of a relayed connection not checked; closing it", "server", c.serverID, "conn", c.id, "error", err)
+	r.revoking[serverID] = false
+	r.mu.Unlock()
+	go func() {
+		for {
+			r.revoke(serverID)
+			r.mu.Lock()
+			if !r.revoking[serverID] {
+				delete(r.revoking, serverID)
+				r.mu.Unlock()
+				return
+			}
+			r.revoking[serverID] = false
+			r.mu.Unlock()
+		}
+	}()
+}
+
+// admitted asks whether the edge would admit c's account to c's server
+// now: refusal is why not, and err is set when it could not tell.
+func (r *Relay) admitted(ctx context.Context, c *relayConn) (refusal, err error) {
+	err = r.dir.Admitted(ctx, c.serverID, c.account)
+	var ref edgeproto.Refusal
+	if errors.As(err, &ref) {
+		return ref, nil
 	}
-	return errUnchecked
+	return nil, err
 }
 
 func (r *Relay) leave(reg *registration) error {

@@ -40,6 +40,8 @@ type fakeDir struct {
 	// admittedErr fails Admit and Admitted for a principal, as a store
 	// that cannot be read does.
 	admittedErr map[edgeproto.Principal]error
+	// admittedHook, when set, runs at the start of every Admitted.
+	admittedHook func()
 	// admittedCalls counts the Admit and Admitted calls for a principal.
 	admittedCalls map[edgeproto.Principal]int
 	// authHook, when set, runs once at the start of the next Authenticate.
@@ -95,6 +97,12 @@ func (d *fakeDir) Admit(ctx context.Context, serverID string, a edgeproto.Accoun
 }
 
 func (d *fakeDir) Admitted(_ context.Context, serverID string, a edgeproto.Account) error {
+	d.mu.Lock()
+	hook := d.admittedHook
+	d.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.admittedCalls[edgeproto.AccountPrincipal(a)]++
