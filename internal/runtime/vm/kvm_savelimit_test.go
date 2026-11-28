@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -25,7 +26,7 @@ func TestKVMSaveOfAFullVMNeverReachesTheUnitsMemoryLimit(t *testing.T) {
 	e := kvmEngine(t)
 	key := "run-save-full"
 	t.Cleanup(func() { _ = e.destroy(context.Background(), key) })
-	sum := fullSession(t, e, key)
+	sum := fullSession(t, e, key, 2)
 	held := guestRAMOnHost(t, key)
 	reached, err := saveCountingLimit(e, key)
 	if err != nil {
@@ -55,7 +56,7 @@ func TestKVMAResumeAfterASnapshotGivesTheUnitItsMemoryLimitBack(t *testing.T) {
 		}
 		_ = e.destroy(context.Background(), key)
 	})
-	sum := fullSession(t, e, key)
+	sum := fullSession(t, e, key, 2)
 	rec, err := e.load(key)
 	if err != nil {
 		t.Fatal(err)
@@ -70,8 +71,11 @@ func TestKVMAResumeAfterASnapshotGivesTheUnitItsMemoryLimitBack(t *testing.T) {
 		if err = e.pause(t.Context(), key); err != nil {
 			t.Fatal(err)
 		}
-		if err = writeCgroup(e.memoryMaxFile(key), "max"); err != nil {
+		if err = e.units.SetProperty(t.Context(), unitName(key), "MemoryMax=infinity"); err != nil {
 			t.Fatal(err)
+		}
+		if got, _ := os.ReadFile(e.memoryMaxFile(key)); strings.TrimSpace(string(got)) != "max" {
+			t.Fatalf("round %d: the paused guest's unit has a memory.max of %q, want max", round, got)
 		}
 		if err = os.Mkdir(dir, 0o700); err == nil {
 			err = newCHAPI(e.path(key, apiSocket)).snapshot(t.Context(), dir)
@@ -94,13 +98,124 @@ func TestKVMAResumeAfterASnapshotGivesTheUnitItsMemoryLimitBack(t *testing.T) {
 	}
 }
 
-// fullSession starts a 2 GiB session VM that holds 1800 MiB in /dev/shm and
-// returns that file's checksum.
-func fullSession(t *testing.T, e *engine, key string) []string {
+// TestKVMASaveKeepsItsLiftedMemoryLimitWhenSystemdAppliesTheUnitAgain makes
+// systemd apply the unit's settings while a full VM is saved. The VM has no
+// CPU limit and no other unit in the slice has a CPU setting, so the start
+// of one that has turns the slice's cpu controller on and its stop turns
+// it off; where AETHER_VM_TEST_DAEMON_RELOAD is set, systemd also reloads.
+// Written to the cgroup file alone, the lifted limit was put back from
+// systemd's own record. The saved VM's unit ends with the limit lifted in
+// that record, so the units that follow it, after a wake and after a
+// start, must hold the limit again and inherit no setting.
+func TestKVMASaveKeepsItsLiftedMemoryLimitWhenSystemdAppliesTheUnitAgain(t *testing.T) {
+	e := kvmEngine(t)
+	key := "run-save-reapply"
+	sibling := "aether-vm-test-sibling.service"
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Log(oomKills())
+		}
+		_ = exec.Command("systemctl", "stop", sibling).Run()
+		_ = e.destroy(context.Background(), key)
+	})
+	fullSession(t, e, key, 0)
+	rec, err := e.load(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slice := filepath.Join(e.cgroupRoot, runtime.SessionSlice, "cgroup.subtree_control")
+	if on, _ := os.ReadFile(slice); slices.Contains(strings.Fields(string(on)), "cpu") {
+		t.Fatalf("%s holds %q: a unit with a CPU setting runs in the slice, so the start of another applies no unit again", slice, on)
+	}
+	limit := strconv.FormatInt(unitMemoryMiB(rec)<<20, 10)
+	unit := unitName(key)
+	memoryMax := func() string {
+		data, _ := os.ReadFile(e.memoryMaxFile(key))
+		return strings.TrimSpace(string(data))
+	}
+	systemdHas := func() string {
+		out, showErr := exec.Command("systemctl", "show", "--property=LoadState,MemoryMax,DropInPaths", unit).CombinedOutput()
+		if showErr != nil {
+			t.Fatalf("systemctl show %s: %v: %s", unit, showErr, out)
+		}
+		return string(out)
+	}
+	limited := func(when string) {
+		t.Helper()
+		got, has := memoryMax(), systemdHas()
+		t.Logf("%s: memory.max %q, systemd has %q", when, got, has)
+		if got != limit {
+			t.Errorf("%s the unit's memory.max is %q, want %s", when, got, limit)
+		}
+		if !strings.Contains(has, "DropInPaths=\n") {
+			t.Errorf("%s the unit has settings its last one left: %q", when, has)
+		}
+	}
+	limited("before the save")
+
+	saved := make(chan error, 1)
+	go func() { saved <- e.save(context.Background(), key) }()
+	for memoryMax() != "max" {
+		select {
+		case err = <-saved:
+			t.Fatalf("the save ended before its unit's memory.max read max: %v", err)
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	lifted := time.Now()
+	reapplies := [][]string{
+		{"systemd-run", "--unit=" + sibling, "--slice=" + runtime.SessionSlice, "--collect", "--quiet", "--property=CPUWeight=50", "sleep", "infinity"},
+		{"systemctl", "stop", sibling},
+	}
+	if os.Getenv("AETHER_VM_TEST_DAEMON_RELOAD") != "" {
+		reapplies = append(reapplies, []string{"systemctl", "daemon-reload"})
+	}
+	for _, argv := range reapplies {
+		command := strings.Join(argv, " ")
+		if out, runErr := exec.Command(argv[0], argv[1:]...).CombinedOutput(); runErr != nil {
+			t.Fatalf("%s: %v: %s", command, runErr, out)
+		}
+		got := memoryMax()
+		select {
+		case err = <-saved:
+			t.Fatalf("the save ended %s after it lifted the limit, before %q could be checked: %v", time.Since(lifted), command, err)
+		default:
+		}
+		t.Logf("%s into the snapshot, after %q: memory.max %q", time.Since(lifted).Round(time.Millisecond), command, got)
+		if got != "max" {
+			t.Errorf("after %q during the save the unit's memory.max is %q, want max", command, got)
+		}
+	}
+	if err = <-saved; err != nil {
+		t.Fatalf("the save: %v", err)
+	}
+
+	t.Logf("the saved VM's ended unit: systemd has %q", systemdHas())
+	for _, dir := range []string{"/run/systemd/transient", "/run/systemd/system.control", "/etc/systemd/system.control"} {
+		if entries, _ := os.ReadDir(filepath.Join(dir, unit+".d")); len(entries) > 0 {
+			t.Errorf("the saved VM's ended unit left %s in %s", entries, filepath.Join(dir, unit+".d"))
+		}
+	}
+	if err = e.restore(t.Context(), key); err != nil {
+		t.Fatal(err)
+	}
+	limited("after a wake")
+	if err = e.stop(t.Context(), key, 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err = e.start(t.Context(), key); err != nil {
+		t.Fatal(err)
+	}
+	limited("after a start")
+}
+
+// fullSession starts a 2 GiB session VM with a limit of cpus CPUs, or none
+// at 0, that holds 1800 MiB in /dev/shm, and returns that file's checksum.
+func fullSession(t *testing.T, e *engine, key string, cpus float64) []string {
 	t.Helper()
 	spec := runtime.Spec{
 		Image: "docker.io/library/ubuntu:24.04", CreationKey: key, Command: []string{"/bin/sh", "-c", "exec sleep infinity"},
-		Env: map[string]string{"AETHER_RUN_ID": key}, CPULimit: 2, MemoryLimitBytes: 2 << 30,
+		Env: map[string]string{"AETHER_RUN_ID": key}, CPULimit: cpus, MemoryLimitBytes: 2 << 30,
 	}
 	if _, err := e.create(t.Context(), key, spec, options{Offline: true}); err != nil {
 		t.Fatal(err)

@@ -173,7 +173,7 @@ func TestAPausedGuestGetsItsUnitsMemoryLimitAsItRuns(t *testing.T) {
 
 	halt("run-b")
 	cut := h.engine.path("run-b", snapshotDir)
-	if err := errors.Join(os.Mkdir(cut, 0o700), os.WriteFile(h.engine.memoryMaxFile("run-b"), []byte("max"), 0o644)); err != nil {
+	if err := errors.Join(os.Mkdir(cut, 0o700), h.units.SetProperty(t.Context(), unitName("run-b"), "MemoryMax=infinity")); err != nil {
 		t.Fatal(err)
 	}
 	if err := (&Runtime{vms: h.engine}).BootForCapture(t.Context(), runtime.ID(idPrefix+"run-b")); err != nil {

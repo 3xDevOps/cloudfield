@@ -119,7 +119,7 @@ func (e *engine) save(ctx context.Context, key string) error {
 	// The snapshot's page cache is charged to the unit, and at the unit's
 	// limit the kernel kills the monitor. The guest is paused and takes no
 	// more memory, so the limit is off until resumeGuest runs it again.
-	if err = writeCgroup(e.memoryMaxFile(key), "max"); err != nil {
+	if err = e.units.SetProperty(context.WithoutCancel(ctx), unitName(key), "MemoryMax=infinity"); err != nil {
 		return resumeAfter(err)
 	}
 	// Not cut short with ctx: a monitor cut off goes on writing, and answers
@@ -247,11 +247,7 @@ func (e *engine) resumeAfter(ctx context.Context, rec *record, cause error) erro
 	return fmt.Errorf("vm runtime: save VM %s: %w", rec.Key, cause)
 }
 
-func (e *engine) memoryMaxFile(key string) string {
-	return filepath.Join(e.cgroupRoot, runtime.SessionSlice, unitName(key), "memory.max")
-}
-
-// resumeGuest starts the stopped vCPUs of rec's VM and writes its unit's
+// resumeGuest starts the stopped vCPUs of rec's VM and sets its unit's
 // memory limit, which a save turned off for its snapshot. A limit under the
 // snapshot's page cache gets the monitor killed, so the limit comes last: a
 // monitor still writing answers no resume until it is done, and the files
@@ -265,7 +261,7 @@ func (e *engine) resumeGuest(ctx context.Context, rec *record) error {
 		err = os.RemoveAll(e.path(rec.Key, snapshotDir))
 	}
 	if err == nil {
-		err = writeCgroup(e.memoryMaxFile(rec.Key), strconv.FormatInt(unitMemoryMiB(rec)<<20, 10))
+		err = e.units.SetProperty(context.WithoutCancel(ctx), unitName(rec.Key), "MemoryMax="+strconv.FormatInt(unitMemoryMiB(rec)<<20, 10))
 	}
 	if err != nil {
 		return fmt.Errorf("it runs, and its unit keeps no memory limit: %w", err)

@@ -553,22 +553,28 @@ The page cache the snapshot writes is charged to the VM's unit. Held to
 the unit's `MemoryMax`, the save of a VM whose session filled it reached
 the limit, and the kernel could then kill Cloud Hypervisor (`Memory cgroup
 out of memory: Killed process ... (cloud-hyperviso)`), which lost the
-session's memory. So the save writes `max` to the unit's `memory.max` once
-the guest is paused and can take no more memory
-(`TestKVMSaveOfAFullVMNeverReachesTheUnitsMemoryLimit`).
+session's memory. So the save lifts the unit's limit once the guest is
+paused and can take no more memory, with `systemctl set-property --runtime
+<unit> MemoryMax=infinity`
+(`TestKVMSaveOfAFullVMNeverReachesTheUnitsMemoryLimit`). It does not write
+the unit's `memory.max` itself: systemd writes `MemoryMax` back from its
+own record whenever it applies the unit's settings again. `systemctl
+daemon-reload` does that, and so does the start of a unit with a CPU
+setting beside a VM that has no CPU limit, when no other unit in the slice
+has one. With the limit lifted in systemd's record, both leave it lifted
+(`TestKVMASaveKeepsItsLiftedMemoryLimitWhenSystemdAppliesTheUnitAgain`).
 
-A saved VM's unit ends, and its next one starts with `MemoryMax`. A guest
-that stays paused in its unit, after a save that failed or one a stopping
-server cut short, keeps `max` until it is resumed. The resume writes the
-limit from the VM's record once Cloud Hypervisor has answered, which it
+A saved VM's unit ends, and the lifted limit ends with it: systemd keeps
+the setting in `/run/systemd/transient/<unit>.d/` and removes it with the
+unit, so the next unit of that VM, after a wake or a start, has the
+`MemoryMax` it starts with (the same test). A guest that stays paused in
+its unit, after a save that failed or one a stopping server cut short,
+keeps no limit until it is resumed. The resume sets the limit from the
+VM's record the same way, once Cloud Hypervisor has answered, which it
 does only when it is done writing a snapshot, and once the files of a
 snapshot that saved nothing are removed: resumed with the limit under
 their page cache, the monitor was killed the same way
 (`TestKVMAResumeAfterASnapshotGivesTheUnitItsMemoryLimitBack`).
-A snapshot is not covered while systemd applies the unit's settings again,
-which writes `MemoryMax` back from its own state: `systemctl daemon-reload`
-does that, and so does a start or stop of another unit in the slice that
-changes the slice's enabled controllers.
 
 Cloud Hypervisor can load that memory on demand instead
 (`memory_restore_mode=ondemand`): it resumes at once and copies each page in
