@@ -255,7 +255,7 @@ func (s *Scheduler) removeSpareRun(run domain.RunID) {
 		return
 	case err == nil:
 		if err = s.DeleteRun(ctx, run, ""); err == nil && row.Branch != "" {
-			err = s.cfg.Git.ReleaseRunBranch(ctx, row.WorkspaceID, row.Branch, row.BaseCommit)
+			err = s.cfg.Git.ReleaseRunBranch(ctx, row.WorkspaceID, row.Branch)
 		}
 	}
 	if err != nil {

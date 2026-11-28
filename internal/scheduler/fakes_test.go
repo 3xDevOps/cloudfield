@@ -701,7 +701,9 @@ type fakeGit struct {
 	// historyErr fails RemoveRunHistory.
 	historyErr error
 	// released are the branches ReleaseRunBranch gave back.
-	released      []string
+	released []string
+	// renameErr fails RenameRunBranch.
+	renameErr     error
 	commits       map[domain.RunID][]string
 	published     map[domain.RunID]int
 	watching      map[domain.RunID]domain.WorkspaceID
@@ -742,11 +744,25 @@ func (g *fakeGit) CreateRunCheckout(ctx context.Context, ws domain.WorkspaceID, 
 	return g.CreateRunCheckoutAt(ctx, ws, run, baseBranch, baseBranch, task, origin)
 }
 
-func (g *fakeGit) ReleaseRunBranch(_ context.Context, _ domain.WorkspaceID, branch, _ string) error {
+func (g *fakeGit) ReleaseRunBranch(_ context.Context, _ domain.WorkspaceID, branch string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.released = append(g.released, branch)
 	return nil
+}
+
+// RenameRunBranch names the branch after the task, as no branch
+// CreateRunCheckoutAt makes is.
+func (g *fakeGit) RenameRunBranch(_ context.Context, run domain.RunID, task string) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.renameErr != nil {
+		return "", g.renameErr
+	}
+	if task == "" {
+		return "aether/run-" + string(run), nil
+	}
+	return "aether/run-" + strings.ReplaceAll(task, " ", "-") + "-" + string(run), nil
 }
 
 func (g *fakeGit) releasedBranches() []string {

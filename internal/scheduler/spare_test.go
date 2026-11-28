@@ -239,6 +239,14 @@ func TestALaunchClaimsTheSpareWithoutStartingItsAgentAgain(t *testing.T) {
 	if got := len(rt.all()); got != agents {
 		t.Fatalf("the claim started %d more agents", got-agents)
 	}
+	// The branch reads as a cold launch's does: named after the task, in
+	// the row and in the VM's checkout.
+	made, named := "aether/run-"+string(spare), "aether/run-say-pong-again-"+string(spare)
+	renames := slices.DeleteFunc(rt.execRuns(), func(c fakeExecCall) bool { return c.argv[0] != "git" })
+	if claimed.Branch != named || len(renames) != 1 || renames[0].id != e.cid(t, spare) || renames[0].workDir != e.sched.cfg.WorktreeMount ||
+		!slices.Equal(renames[0].argv, []string{"git", "branch", "-m", made, named}) {
+		t.Fatalf("claimed session's branch = %q, renamed in its VM by %+v; want %q", claimed.Branch, renames, named)
+	}
 	waitItems(t, e.sched, spare, "the claimed task's turn", turnEnded("end_turn", 1))
 	wire := &rt.all()[agents-1].wire
 	if prompts := wire.prompts(t); len(prompts) != 1 || !slices.Equal(textOf(prompts[0]), []string{"say pong again"}) {
@@ -412,6 +420,12 @@ func TestALaunchTheSpareDiffersFromRemovesItAndRunsCold(t *testing.T) {
 			if _, err := e.cfg.Profiles.(*profile.Service).Put(t.Context(), string(e.member.ID), "claude", []profile.File{{Path: "settings.json", Mode: 0o600, Content: []byte("{}")}}); err != nil {
 				t.Fatal(err)
 			}
+			return e.ws.ID
+		},
+		"its branch cannot take the task's name": func(_ *testing.T, e *testEnv) domain.WorkspaceID {
+			e.git.mu.Lock()
+			defer e.git.mu.Unlock()
+			e.git.renameErr = errors.New("the name is taken")
 			return e.ws.ID
 		},
 	} {
@@ -634,6 +648,55 @@ func TestSparesGoFirstUnderPressure(t *testing.T) {
 			t.Fatalf("the disk guard's first check did %q, want only the spare removed", got)
 		}
 	})
+}
+
+// With no spare to remove, the brake freezes before it takes the scheduler's
+// lock, which a slow status write may hold while the VMs take the host's
+// last memory.
+func TestTheBrakeFreezesBeforeAnyLockWhenNoSpareIsKept(t *testing.T) {
+	t.Parallel()
+	e, rt := newSpareEnv(t)
+	session, _ := spareAndSession(t, e, rt)
+	e.sched.DropSpares(t.Context(), e.member.ID, true)
+	e.brake(rt.freezeRuntime, testFloor+1<<30)
+	rt.setAvailable(testFloor - 2<<30)
+	e.sched.mu.Lock()
+	braked := make(chan struct{})
+	go func() {
+		defer close(braked)
+		e.sched.brakeVMMemory(t.Context(), rt)
+	}()
+	frozen := false
+	for deadline := time.Now().Add(5 * time.Second); !frozen && time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		frozen = slices.Equal(rt.Frozen(), []runtime.ID{session})
+	}
+	e.sched.mu.Unlock()
+	<-braked
+	if !frozen {
+		t.Fatal("the brake waited for the scheduler's lock before it froze the session's VM")
+	}
+}
+
+// A stall that lasts with twice the floor free has the guard save an idle
+// session, and the spare goes before that too. Not parallel: it points
+// procRoot at a fake procfs.
+func TestTheGuardRemovesTheSpareBeforeItSavesForALastingStall(t *testing.T) {
+	proc := t.TempDir()
+	procRoot = proc
+	t.Cleanup(func() { procRoot = isolatedProcRoot })
+	e, rt := newSpareEnv(t)
+	_, spare := spareAndSession(t, e, rt)
+	rt.setAvailable(20 << 30)
+	writeMemoryStall(t, proc, "80.00")
+	e.sched.vmMemoryMu.Lock()
+	e.sched.vmMemoryStallSince = time.Now().Add(-memoryStallFor)
+	e.sched.vmMemoryMu.Unlock()
+
+	e.sched.guardVMMemory(t.Context())
+	e.waitNoSpares(t)
+	if got := rt.did(); !slices.Equal(got, []string{"destroy " + string(spare)}) {
+		t.Fatalf("the guard's check of a lasting stall did %q, want only the spare removed", got)
+	}
 }
 
 // A spare is made only from room nobody needs, and frees nothing to get it.

@@ -255,17 +255,77 @@ func (e *Engine) uniqueRunBranch(ctx context.Context, repo, base string, run dom
 	return full, nil
 }
 
-// ReleaseRunBranch gives back the name a run reserved in workspace ws and
-// then left at base: a branch that moved since is kept.
-func (e *Engine) ReleaseRunBranch(ctx context.Context, ws domain.WorkspaceID, branch, base string) error {
+// ReleaseRunBranch gives back the name a run no member ever saw reserved in
+// workspace ws, with whatever was published under it.
+func (e *Engine) ReleaseRunBranch(ctx context.Context, ws domain.WorkspaceID, branch string) error {
 	repo, err := e.existingRepoPath(ws)
 	if err != nil {
 		return err
 	}
-	if _, err := e.git(ctx, repo, "update-ref", "-d", "refs/heads/"+branch, base); err != nil {
+	if _, err := e.git(ctx, repo, "update-ref", "-d", "refs/heads/"+branch); err != nil {
 		return fmt.Errorf("gitengine: release branch %s: %w", branch, err)
 	}
 	return nil
+}
+
+// RenameRunBranch gives run, a session made before its task was known, the
+// branch name a launch of task reserves, and returns it; that is the name
+// run has when task has no words for one. It moves the name in the
+// workspace's repository and in run's record, and starts run's diff watch
+// again, which publishes under the name it started with. The branch in the
+// checkout itself is the caller's to rename.
+func (e *Engine) RenameRunBranch(ctx context.Context, run domain.RunID, task string) (branch string, err error) {
+	meta, err := e.readRunMeta(run)
+	if err != nil || slugify(task) == "" {
+		return meta.Branch, err
+	}
+	repo, err := e.existingRepoPath(meta.Workspace)
+	if err != nil {
+		return "", err
+	}
+	e.mu.Lock()
+	info := e.registry[run]
+	_, watched := e.watches[run]
+	e.mu.Unlock()
+	if watched {
+		// Before the snapshot lock, which the watch's publish waits on.
+		e.stopDiffWatch(run, false)
+		defer func() {
+			if startErr := e.startDiffWatch(ctx, info.workspace, run, false); err == nil {
+				err = startErr
+			}
+		}()
+	}
+	lock := e.snapshotLock(run)
+	lock.Lock()
+	defer lock.Unlock()
+	if meta, err = e.readRunMeta(run); err != nil {
+		return "", err
+	}
+	old := meta.Branch
+	tip, err := e.git(ctx, repo, "rev-parse", "--verify", "refs/heads/"+old)
+	if err != nil {
+		return "", fmt.Errorf("gitengine: rename the branch of session %s: %w", run, err)
+	}
+	if meta.Branch, err = e.uniqueRunBranch(ctx, repo, tip, run, task); err != nil {
+		return "", err
+	}
+	if err = e.writeRunMeta(run, meta); err != nil {
+		if _, delErr := e.git(ctx, repo, "update-ref", "-d", "refs/heads/"+meta.Branch, tip); delErr != nil {
+			slog.Warn("gitengine: release reserved run branch", "run", run, "branch", meta.Branch, "error", delErr)
+		}
+		return "", err
+	}
+	e.mu.Lock()
+	if info, ok := e.registry[run]; ok {
+		info.branch = meta.Branch
+		e.registry[run] = info
+	}
+	e.mu.Unlock()
+	if _, err = e.git(ctx, repo, "update-ref", "-d", "refs/heads/"+old); err != nil {
+		return "", fmt.Errorf("gitengine: release branch %s: %w", old, err)
+	}
+	return meta.Branch, nil
 }
 
 // claimBranch creates refs/heads/<branch> at base, reporting false when

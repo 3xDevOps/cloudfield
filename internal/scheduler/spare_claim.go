@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -28,22 +29,31 @@ func (s *Scheduler) claimSpare(ctx context.Context, launch *domain.Run, ws *doma
 		return nil, nil
 	}
 	began := time.Now()
+	miss := func(reason string) {
+		slog.Info("scheduler: launch missed the spare session", "member", sp.member, "run", sp.run, "reason", reason)
+		s.goRemoveSpare(sp)
+	}
 	run, entry, plan, differs := s.spareFor(ctx, sp, launch, ws, actor, profile)
 	if differs == "" && !entry.lifecycleMu.TryLock() {
 		differs = "its session is busy"
 	}
 	if differs != "" {
-		slog.Info("scheduler: launch missed the spare session", "member", sp.member, "run", sp.run, "reason", differs)
-		s.goRemoveSpare(sp)
+		miss(differs)
 		return nil, nil
 	}
 	defer entry.lifecycleMu.Unlock()
+	s.mu.Lock()
+	cid, session := entry.containerID, entry.agentSessionID
+	s.mu.Unlock()
+	if err := s.nameSpareBranch(ctx, cid, run); err != nil {
+		miss("name its branch: " + err.Error())
+		return nil, nil
+	}
 	// The run forgets its agent session until the task has reached it, so a
 	// server that restarts in between sends the task to a new one. The
 	// sidecar goes first: a row claimed beside a sidecar that still names
 	// the session would be taken up again without its task.
 	s.mu.Lock()
-	cid, session := entry.containerID, entry.agentSessionID
 	entry.agentSessionID = ""
 	err := s.writeSidecar(entry.sidecar())
 	s.mu.Unlock()
@@ -54,8 +64,7 @@ func (s *Scheduler) claimSpare(ctx context.Context, launch *domain.Run, ws *doma
 		err = s.cfg.Store.ClaimSpareRun(ctx, run)
 	}
 	if err != nil {
-		slog.Info("scheduler: launch missed the spare session", "member", sp.member, "run", sp.run, "reason", "claim its session: "+err.Error())
-		s.goRemoveSpare(sp)
+		miss("claim its session: " + err.Error())
 		return nil, nil
 	}
 	s.cfg.Bus.(runHider).Show(run.ID)
@@ -93,6 +102,27 @@ func (s *Scheduler) claimSpare(ctx context.Context, launch *domain.Run, ws *doma
 	s.leaveIfRevoked(ctx, entry, run)
 	slog.Info("scheduler: launch claimed the spare session", "member", sp.member, "run", run.ID, "took", time.Since(began).Round(time.Millisecond))
 	return s.freshen(ctx, run), nil
+}
+
+// nameSpareBranch gives the spare whose row run is the branch a cold launch
+// of run's task reserves: in the workspace's repository, in the row and in
+// the checkout of the VM cid. Nothing of the spare is visible yet, so a
+// failure is a miss and no session ever shows the name it was made with.
+func (s *Scheduler) nameSpareBranch(ctx context.Context, cid runtime.ID, run *domain.Run) error {
+	made := run.Branch
+	branch, err := s.cfg.Git.RenameRunBranch(ctx, run.ID, run.Task)
+	if err != nil || branch == made {
+		return err
+	}
+	run.Branch = branch
+	if err = s.cfg.Store.SetRunCheckout(ctx, run.ID, run.Worktree, branch); err != nil {
+		return err
+	}
+	code, _, stderr, err := s.cfg.Runtime.Exec(ctx, cid, []string{"git", "branch", "-m", made, branch}, s.cfg.WorktreeMount)
+	if err == nil && code != 0 {
+		err = fmt.Errorf("git branch -m exited %d: %s", code, strings.TrimSpace(stderr))
+	}
+	return err
 }
 
 // spareFor compares sp with the session a cold launch would make of launch

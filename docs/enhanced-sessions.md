@@ -141,9 +141,9 @@ in no session list, count, notification or event, and
   session that launch would start now: the same workspace, agent, permission
   tier and limits, base commit, profile snapshot and sandbox (image, user,
   mounts, environment, secrets, installed agent programs and agent command).
-  The launch returns the spare's session, sets its `--model` and `--effort`
-  on the running agent and sends the task as the agent's first prompt. The
-  agent is not started again.
+  The launch returns the spare's session, renames its branch after the task,
+  sets its `--model` and `--effort` on the running agent and sends the task
+  as the agent's first prompt. The agent is not started again.
 - **Miss.** When anything differs, the spare is removed and the launch runs
   as it does without one. A launch while your spare is still starting
   cancels that spare and does the same.
@@ -160,13 +160,20 @@ What follows from an agent that started before the launch:
   date in the agent's instructions are from the spare's start, up to 15
   minutes before your launch.
 - Your own Claude Code `SessionStart` hooks run when a spare starts, and
-  your `SessionEnd` hooks when a spare nobody claimed is removed.
-- A claimed session's branch is `cloudfield/run-<id>`, without the words of
-  the task, which was not known when the checkout was made.
-- A spare holds about 0.8 GiB of host memory
-  ([install.md](install.md#server-prerequisites)), and the tool caches it writes
-  are kept out of your cache pool until a launch claims it
-  ([vm-guest.md](vm-guest.md#kernel-command-line)).
+  your `SessionEnd` hooks when a spare nobody claimed is removed. What such
+  a spare's hooks or agent committed is deleted with its branch.
+- What Claude Code reads from your home when it starts, such as
+  `~/.claude/settings.json` (hooks), `~/.claude.json` (MCP servers) and
+  `~/.claude/CLAUDE.md`, is as it was at the spare's start. The claim does
+  not compare these files, so a change made after the spare started first
+  applies to the session after the claimed one.
+- The agent started on the branch `cloudfield/run-<id>`. The claim renames
+  it to `cloudfield/run-<task>-<id>`, the name every session branch has,
+  before the task reaches the agent.
+- The server makes a spare only while 1 GiB is available for it above its
+  other memory reserves ([install.md](install.md#server-prerequisites)), and
+  the tool caches a spare writes are kept out of your cache pool until a
+  launch claims it ([vm-guest.md](vm-guest.md#kernel-command-line)).
 
 The server log has one line for each claim and each miss
 ([failure-handling.md](failure-handling.md#where-a-launch-or-a-wake-spends-its-time)).

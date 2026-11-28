@@ -423,8 +423,9 @@ guard that then frees memory by saving them to disk.
 [Spare sessions](enhanced-sessions.md#spare-sessions) go before either
 touches a member's session. A launch or wake that is short of memory
 removes every spare and measures again before it saves an idle VM. The
-guard removes them whenever less than twice the floor is free, or a session
-it saved waits for memory to wake, and saves nothing on that check. The
+guard removes them whenever less than twice the floor is free, a memory
+stall has lasted, or a session it saved waits for memory to wake, and saves
+nothing on that check. The
 brake, on a check that finds memory below the floor and a spare, starts the
 spares' removal and freezes nothing; its next check, 500 ms later, freezes
 as described below if memory is still short. A spare's VM is never frozen
@@ -830,11 +831,14 @@ INFO scheduler: launch missed the spare session member=<member id> run=<run id> 
 member or account`, `another workspace`, `another agent or mode`, `another
 permission tier or limits`, `the base moved`, `the member's profile
 changed`, `the member's caches are busy`, `the session's environment
-changed`, or the error of a read that failed. `scheduler: spare session
+changed`, `name its branch: ...` with the error of the rename, or the error
+of a read that failed. `scheduler: spare session
 ready member=<member id> run=<run id>` marks a spare whose agent has
 started, and `scheduler: no spare session member=<member id> error=...` one
 that could not be made, which is not tried again before the member's next
-launch. A spare whose removal fails logs `scheduler: remove a spare session;
+launch. Making a spare logs its own `launch steps` and `agent start` lines
+under the run ID that `spare session ready` names, so leave those IDs out
+when you measure what members waited for. A spare whose removal fails logs `scheduler: remove a spare session;
 trying again run=<run id> error=...` and is removed again on every poll
 (`--poll-interval`) until it is gone.
 

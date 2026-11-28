@@ -419,9 +419,9 @@ func TestWorkspaceWithACloudfieldBranchKeepsTheAetherPrefix(t *testing.T) {
 	}
 }
 
-// A spare session nobody claimed gives back the branch name it reserved.
-// A branch a session committed to is work, and stays.
-func TestReleaseRunBranchDeletesOnlyABranchStillAtItsBase(t *testing.T) {
+// A spare session nobody claimed gives back the branch name it reserved,
+// with whatever its agent's hooks committed there: no member asked for it.
+func TestReleaseRunBranchDeletesTheBranchOfASessionNobodySaw(t *testing.T) {
 	e := newUnitEngine(t)
 	ctx := t.Context()
 	if _, err := e.InitWorkspaceRepo(ctx, "ws1"); err != nil {
@@ -432,26 +432,85 @@ func TestReleaseRunBranchDeletesOnlyABranchStillAtItsBase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := runCheckoutGit(t, repo, "rev-parse", "refs/heads/main")
 	_, unused, err := e.CreateRunCheckout(ctx, "ws1", "run-unused", "main", "", "")
 	if err != nil {
 		t.Fatalf("CreateRunCheckout: %v", err)
 	}
-	checkout, worked, err := e.CreateRunCheckout(ctx, "ws1", "run-worked", "main", "", "")
+	checkout, moved, err := e.CreateRunCheckout(ctx, "ws1", "run-moved", "main", "", "")
 	if err != nil {
 		t.Fatalf("CreateRunCheckout: %v", err)
 	}
-	runCheckoutGit(t, checkout, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "work")
-	runCheckoutGit(t, checkout, "push", repo, worked)
+	runCheckoutGit(t, checkout, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "a hook's commit")
+	runCheckoutGit(t, checkout, "push", repo, moved)
 
-	if err = e.ReleaseRunBranch(ctx, "ws1", unused, base); err != nil {
-		t.Fatalf("ReleaseRunBranch of a branch at its base: %v", err)
+	// The second release of moved is the retry of a removal that failed
+	// after this step.
+	for _, branch := range []string{unused, moved, moved} {
+		if err = e.ReleaseRunBranch(ctx, "ws1", branch); err != nil {
+			t.Fatalf("ReleaseRunBranch(%s): %v", branch, err)
+		}
 	}
-	if err = e.ReleaseRunBranch(ctx, "ws1", worked, base); err == nil {
-		t.Fatal("ReleaseRunBranch deleted a branch that moved off its base")
+	if branches := runCheckoutGit(t, repo, "for-each-ref", "--format=%(refname:short)", "refs/heads"); branches != "main" {
+		t.Fatalf("branches after the release:\n%s\nwant only main", branches)
 	}
-	branches := runCheckoutGit(t, repo, "for-each-ref", "--format=%(refname:short)", "refs/heads")
-	if strings.Contains(branches, unused) || !strings.Contains(branches, worked) {
-		t.Fatalf("branches after the release:\n%s\nwant %s gone and %s kept", branches, unused, worked)
+}
+
+// A launch that takes a session made before its task was known gives it the
+// branch name a cold launch of that task reserves, so the name never tells
+// the two apart.
+func TestRenameRunBranchGivesTheBranchTheTasksName(t *testing.T) {
+	e := newUnitEngine(t)
+	ctx := t.Context()
+	if _, err := e.InitWorkspaceRepo(ctx, "ws1"); err != nil {
+		t.Fatalf("InitWorkspaceRepo: %v", err)
+	}
+	seedBareMain(t, e, "ws1")
+	repo, err := e.repoPath("ws1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cold, err := e.CreateRunCheckout(ctx, "ws1", "run-cold1", "main", "Fix login bug", "")
+	if err != nil {
+		t.Fatalf("CreateRunCheckout: %v", err)
+	}
+	checkout, old, err := e.CreateRunCheckout(ctx, "ws1", "run-spare1", "main", "", "")
+	if err != nil {
+		t.Fatalf("CreateRunCheckout: %v", err)
+	}
+	if err = e.StartDiffWatch(ctx, "ws1", "run-spare1"); err != nil {
+		t.Fatalf("StartDiffWatch: %v", err)
+	}
+	t.Cleanup(func() { e.StopDiffWatch("run-spare1") })
+
+	branch, err := e.RenameRunBranch(ctx, "run-spare1", "Fix login bug")
+	if err != nil {
+		t.Fatalf("RenameRunBranch: %v", err)
+	}
+	if want := strings.Replace(cold, "cold1", "spare1", 1); branch != want {
+		t.Fatalf("renamed branch = %q, want %q, as the cold launch got %q", branch, want, cold)
+	}
+	e.mu.Lock()
+	watching, registered := e.watches["run-spare1"] != nil, e.registry["run-spare1"].branch
+	e.mu.Unlock()
+	if !watching || registered != branch {
+		t.Fatalf("after the rename: diff watch running = %v under branch %q, want it running under %q", watching, registered, branch)
+	}
+	runCheckoutGit(t, checkout, "branch", "-m", old, branch)
+	runCheckoutGit(t, checkout, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "work")
+	head := runCheckoutGit(t, checkout, "rev-parse", "HEAD")
+	published, err := e.PublishRunBranch(ctx, "run-spare1")
+	if err != nil || published != head {
+		t.Fatalf("PublishRunBranch = %q, %v; want %s", published, err, head)
+	}
+	if tip := runCheckoutGit(t, repo, "rev-parse", "refs/heads/"+branch); tip != head {
+		t.Fatalf("%s is at %s, want the session's commit %s", branch, tip, head)
+	}
+	if branches := runCheckoutGit(t, repo, "for-each-ref", "--format=%(refname:short)", "refs/heads"); strings.Contains(branches, old) {
+		t.Fatalf("the name the session was made with is still reserved:\n%s", branches)
+	}
+
+	same, err := e.RenameRunBranch(ctx, "run-cold1", "")
+	if err != nil || same != cold {
+		t.Fatalf("RenameRunBranch with no task = %q, %v; want %q kept", same, err, cold)
 	}
 }
