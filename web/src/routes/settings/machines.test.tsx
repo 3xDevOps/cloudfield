@@ -68,7 +68,7 @@ describe('Machines', () => {
   test('a machine short of memory says a launch is refused, why the last ones were, and what was counted', async () => {
     await show(full())
     expect(screen.getByText("Memory is under the launch line and the server's memory stall is at its limit.")).toBeDefined()
-    expect(screen.getByText('2.0 GiB available of 16.0 GiB. A launch needs more than the launch line while other starts have yet to take theirs, and the wake of a VM saved to disk needs what it saved.')).toBeDefined()
+    expect(screen.getByText('2.0 GiB available of 16.0 GiB. Starts still taking their memory raise the line, and waking a VM saved to disk needs the memory it saved.')).toBeDefined()
     expect(screen.getByRole('meter', { name: 'Memory available' }).getAttribute('aria-valuetext')).toBe('2.0 GiB free of 16.0 GiB; the launch line is 3.6 GiB')
     expect(screen.getByText(/12\.5% · at 10%, launches are refused/)).toBeDefined()
     expect(screen.getByText('200.0 GiB free of 500.0 GiB.')).toBeDefined()

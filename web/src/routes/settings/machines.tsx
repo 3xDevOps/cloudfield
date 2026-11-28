@@ -190,7 +190,7 @@ function MemoryRow({ r }: { r: ServerCapacity }) {
   return (
     <SettingRow
       label="Memory"
-      help={`${gib(available)} available of ${gib(r.memory_total_bytes)}. A launch needs more than the launch line while other starts have yet to take theirs, and the wake of a VM saved to disk needs what it saved.${available < floor ? ` Under the ${gib(floor)} the server keeps free, it freezes session VMs and saves them to disk.` : ''}`}
+      help={`${gib(available)} available of ${gib(r.memory_total_bytes)}. Starts still taking their memory raise the line, and waking a VM saved to disk needs the memory it saved.${available < floor ? ` Under the ${gib(floor)} the server keeps free, it freezes session VMs and saves them to disk.` : ''}`}
       control={<Badge tone={fits ? 'done' : 'failed'}>{fits ? 'Launch fits' : 'Launch refused'}</Badge>}
     >
       <Room label="Memory available" free={available} total={r.memory_total_bytes} keep={floor} need={r.start_memory_bytes} />
@@ -250,7 +250,7 @@ function VMsRow({ vms }: { vms: ServerCapacity['vms'] }) {
     [vms.stopped, 'Asleep with nothing kept'],
   ]
   return (
-    <SettingRow label="Session VMs" help="The VMs of open sessions. Awake includes VMs a member paused. Under the memory it keeps free, the server freezes awake VMs (the memory brake) and saves VMs to disk. Nothing kept means stopped, or still being saved.">
+    <SettingRow label="Session VMs" help="The VMs of open sessions. Awake includes VMs a member paused, which still hold their memory. The memory brake freezes awake VMs when memory runs short. Nothing kept means stopped, or still being saved.">
       <dl className="grid grid-cols-2 gap-2 sm:grid-cols-5">
         {cells.map(([count, what]) => (
           <div key={what} className="flex min-w-0 flex-col rounded-control border border-seam px-3 py-2">
