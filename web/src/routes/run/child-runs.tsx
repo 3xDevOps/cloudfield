@@ -115,7 +115,7 @@ function ChildRow({ child }: { child: Child }) {
         : <p className="pl-4 text-ui-sm break-words text-state-failed">{child.error}</p>)}
       {waiting && <p className="pl-4 text-ui-sm text-muted">Starts on its own when the server has room.</p>}
       <div className="flex gap-1 pl-3">
-        {started && <Button size="sm" variant="ghost" onClick={() => navigate('run', { runId: child.run_id })}>Open</Button>}
+        {started && !waiting && <Button size="sm" variant="ghost" onClick={() => navigate('run', { runId: child.run_id })}>Open</Button>}
         {waiting && machines && <Button size="sm" variant="ghost" onClick={() => navigate('settings', { section: 'machines' })}>Open Machines</Button>}
       </div>
     </li>

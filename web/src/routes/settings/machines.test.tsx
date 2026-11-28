@@ -6,7 +6,7 @@ import { toRecord } from '@/store/runs'
 import { alice, run, serverInfo } from '@/test/fixtures'
 
 const gib = 2 ** 30
-const refusalText = 'scheduler: insufficient host memory headroom: 1.2 GiB available, floor 1.6 GiB plus 2 GiB per launch (0 already in flight)'
+const refusalText = 'scheduler: insufficient host memory headroom: 1288490188 available bytes; reserve 1717986918 bytes plus 536870912 bytes for this start and 0 bytes for starts in flight'
 
 function full(over: Partial<ServerCapacity> = {}): ServerCapacity {
   return {
@@ -81,7 +81,9 @@ describe('Machines', () => {
     expect(screen.getByRole('button', { name: 'Copy why the last launch was refused' })).toBeDefined()
     fireEvent.click(screen.getByRole('button', { name: 'Fix the login page' }))
     expect(useStore.getState().route).toEqual({ name: 'run', params: { runId: 'run_1' } })
-    expect(screen.getByRole('button', { name: 'run_9' })).toBeDefined()
+    // A session this dashboard does not hold has no page to open: its id is text, not a link.
+    expect(screen.getByText('run_9')).toBeDefined()
+    expect(screen.queryByRole('button', { name: 'run_9' })).toBeNull()
 
     const summary = screen.getAllByRole('table')[0]
     const cells = (label: string) => within(summary).getByRole('rowheader', { name: new RegExp(label) }).parentElement!.querySelectorAll('td')
@@ -107,7 +109,17 @@ describe('Machines', () => {
     expect(screen.getByText('read /sys/fs/cgroup/system.slice/memory.pressure: no such device')).toBeDefined()
     expect(screen.getByText(/Cannot connect to the Docker daemon/)).toBeDefined()
     expect(screen.getAllByText('Not measured: the error is below.')).toHaveLength(2)
-    expect(screen.getByText('Memory and disk could not be measured.')).toBeDefined()
+    expect(screen.getByText("Memory, disk or the runtime and the server's memory stall could not be measured.")).toBeDefined()
+  })
+
+  test('a stall the server could not read refuses, and one it does not measure is not claimed as checked', async () => {
+    await show(full({ memory_available_bytes: 12 * gib, server_stall: undefined, stall_error: 'read memory.pressure: input/output error' }))
+    expect(screen.getByText("The server's memory stall could not be measured.")).toBeDefined()
+    expect(screen.queryByText('Fits')).toBeNull()
+    cleanup()
+    await show(full({ memory_available_bytes: 12 * gib, server_stall: undefined, stall_error: undefined }))
+    expect(screen.getByText("Memory and every disk are above the launch line. The server's memory stall is not measured here, so it is not checked.")).toBeDefined()
+    expect(screen.getByText('Fits')).toBeDefined()
   })
 
   test('a healthy machine with nothing counted says a launch fits and nothing happened', async () => {

@@ -107,7 +107,7 @@ describe('child run usage', () => {
   it('shows a queued subsession the server had no room for as waiting, not failed', async () => {
     const parent = run()
     setUp([parent])
-    const refused = 'scheduler: insufficient host memory headroom: 1.2 GiB available, floor 1.6 GiB plus 2 GiB per launch'
+    const refused = 'scheduler: insufficient host memory headroom: 1288490188 available bytes; reserve 1717986918 bytes plus 536870912 bytes for this start and 0 bytes for starts in flight'
     const client = fakeApi({
       runChildren: vi.fn(async () => ({
         root_run_id: 'run_1',

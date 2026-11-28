@@ -816,9 +816,11 @@ export const api = {
    * next idle moment, or to cancel the pending one. */
   serverUpdate: (when: ServerUpdateWhen) =>
     call<ServerUpdateResult>('server.update', { when }),
+  /** What the server measures before it starts or wakes a session, its
+   * session VMs and what it did for want of memory or disk. */
+  serverCapacity: () => call<ServerCapacity>('server.capacity'),
   /** Reads the server-wide run limits; with a field set, an admin changes
    * them. Zero clears a field. */
-  serverCapacity: () => call<ServerCapacity>('server.capacity'),
   serverRunLimits: (params: { cpus?: number; memory_bytes?: number; pids?: number } = {}) =>
     call<ServerRunLimits>('server.run_limits', params),
   /** Admin only. Whether runs can run Docker inside their containers. */

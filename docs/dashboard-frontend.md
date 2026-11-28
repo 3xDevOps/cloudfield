@@ -7458,7 +7458,7 @@ Categories:
   history retain their existing lifecycle.
 - **Machines**, when the server answers `server.capacity`
   (`machines.tsx`): one section per machine, today the one the server runs
-  on, with figures in GiB as the server's own text prints them.
+  on, with figures in GiB as `cloudfield-server status` prints them.
   - **Can a session launch now?** says when the figures were read and
     whether a launch would start or be refused, and why: what could not be
     measured, memory or a disk under its launch line (what the server keeps

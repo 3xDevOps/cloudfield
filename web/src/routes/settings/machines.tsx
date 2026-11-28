@@ -17,7 +17,7 @@ import { cn } from '@/lib/utils'
 import { SettingRow, SettingsSection, TryAgain } from '@/routes/settings/layout'
 import { useStore } from '@/store'
 
-/** GiB, as the server's refusal text and `cloudfield-server status` print it. */
+/** GiB, as `cloudfield-server status` prints it. */
 const gib = (bytes: number) => `${(bytes / 2 ** 30).toFixed(1)} GiB`
 
 /** The same pace as Insights › System, which polls system.stats every 5 seconds. */
@@ -109,7 +109,7 @@ function Machine({ result: r, readAt, failed, reading, refresh }: { result: Serv
           <p className="flex items-start gap-2 text-ui">
             {refused === null ? <Badge tone="done">Fits</Badge> : <Badge tone="failed">Refused</Badge>}
             <span className="min-w-0 flex-1">
-              {refused ?? `Memory${r.disk_unchecked ? '' : ' and every disk'} ${r.disk_unchecked ? 'is' : 'are'} above the launch line, and the server's memory stall is under its limit.${r.disk_unchecked ? ' Disk is not checked.' : ''}`}
+              {refused ?? fits(r)}
             </span>
           </p>
           {failed}
@@ -118,7 +118,7 @@ function Machine({ result: r, readAt, failed, reading, refresh }: { result: Serv
         <StallRow r={r} />
         {r.disk_unchecked && <SettingRow label="Disk" help={<>Not checked: the server was started with <Code className="whitespace-nowrap">--min-free-disk</Code> negative, so no launch is refused for disk.</>} />}
         {r.disk_error && (
-          <SettingRow label={r.disk_unchecked ? 'Container or VM runtime' : 'Disk'} help={r.disk_unchecked ? 'Could not be asked, so a launch is refused:' : 'Not measured, so a launch is refused:'} control={<Badge tone="failed">Launch refused</Badge>}>
+          <SettingRow label={r.disk_unchecked ? 'Container or VM runtime' : 'Disk and runtime'} help={r.disk_unchecked ? 'Could not be asked, so a launch is refused:' : 'A disk could not be measured or the container or VM runtime could not be asked, so a launch is refused:'} control={<Badge tone="failed">Launch refused</Badge>}>
             <p className={cn(verbatim, 'max-h-48 text-state-failed')}>{r.disk_error}</p>
           </SettingRow>
         )}
@@ -134,9 +134,19 @@ function Machine({ result: r, readAt, failed, reading, refresh }: { result: Serv
   )
 }
 
+/** What a launch that fits was checked against. A stall the server does not measure is not claimed. */
+function fits(r: ServerCapacity): string {
+  const room = r.disk_unchecked ? 'Memory is above the launch line' : 'Memory and every disk are above the launch line'
+  const stall = r.server_stall === undefined ? ". The server's memory stall is not measured here, so it is not checked." : ", and the server's memory stall is under its limit."
+  return `${room}${stall}${r.disk_unchecked ? ' Disk is not checked.' : ''}`
+}
+
 /** Why a launch would be refused now, as a sentence, or null when it would start. */
 function refusalNow(r: ServerCapacity): string | null {
-  const unmeasured = [r.memory_error && 'memory', r.disk_error && !r.disk_unchecked && 'disk'].filter((w): w is string => Boolean(w))
+  // stall_error joins the server's own read, whose failure refuses a
+  // launch, with the host's, which does not: with no server figure it is
+  // taken as the server's.
+  const unmeasured = [r.memory_error && 'memory', r.disk_error && !r.disk_unchecked && 'disk or the runtime', r.stall_error && r.server_stall === undefined && "the server's memory stall"].filter((w): w is string => Boolean(w))
   const short: string[] = []
   if (!r.memory_error && r.memory_available_bytes < r.memory_floor_bytes + r.start_memory_bytes) short.push('memory is under the launch line')
   if (r.server_stall !== undefined && r.server_stall >= r.server_stall_limit) short.push("the server's memory stall is at its limit")
@@ -266,12 +276,13 @@ function VMsRow({ vms }: { vms: ServerCapacity['vms'] }) {
 
 const causeWords: Record<string, string> = { memory: 'Memory', stall: 'Memory stall', disk: 'Disk', unknown: 'Not measured' }
 
-const opWords: Record<string, string> = { 'launch-retry': 'A waiting subsession tried again', 'wake-auto': 'A wake the server tried by itself' }
+const opWords: Record<string, string> = { 'launch-retry': 'A waiting launch tried again', 'wake-auto': 'A wake the server tried by itself' }
 
 function RefusalRow({ what, refusal }: { what: 'launch' | 'wake'; refusal?: ServerCapacityRefusal }) {
   const text = useRef<HTMLParagraphElement>(null)
   const navigate = useStore((s) => s.navigate)
   const session = useStore((s) => (refusal?.run_id && s.runs[refusal.run_id] ? runLabel(s.runs[refusal.run_id]) : refusal?.run_id))
+  const known = useStore((s) => Boolean(refusal?.run_id && s.runs[refusal.run_id]))
   const label = `Last ${what} refused`
   if (!refusal) return <SettingRow label={label} help="None in 14 days." />
   const when = new Date(refusal.at)
@@ -294,9 +305,14 @@ function RefusalRow({ what, refusal }: { what: 'launch' | 'wake'; refusal?: Serv
       {refusal.run_id && (
         <p className="flex min-w-0 items-center gap-1 text-ui-sm text-muted">
           Session
-          <Button variant="link" size="sm" className="h-auto min-w-0 p-0" onClick={() => navigate('run', { runId: refusal.run_id! })}>
-            <span className="truncate">{session}</span>
-          </Button>
+          {known ? (
+            <Button variant="link" size="sm" className="h-auto min-w-0 p-0" onClick={() => navigate('run', { runId: refusal.run_id! })}>
+              <span className="truncate">{session}</span>
+            </Button>
+          ) : (
+            // One refused before it existed, or outside this workspace, has no page to open.
+            <span className="truncate font-code">{refusal.run_id}</span>
+          )}
         </p>
       )}
     </SettingRow>
@@ -324,7 +340,8 @@ function idleShare(counts: ServerCapacityCount[]): string {
   const refusals = counts.filter(memoryRefusal)
   const used = refusals.reduce((sum, c) => sum + (c.used_bytes ?? 0), 0)
   if (used === 0) return '–'
-  return `${Math.round((100 * refusals.reduce((sum, c) => sum + (c.idle_hour_bytes ?? 0), 0)) / used)}%`
+  // A refusal counted while memory could not be read adds idle bytes and no used ones.
+  return `${Math.min(100, Math.round((100 * refusals.reduce((sum, c) => sum + (c.idle_hour_bytes ?? 0), 0)) / used))}%`
 }
 
 /** The figure columns of both Counted tables, one width so their figures line up. */
