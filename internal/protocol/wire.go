@@ -401,6 +401,11 @@ const FeatureWorkspaceAccess = "workspace-access"
 // runs. An older server ignores login and launches on the default login.
 const FeatureLogins = "logins"
 
+// FeatureLaunchWait marks a server whose run.launch takes wait and that
+// serves launch.waiting.*. An older server refuses wait as an unknown
+// param.
+const FeatureLaunchWait = "launch-wait"
+
 // CapabilityRunRepos is listed in a gateway's capability methods but is not an RPC method.
 const CapabilityRunRepos = "run.repos"
 

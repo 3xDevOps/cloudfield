@@ -617,7 +617,7 @@ returns the same `waiting` object while it waits and its session, with
 and after `expired` or `refused` `-32004`, each with why, and never launches
 again. `wait` is not part of what the key fingerprints. A server that does
 not know `wait` refuses it as an unknown param, so send it only when
-`server.info` lists `launch.waiting.list`.
+`server.info` lists the `launch-wait` feature.
 
 `launch.waiting.list` (no params, or `{"id":"<id>"}` for one of any age)
 returns `{"waiting":[...]}`: the caller's launches that wait, and those that

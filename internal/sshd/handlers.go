@@ -45,7 +45,7 @@ func (s *Server) serverInfo(ctx context.Context, member domain.MemberID, _ json.
 	s.mu.Lock()
 	dashboardURL, dashboardErr := s.tailnetDashboardURL, s.tailnetDashboardErr
 	s.mu.Unlock()
-	features := []string{protocol.FeatureMultiRepo, protocol.FeaturePermission, protocol.FeatureWorkspaceAccess}
+	features := []string{protocol.FeatureMultiRepo, protocol.FeaturePermission, protocol.FeatureWorkspaceAccess, protocol.FeatureLaunchWait}
 	if s.dictationInstalled() {
 		features = append(features, protocol.FeatureDictation)
 	}
