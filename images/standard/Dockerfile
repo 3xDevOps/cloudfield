@@ -2,7 +2,7 @@ FROM ubuntu:24.04
 
 # Downloaded toolchain versions are pinned here. Git and other system tools
 # come from Ubuntu's packages.
-ARG GO_VERSION=1.27.0
+ARG GO_VERSION=1.27.4
 ARG NODE_VERSION=24.20.0
 ARG FNM_VERSION=1.39.0
 ARG UV_VERSION=0.12.7
