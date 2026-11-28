@@ -20,6 +20,7 @@ function scheduleDaily(dialog: Dialog, at: string) {
 }
 
 const nextLaunch = `(${clockTime(schedule.next_fire_at!)} your time)`
+const clock = (at: string) => new Date(`2000-01-01T${at}:00Z`).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(() => 'toast'), dismiss: vi.fn() },
@@ -38,7 +39,7 @@ describe('templates view', () => {
     const shown = within(detail(template.name))
     expect(shown.getByText(/Claude Code/)).toBeDefined()
     expect(shown.getByText('agent default')).toBeDefined()
-    expect(detail(template.name).textContent).toContain('Scheduled every day at 03:00 UTC, next')
+    expect(detail(template.name).textContent).toContain(`Scheduled every day at ${clock('03:00')} UTC, next`)
     expect(shown.getByText(template.task)).toBeDefined()
     expect(shown.getByText('~6 tokens')).toBeDefined()
     expect(shown.getByRole('button', { name: `Launch ${template.name}` })).toBeDefined()
@@ -212,10 +213,27 @@ describe('templates view', () => {
 
     expect(await dialog.findByText(nextLaunch, { exact: false })).toBeDefined()
     expect(client.scheduleSave).toHaveBeenCalledWith({ workspace_id: workspace.id, template: template.name, cron: 'CRON_TZ=Europe/Berlin 30 8 * * 1,3' })
-    expect(detail(template.name).textContent).toContain('Scheduled Mondays and Wednesdays at 08:30 Europe/Berlin, next')
+    expect(detail(template.name).textContent).toContain(`Scheduled Mondays and Wednesdays at ${clock('08:30')} Europe/Berlin, next`)
+    fireEvent.change(dialog.getByLabelText('At'), { target: { value: '09:30' } })
+    expect(dialog.queryByText(nextLaunch, { exact: false })).toBeNull()
   })
 
-  it('keeps a rule the picker cannot show as cron text, and fills cron from the picker', async () => {
+  it('refuses a zone the browser does not know and saves the browser spelling of one it does', async () => {
+    const client = fakeApi({ scheduleList: vi.fn(async () => []), scheduleSave: vi.fn(async () => schedule) })
+    seed()
+    render(<Templates client={client} />)
+
+    await rowAction('Schedule')
+    const dialog = within(await screen.findByRole('dialog', { name: `Schedule ${template.name}` }))
+    fireEvent.change(dialog.getByLabelText('Time zone'), { target: { value: 'Europe/Berln' } })
+    expect(dialog.getByText('Not a time zone this browser knows. Pick one from the list.')).toBeDefined()
+    expect(dialog.getByRole('button', { name: 'Schedule' }).hasAttribute('disabled')).toBe(true)
+    fireEvent.change(dialog.getByLabelText('Time zone'), { target: { value: 'europe/berlin' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Schedule' }))
+    expect(client.scheduleSave).toHaveBeenCalledWith({ workspace_id: workspace.id, template: template.name, cron: 'CRON_TZ=Europe/Berlin 0 9 * * *' })
+  })
+
+  it('keeps a rule the picker cannot show as cron text, even after looking at the picker', async () => {
     const custom = { ...schedule, cron: '*/15 9-17 * * 1-5' }
     const client = fakeApi({ scheduleList: vi.fn(async () => [custom]), scheduleSave: vi.fn(async () => custom) })
     seed()
@@ -228,6 +246,19 @@ describe('templates view', () => {
     expect(dialog.getByRole('radio', { name: 'Cron' }).getAttribute('aria-checked')).toBe('true')
     expect(dialog.getByLabelText('Cron rule')).toHaveProperty('value', '*/15 9-17 * * 1-5')
     fireEvent.click(dialog.getByRole('radio', { name: 'Monthly' }))
+    fireEvent.click(dialog.getByRole('radio', { name: 'Cron' }))
+    expect(dialog.getByLabelText('Cron rule')).toHaveProperty('value', '*/15 9-17 * * 1-5')
+  })
+
+  it('fills cron with the rule the picker makes', async () => {
+    const client = fakeApi({ scheduleList: vi.fn(async () => []) })
+    seed()
+    render(<Templates client={client} />)
+
+    await rowAction('Schedule')
+    const dialog = within(await screen.findByRole('dialog', { name: `Schedule ${template.name}` }))
+    fireEvent.click(dialog.getByRole('radio', { name: 'Monthly' }))
+    fireEvent.change(dialog.getByLabelText('Time zone'), { target: { value: 'UTC' } })
     fireEvent.click(dialog.getByRole('radio', { name: 'Cron' }))
     expect(dialog.getByLabelText('Cron rule')).toHaveProperty('value', '0 9 1 * *')
   })

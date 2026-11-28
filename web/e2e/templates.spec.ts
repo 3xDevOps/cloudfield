@@ -39,7 +39,7 @@ test('a template schedules weekly in the browser zone and launches with a parame
   await dialog.getByRole('button', { name: 'Schedule', exact: true }).click()
   await expect(dialog.getByText(/^Next launch/)).toContainText(/06:00( AM)? your time/)
   await page.keyboard.press('Escape')
-  await expect(detail).toContainText('Scheduled Mondays at 06:00 Europe/Berlin')
+  await expect(detail).toContainText(/Scheduled Mondays at 06:00( AM)? Europe\/Berlin/)
   const { schedules } = await alice.api.rpc<{ schedules: { template: string; cron: string }[] }>('schedule.list', {
     workspace_id: workspaces[0].id,
   })

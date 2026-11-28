@@ -6480,8 +6480,9 @@ The detail shows the name, the mode, **Edit**, **Schedule** and a menu with
 "agent default", the effort when set, the schedule or
 when it was saved, and the advisory budget; then the task. The schedule
 reads in words when the editor's fields can show its rule (`Scheduled
-weekdays at 09:30 Europe/Berlin, next in 3 hours`) and as the rule otherwise
-(`Scheduled */15 * * * * UTC`). Each `{{name}}`
+weekdays at 09:30 Europe/Berlin, next in 3 hours`), with the time in the
+browser's locale format, and as the rule otherwise (`Scheduled */15 * * * *
+UTC`). Each `{{name}}`
 placeholder (the server's pattern in `internal/templates/render.go`) is an
 inline field at its first occurrence, prefilled with the template's default;
 later occurrences mirror it. "N of M filled" counts placeholders with a value
@@ -6504,11 +6505,14 @@ Weekly, Monthly or Cron. Weekly ticks days, Monday first; Monthly picks a
 day from 1 to 28. All three take a time (default 09:00) and an IANA zone
 (the browser's for a new schedule, the rule's own when editing), and show
 the rule they save, such as `CRON_TZ=Europe/Berlin 30 9 * * 1-5`; a UTC rule
-has no prefix. Cron takes the rule as text and is where a rule the fields
-cannot show exactly opens; switching to it fills in the rule the fields
-made. The next launch is the `next_fire_at` that `schedule.save` returned,
-shown relative and in the viewer's local time ("your time"), never computed
-in the browser. **Duplicate** opens the form prefilled under
+has no prefix. A zone the browser's `Intl` does not know disables Save with
+"Not a time zone this browser knows."; one it knows is saved in its
+spelling, so `europe/berlin` saves as `Europe/Berlin`. Cron takes the rule
+as text and is where a rule the fields cannot show exactly opens; switching
+to it fills in the rule the fields made, unless it holds a rule they cannot
+show. While the form shows the saved rule, the next launch is the
+`next_fire_at` that `schedule.save` returned, shown relative and in the
+viewer's local time ("your time"), never computed in the browser. **Duplicate** opens the form prefilled under
 `<name> copy`. The form's agent select lists the agents from `agent.list` by
 display name and keeps the template's current agent as an extra option when
 the list omits it. An **Effort** field, as in New session, shows for an agent with

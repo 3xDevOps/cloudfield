@@ -1,16 +1,18 @@
-import { describeRule, readRule, writeRule, type Plan } from '@/routes/templates/schedule'
+import { canonicalZone, describeRule, readRule, writeRule, type Plan } from '@/routes/templates/schedule'
+
+const clock = (at: string) => new Date(`2000-01-01T${at}:00Z`).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })
 
 const plan = (fields: Partial<Plan>): Plan => ({ repeat: 'daily', at: '09:00', days: [1], day: 1, zone: 'UTC', rule: '', ...fields })
 
 describe('schedule rules', () => {
   it.each([
-    ['0 3 * * *', { repeat: 'daily', at: '03:00', zone: 'UTC' }, 'every day at 03:00 UTC'],
-    ['30 9 * * 1-5', { repeat: 'weekly', at: '09:30', days: [1, 2, 3, 4, 5] }, 'weekdays at 09:30 UTC'],
-    ['0 9 * * 1,3', { repeat: 'weekly', days: [1, 3] }, 'Mondays and Wednesdays at 09:00 UTC'],
-    ['0 18 * * 0,5,6', { repeat: 'weekly', at: '18:00', days: [0, 5, 6] }, 'Fridays, Saturdays, and Sundays at 18:00 UTC'],
-    ['0 9 * * 0-6', { repeat: 'weekly', days: [0, 1, 2, 3, 4, 5, 6] }, 'every day at 09:00 UTC'],
-    ['CRON_TZ=Europe/Berlin 0 9 1 * *', { repeat: 'monthly', day: 1, zone: 'Europe/Berlin' }, 'monthly on day 1 at 09:00 Europe/Berlin'],
-    ['TZ=America/New_York 05 7 * * *', { repeat: 'daily', at: '07:05', zone: 'America/New_York' }, 'every day at 07:05 America/New_York'],
+    ['0 3 * * *', { repeat: 'daily', at: '03:00', zone: 'UTC' }, `every day at ${clock('03:00')} UTC`],
+    ['30 9 * * 1-5', { repeat: 'weekly', at: '09:30', days: [1, 2, 3, 4, 5] }, `weekdays at ${clock('09:30')} UTC`],
+    ['0 9 * * 1,3', { repeat: 'weekly', days: [1, 3] }, `Mondays and Wednesdays at ${clock('09:00')} UTC`],
+    ['0 18 * * 0,5,6', { repeat: 'weekly', at: '18:00', days: [0, 5, 6] }, `Fridays, Saturdays, and Sundays at ${clock('18:00')} UTC`],
+    ['0 9 * * 0-6', { repeat: 'weekly', days: [0, 1, 2, 3, 4, 5, 6] }, `every day at ${clock('09:00')} UTC`],
+    ['CRON_TZ=Europe/Berlin 0 9 1 * *', { repeat: 'monthly', day: 1, zone: 'Europe/Berlin' }, `monthly on day 1 at ${clock('09:00')} Europe/Berlin`],
+    ['TZ=America/New_York 05 7 * * *', { repeat: 'daily', at: '07:05', zone: 'America/New_York' }, `every day at ${clock('07:05')} America/New_York`],
   ])('reads %s into the fields and describes it', (rule, fields, words) => {
     expect(readRule(rule, 'Asia/Tokyo')).toMatchObject(fields)
     expect(describeRule(rule)).toEqual({ words })
@@ -25,9 +27,17 @@ describe('schedule rules', () => {
     ['0 9 * 1 *', '0 9 * 1 *', 'UTC'],
     ['CRON_TZ=Europe/Berln 0 9-17 * * *', '0 9-17 * * *', 'Europe/Berln'],
     ['CRON_TZ=Europe/Berlin', 'CRON_TZ=Europe/Berlin', 'UTC'],
+    ['TZ=UTC\t0 9 * * *', '9 * * *', 'UTC\t0'],
   ])('keeps %s as cron text', (rule, cron, zone) => {
     expect(readRule(rule, 'Asia/Tokyo')).toMatchObject({ repeat: 'cron', rule, zone })
     expect(describeRule(rule)).toEqual({ cron, zone })
+  })
+
+  it('spells a zone the way the browser does, and knows when it does not know one', () => {
+    expect(canonicalZone(' europe/berlin ')).toBe('Europe/Berlin')
+    expect(canonicalZone('utc')).toBe('UTC')
+    expect(canonicalZone('Europe/Berln')).toBeNull()
+    expect(canonicalZone('')).toBeNull()
   })
 
   it('starts a new schedule daily at 09:00 in the browser zone', () => {

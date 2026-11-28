@@ -11,7 +11,7 @@ import { RelativeTime } from '@/components/ui/relative-time'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { api, type Api } from '@/lib/api'
 import type { Schedule } from '@/lib/types'
-import { mondayFirst, readRule, weekdayNames, writeRule, type Plan, type Repeat } from '@/routes/templates/schedule'
+import { canonicalZone, mondayFirst, readRule, weekdayNames, writeRule, type Plan, type Repeat } from '@/routes/templates/schedule'
 import type { Failure } from '@/routes/templates/template-form'
 import { stillWaiting, usePastDeadline } from '@/store/optimistic'
 
@@ -48,8 +48,10 @@ export function ScheduleEditor({
   const late = usePastDeadline(busy || saving)
   const [error, setError] = useState<string | null>(null)
   const set = (fields: Partial<Plan>) => setPlan((current) => ({ ...current, ...fields }))
-  const rule = writeRule(plan)
-  const ready = plan.repeat === 'cron' ? Boolean(rule) : Boolean(plan.at && plan.zone.trim() && (plan.repeat !== 'weekly' || plan.days.length))
+  const zone = canonicalZone(plan.zone)
+  const rule = writeRule(zone ? { ...plan, zone } : plan)
+  const ready = plan.repeat === 'cron' ? Boolean(rule) : Boolean(plan.at && zone && (plan.repeat !== 'weekly' || plan.days.length))
+  const saved = schedule && writeRule(readRule(schedule.cron, '')) === rule
 
   const remove = async () => {
     setBusy(true)
@@ -82,7 +84,9 @@ export function ScheduleEditor({
             value={plan.repeat}
             onValueChange={(value) => {
               const repeat = value as Repeat
-              set(repeat === 'cron' && plan.repeat !== 'cron' && ready ? { repeat, rule } : { repeat })
+              // A rule the fields cannot show is kept rather than replaced by what they make.
+              const fill = repeat === 'cron' && plan.repeat !== 'cron' && ready && readRule(plan.rule, '').repeat !== 'cron'
+              set(fill ? { repeat, rule } : { repeat })
             }}
           >
             {repeats.map(([value, label]) => <RadioPillsItem key={value} value={value}>{label}</RadioPillsItem>)}
@@ -91,7 +95,7 @@ export function ScheduleEditor({
         {plan.repeat === 'weekly' && (
           <div role="group" aria-labelledby={`${id}-on`} className="flex flex-col gap-1">
             <span id={`${id}-on`} className="text-ui font-medium text-text">On</span>
-            <div className="flex flex-wrap gap-x-4 gap-y-2">
+            <div className="flex flex-wrap gap-x-4 gap-y-2 coarse:gap-y-6">
               {mondayFirst.map((day) => (
                 <div key={day} className="flex items-center gap-2">
                   <Checkbox
@@ -104,7 +108,7 @@ export function ScheduleEditor({
                 </div>
               ))}
             </div>
-            {plan.days.length === 0 && <p className="text-ui-sm text-state-failed">Pick at least one day.</p>}
+            {plan.days.length === 0 && <p role="status" className="text-ui-sm text-state-failed">Pick at least one day.</p>}
           </div>
         )}
         {plan.repeat === 'monthly' && (
@@ -124,7 +128,7 @@ export function ScheduleEditor({
         {plan.repeat === 'cron' ? (
           <FormField
             label="Cron rule"
-            help={<>minute hour day month weekday, such as <code className="font-code">30 9 * * 1-5</code>, or <code className="font-code">@hourly</code>. UTC unless it starts with <code className="font-code">CRON_TZ=&lt;zone&gt;</code> and a space.</>}
+            help={<>Five fields: minute hour day month weekday, such as <code className="font-code">30 9 * * 1-5</code>, or <code className="font-code">@hourly</code>. UTC unless it starts with <code className="font-code">CRON_TZ=&lt;zone&gt;</code> and a space.</>}
           >
             <Input placeholder="0 3 * * *" value={plan.rule} spellCheck={false} onChange={(e) => set({ rule: e.target.value })} className="font-code" />
           </FormField>
@@ -134,24 +138,25 @@ export function ScheduleEditor({
               <FormField label="At">
                 <Input type="time" required value={plan.at} className="w-28" onChange={(e) => set({ at: e.target.value })} />
               </FormField>
-              <FormField label="Time zone" help="An IANA zone, such as Europe/Berlin." className="min-w-0 flex-1 basis-40">
+              <FormField
+                label="Time zone"
+                help="An IANA zone, such as Europe/Berlin."
+                error={plan.zone.trim() && !zone ? 'Not a time zone this browser knows. Pick one from the list.' : undefined}
+                className="min-w-0 flex-1 basis-40"
+              >
                 <Input required value={plan.zone} spellCheck={false} list={`${id}-zones`} onChange={(e) => set({ zone: e.target.value })} />
               </FormField>
               <datalist id={`${id}-zones`}>
                 {zones.map((zone) => <option key={zone} value={zone} />)}
               </datalist>
             </div>
-            {ready && (
-              <p className="min-w-0 text-ui-sm text-muted">
-                Saves as <code className="font-code break-all">{rule}</code>
-              </p>
-            )}
           </>
         )}
-        {schedule?.next_fire_at && (
-          <p className="text-ui-sm text-muted">
-            Next launch <RelativeTime at={schedule.next_fire_at} /> ({clockTime(schedule.next_fire_at)} your time)
-          </p>
+        {((ready && plan.repeat !== 'cron') || (saved && schedule.next_fire_at)) && (
+          <div className="flex min-w-0 flex-col gap-1 text-ui-sm text-muted">
+            {ready && plan.repeat !== 'cron' && <p>Saves as <code className="font-code break-all">{rule}</code></p>}
+            {saved && schedule.next_fire_at && <p>Next launch <RelativeTime at={schedule.next_fire_at} /> ({clockTime(schedule.next_fire_at)} your time)</p>}
+          </div>
         )}
         {error && (
           <p role="alert" className="text-ui-sm text-state-failed">
@@ -169,7 +174,7 @@ export function ScheduleEditor({
           </Button>
         </div>
       </form>
-      {failure && <FailureCallout error={failure.error} onRetry={failure.unanswered ? () => onRetry(rule) : undefined} />}
+      {failure && <FailureCallout error={failure.error} onRetry={failure.unanswered && ready ? () => onRetry(rule) : undefined} />}
     </div>
   )
 }

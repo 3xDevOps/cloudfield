@@ -8,9 +8,15 @@ export const mondayFirst = [1, 2, 3, 4, 5, 6, 0]
 
 const list = new Intl.ListFormat('en', { type: 'conjunction' })
 
+// robfig takes the zone up to the first space, not any whitespace.
 function split(rule: string): { zone: string; body: string } {
-  const zoned = /^(?:CRON_)?TZ=(\S+)\s+(.+)$/.exec(rule)
-  return zoned ? { zone: zoned[1], body: zoned[2] } : { zone: 'UTC', body: rule }
+  const zoned = /^(?:CRON_)?TZ=([^ ]*) (.*)$/.exec(rule)
+  return zoned ? { zone: zoned[1] || 'UTC', body: zoned[2].trim() } : { zone: 'UTC', body: rule }
+}
+
+function timeOfDay(at: string): string {
+  const [hour, minute] = at.split(':').map(Number)
+  return new Date(Date.UTC(2000, 0, 1, hour, minute)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' })
 }
 
 function number(field: string, min: number, max: number): number | null {
@@ -29,7 +35,15 @@ function weekdays(field: string): number[] | null {
   return [...days].sort()
 }
 
-/** Reads a stored rule into the fields; a rule the fields cannot show exactly opens as cron. */
+/** The browser's spelling of an IANA zone, or null for one it does not know. */
+export function canonicalZone(zone: string): string | null {
+  try {
+    return new Intl.DateTimeFormat('en', { timeZone: zone.trim() }).resolvedOptions().timeZone
+  } catch {
+    return null
+  }
+}
+
 export function readRule(stored: string, browserZone: string): Plan {
   const rule = stored.trim()
   const fresh: Plan = { repeat: 'daily', at: '09:00', days: [1], day: 1, zone: browserZone, rule }
@@ -51,7 +65,6 @@ export function readRule(stored: string, browserZone: string): Plan {
   return asCron
 }
 
-/** The rule the server stores for these fields: five-field cron, prefixed with CRON_TZ= outside UTC. */
 export function writeRule(plan: Plan): string {
   if (plan.repeat === 'cron') return plan.rule.trim()
   const [hour, minute] = plan.at.split(':').map(Number)
@@ -62,7 +75,6 @@ export function writeRule(plan: Plan): string {
   return zone === 'UTC' ? body : `CRON_TZ=${zone} ${body}`
 }
 
-/** Plain words for a rule the fields can show; any other rule comes back as its cron text and zone. */
 export function describeRule(rule: string): { words: string } | { cron: string; zone: string } {
   const plan = readRule(rule, 'UTC')
   if (plan.repeat === 'cron') return { cron: split(rule.trim()).body, zone: plan.zone }
@@ -75,5 +87,5 @@ export function describeRule(rule: string): { words: string } | { cron: string; 
         : days === '1,2,3,4,5'
           ? 'weekdays'
           : list.format(mondayFirst.filter((day) => plan.days.includes(day)).map((day) => `${weekdayNames[day]}s`))
-  return { words: `${when} at ${plan.at} ${plan.zone}` }
+  return { words: `${when} at ${timeOfDay(plan.at)} ${plan.zone}` }
 }
