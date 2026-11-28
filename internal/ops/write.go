@@ -213,7 +213,8 @@ func keyless(member, method string, params any, guard func() (bool, error)) (key
 			// Stored before the in-flight entry goes, so a call between the
 			// two finds one of them.
 			kept.Store(fingerprint, key)
-			time.AfterFunc(time.Until(wait.at), func() { kept.CompareAndDelete(fingerprint, key) })
+			// The server ends the wait at its next look after that time.
+			time.AfterFunc(time.Until(wait.at)+time.Minute, func() { kept.CompareAndDelete(fingerprint, key) })
 			forget()
 			return
 		}
@@ -401,8 +402,12 @@ func launchRun(ctx context.Context, c calls, in connectorLaunchInput) (string, a
 		}
 		done(err)
 	})
-	if waitEnded(err) {
+	var ended *protocol.Error
+	if waitEnded(err) && errors.As(err, &ended) {
 		// The key never launches again, so it is not a retry to offer.
+		if in.IdempotencyKey == "" {
+			return "", nil, &protocol.Error{Code: ended.Code, Message: ended.Message + "; this call had no key, so the same call again launches anew"}
+		}
 		return "", nil, err
 	}
 	if err != nil && finished {

@@ -1136,4 +1136,23 @@ func TestConnectorLaunchWaitsForRoom(t *testing.T) {
 	if !failed || !strings.Contains(text, "use a new key") || strings.Contains(text, "retry with idempotency_key") {
 		t.Fatalf("a key whose launch ended = %q, want the server's refusal and no retry with the key", text)
 	}
+
+	// A keyless launch that waited and ended says so once; the call after
+	// that launches again.
+	delete(f.errs, protocol.MethodRunLaunch)
+	delete(args, "idempotency_key")
+	args["task"] = "another task"
+	f.answers[protocol.MethodRunLaunch] = returns(protocol.RunLaunchResult{Waiting: waiting})
+	_, out = run(t, cs, "aether_launch_session", args)
+	key, _ = out["idempotency_key"].(string)
+	f.errs[protocol.MethodRunLaunch] = &protocol.Error{Code: protocol.CodeConflict, Message: `run.launch: the launch under idempotency_key "` + key + `" waited for room and ended cancelled: cancelled by its owner; use a new key to launch again`}
+	if text, _, failed = try(t, cs, "aether_launch_session", args); !failed || !strings.Contains(text, "ended cancelled") || !strings.Contains(text, "launches anew") {
+		t.Fatalf("a keyless repeat of a cancelled launch = %q, want how it ended and that the next call launches", text)
+	}
+	delete(f.errs, protocol.MethodRunLaunch)
+	f.calls = nil
+	run(t, cs, "aether_launch_session", args)
+	if got := f.acted(); strings.Contains(got.params, key) {
+		t.Fatalf("the call after an ended launch sent %s, want a new key, not %s", got.params, key)
+	}
 }
