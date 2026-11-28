@@ -1039,6 +1039,11 @@ describe('the Enhanced composer draft', () => {
     expect(screen.queryByText('Drop to attach 2 files')).toBeNull()
 
     fireEvent.dragEnter(field, { dataTransfer })
+    fireEvent.dragEnd(field, { dataTransfer })
+    expect(screen.queryByText('Drop to attach 2 files')).toBeNull()
+    expect(api.uploadTerminalFile).not.toHaveBeenCalled()
+
+    fireEvent.dragEnter(field, { dataTransfer })
     fireEvent.drop(field, { dataTransfer })
     expect(screen.queryByText('Drop to attach 2 files')).toBeNull()
     expect(await screen.findByRole('button', { name: 'Remove attached file 2: b.txt' })).toBeDefined()

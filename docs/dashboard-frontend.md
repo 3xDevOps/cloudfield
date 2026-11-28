@@ -3967,17 +3967,17 @@ the same rows; closing it with files attached returns focus to the field unless 
 coarse pointer skips the popover: **+** opens the chooser directly and the
 chips carry the progress.
 
-Dragging files over the Chat pane attaches them; the pane covers with a dashed
-veil reading "Drop to attach n files". The pane is the conversation and
-composer area, below the session header and beside neither the sidebar nor
-Details. The composer also keeps its own drop target. Both share the composer's
-current capacity and disabled state and ignore text and link drags; their veils
-take no pointer events, so the field keeps its caret. A refused drop reads "At
-most n files fit", "Uploading…", "At most 8 files" or "Files cannot be attached
-now" (the cursor then shows no drop). `useFileDrop` in
-`web/src/lib/file-drag.ts` counts the files in the drag (not the link or markup it carries) and the enter and leave
-events so a child never ends the drag early, and stops them so a drag over the
-popover's zone does not also drive the box around it. A drag over a dialog or
+Dragging files over the Chat pane shows a translucent dashed veil reading
+"Drop to attach n files". The conversation and composer use the same drop
+target, with the composer's current capacity and disabled state. The docked
+composer shows the same veil over its frame. Text and link drags are ignored.
+The veil takes no pointer events, so the field keeps its caret. The Chat
+scrollbar thumb is hidden during a drag. Its gutter and scroll position stay
+in place. A refused drop reads "At most n files fit", "Uploading…", "At most 8
+files" or "Files cannot be attached now" (the cursor then shows no drop). `useFileDrop` in
+`web/src/lib/file-drag.ts` counts file items and tracks enter and leave events
+so movement across children keeps the veil visible. It stops events from the
+popover's zone before they reach the Chat pane. A drag over a dialog or
 popover opened from the chat, such as the image viewer, is not a drop on the
 pane. Folders are not walked:
 a dropped folder fails as a file with the browser's own read error. The Session

@@ -525,6 +525,10 @@ div.xterm .xterm-viewport {
     scrollbar-width: thin;
     scrollbar-color: var(--icon-faint) transparent;
   }
+
+  [data-chat-file-drag] * {
+    scrollbar-color: transparent transparent;
+  }
 }
 
 @supports selector(::-webkit-scrollbar) {
@@ -548,6 +552,10 @@ div.xterm .xterm-viewport {
   *::-webkit-scrollbar-thumb:hover {
     background: var(--text-muted);
     background-clip: padding-box;
+  }
+
+  [data-chat-file-drag] *::-webkit-scrollbar-thumb {
+    background: transparent;
   }
 
   *::-webkit-scrollbar-corner {

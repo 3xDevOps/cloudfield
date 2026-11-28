@@ -17,7 +17,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 const every: GatewayCapabilities = { gateway: 'remote', methods: ['*'], ws: [] }
 const closed = { id: 'run_1', status: 'merged', reason: 'closed; retained container', finished_at: '2026-08-14T10:30:00Z', container_retained_until: '2026-08-21T10:30:00Z' } as const
 
-function mount(over: Partial<ReturnType<typeof run>>, methods = every, onDropStatus?: Parameters<typeof Composer>[0]['onDropStatus']) {
+function mount(over: Partial<ReturnType<typeof run>>, methods = every, props?: Pick<Parameters<typeof Composer>[0], 'docked' | 'collapsed' | 'onDropStatus'>) {
   const record = toRecord(run({ ...over }))
   useStore.setState({
     workspaces: { [workspace.id]: workspace },
@@ -30,7 +30,7 @@ function mount(over: Partial<ReturnType<typeof run>>, methods = every, onDropSta
   })
   const Live = () => {
     const current = useStore((s) => s.runs[record.id]!)
-    return <Composer run={current} agent={{} as never} room={{} as never} textarea={{ current: null } as React.RefObject<HTMLTextAreaElement | null>} onFocusChange={() => {}} onEscape={() => {}} onDropStatus={onDropStatus} />
+    return <Composer run={current} agent={{} as never} room={{} as never} textarea={{ current: null } as React.RefObject<HTMLTextAreaElement | null>} onFocusChange={() => {}} onEscape={() => {}} {...props} />
   }
   return render(<Live />)
 }
@@ -38,16 +38,30 @@ function mount(over: Partial<ReturnType<typeof run>>, methods = every, onDropSta
 beforeEach(() => vi.clearAllMocks())
 
 describe('session drop target status', () => {
+  it('attaches a file through the collapsed Enhanced docked composer', async () => {
+    mount({ id: 'run_docked_drop', mode: 'acp', acp: true }, every, { docked: true, collapsed: true })
+    act(() => useStore.getState().acpStream('run_docked_drop', 'live'))
+    const field = screen.getByRole('combobox', { name: 'Message the agent' })
+    const file = new File(['notes'], 'notes.txt', { type: 'text/plain' })
+    const dataTransfer = { types: ['Files'], items: [{ kind: 'file' }], files: [file] }
+
+    fireEvent.dragEnter(field, { dataTransfer })
+    expect(screen.getByText('Drop to attach 1 file')).toBeDefined()
+    fireEvent.drop(field, { dataTransfer })
+    expect(screen.queryByText('Drop to attach 1 file')).toBeNull()
+    await waitFor(() => expect(api.uploadTerminalFile).toHaveBeenCalledWith(file, 'run_docked_drop'))
+  })
+
   it('reports the available attachment room to the session pane', async () => {
     const onDropStatus = vi.fn()
-    mount({ mode: 'tui', acp: false }, every, onDropStatus)
+    mount({ mode: 'tui', acp: false }, every, { onDropStatus })
 
     await waitFor(() => expect(onDropStatus).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 8, upload: expect.any(Function) })))
   })
 
   it('blocks pane drops when file upload is unavailable', async () => {
     const onDropStatus = vi.fn()
-    mount({ mode: 'tui', acp: false }, { gateway: 'remote', methods: ['run.get'], ws: [] }, onDropStatus)
+    mount({ mode: 'tui', acp: false }, { gateway: 'remote', methods: ['run.get'], ws: [] }, { onDropStatus })
 
     await waitFor(() => expect(onDropStatus).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 0, blocked: 'Files cannot be attached now', upload: expect.any(Function) })))
   })

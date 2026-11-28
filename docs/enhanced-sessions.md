@@ -257,9 +257,10 @@ nobody holds control or you hold it in a tab, and while another member holds
 it they fail with that member's name.
 
 **Attach files** adds files to the composer, at most eight: images up to 8 MiB,
-other files up to 64 MiB. Images go to the agent as image content and other files
-as a path in the container. If the agent does not advertise image support, remove
-the image before sending.
+other files up to 64 MiB. Drop files over the conversation or composer to
+attach them. Images go to the agent as image content and other files as a path
+in the container. If the agent does not advertise image support, remove the
+image before sending.
 An image sent while the agent starts shows **Not sent** if the agent turns out
 not to take images.
 
