@@ -75,6 +75,15 @@ describe('a launch waiting for room', () => {
     expect(api.launchWaitingList).not.toHaveBeenCalled()
   })
 
+  it('shows "Session not found" for a launch that started and whose session was deleted since', async () => {
+    vi.mocked(api.launchWaitingList).mockResolvedValue([waiting({ state: 'started', refusal: '' })])
+    vi.mocked(api.runGet).mockRejectedValue(new ApiError(404, 'run.get: not found'))
+    render(<MissingRun runId="run-w" />)
+    expect(await screen.findByText('This session is not on the server. It may have been deleted.')).toBeDefined()
+    expect(api.runGet).toHaveBeenCalledWith('run-w')
+    expect(useStore.getState().waitingLaunches['run-w']).toBeUndefined()
+  })
+
   it('shows the error of a read that is no answer, not "Session not found"', async () => {
     vi.mocked(api.launchWaitingList).mockRejectedValue(new ApiError(503, 'launch.waiting.list: the server is restarting'))
     render(<MissingRun runId="run-w" />)

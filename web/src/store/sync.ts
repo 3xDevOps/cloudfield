@@ -38,7 +38,7 @@ import { batchNotifications } from '@/store/batch'
 import { diffSnapshot } from '@/store/diff'
 import { coalesce } from '@/store/coalesce'
 import { tileList } from '@/store/tiles'
-import { launchOpen, loadWaitingLaunches } from '@/store/waiting-launches'
+import { keepsLaunches, launchUnsettled, loadWaitingLaunches, refreshWaitingLaunches } from '@/store/waiting-launches'
 import { isProvisional } from '@/store/collaboration'
 import { loadDevices } from '@/store/devices'
 import { applyWatchChanged } from '@/store/watch-notice'
@@ -238,7 +238,7 @@ export async function hydrate(
       store.getState().resetNotes()
       store.getState().resetAssistant()
       store.getState().setLinear(null)
-      store.setState({ invitations: null, revokingInvitations: [], agentModels: {}, mergedInto: {}, deletingRuns: {}, laneHistory: {}, laneBudget: historyBudget, watches: {}, watchNotices: {}, watchesFor: null, closeConfirmation: null })
+      store.setState({ invitations: null, revokingInvitations: [], agentModels: {}, mergedInto: {}, deletingRuns: {}, laneHistory: {}, laneBudget: historyBudget, watches: {}, watchNotices: {}, watchesFor: null, closeConfirmation: null, waitingLaunches: {}, ownLaunches: [] })
     }
     s.setCapabilities(capabilities)
     // Resolve Edge before restoring drafts: another app can serve script on
@@ -886,6 +886,7 @@ async function probeGateway(
  */
 const mergePollMs = 5000
 const waitingLaunchPollMs = 5000
+const waitingLaunchListMs = 60_000
 const saveDebounceMs = 10_000
 
 export function connect(store: RootStore, client: Api = api): () => void {
@@ -1059,10 +1060,15 @@ export function connect(store: RootStore, client: Api = api): () => void {
     void load()
   })
 
-  // A waiting launch publishes no event either: while one is open it is asked after.
+  // A waiting launch publishes no event either: while the store holds one whose
+  // ending it has not seen it is asked after, and once a minute the list is
+  // read for one made from another device or the command line.
+  let launchTicks = 0
   const launchTimer = setInterval(() => {
-    if (Object.values(store.getState().waitingLaunches).some(launchOpen)) {
-      coalesce(store, 'waiting-launches', () => loadWaitingLaunches(store, client, undefined, signal).catch(ignore))
+    const s = store.getState()
+    launchTicks = (launchTicks + 1) % (waitingLaunchListMs / waitingLaunchPollMs)
+    if (keepsLaunches(s) && (launchTicks === 0 || Object.values(s.waitingLaunches).some(launchUnsettled))) {
+      refreshWaitingLaunches(store, client, signal)
     }
   }, waitingLaunchPollMs)
 

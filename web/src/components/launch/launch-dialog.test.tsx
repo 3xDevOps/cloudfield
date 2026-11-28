@@ -18,7 +18,7 @@ import { pickOption } from '@/test/select'
 
 vi.mock('@/lib/api', async () => {
   const { fakeApi } = await import('@/test/fixtures')
-  return { api: fakeApi(), API_BASE: '/api/v1', ApiError: Error }
+  return { api: fakeApi(), API_BASE: '/api/v1', ApiError: Error, codeUnavailable: -32004 }
 })
 
 const claude = (over: Parameters<typeof agentInfo>[0] = {}) =>
@@ -255,18 +255,21 @@ describe('saved launch draft', () => {
     const keys = () => vi.mocked(api.runLaunchOrWait).mock.calls.map(([params]) => params.idempotency_key)
     vi.mocked(api.runLaunchOrWait)
       .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      // The gateway's answer for a server that did not answer in time.
+      .mockRejectedValueOnce(Object.assign(new Error('run.launch: server did not answer run.launch within 1m0s'), { code: -32004 }))
       .mockRejectedValueOnce(Object.assign(new Error('run.launch: workspace is being deleted'), { code: -32009 }))
       .mockRejectedValueOnce(Object.assign(new Error('run.launch: workspace is being deleted'), { code: -32009 }))
     render(<PaletteDialogs />)
     await waitFor(() => expect(launchButton().disabled).toBe(false))
-    for (const calls of [1, 2, 3]) {
+    for (const calls of [1, 2, 3, 4]) {
       fireEvent.click(launchButton())
       await waitFor(() => expect(api.runLaunchOrWait).toHaveBeenCalledTimes(calls))
       await waitFor(() => expect(launchButton().disabled).toBe(false))
     }
-    const [lost, again, anew] = keys()
+    const [lost, timedOut, refused, anew] = keys()
     expect(lost).toBeTruthy()
-    expect(again).toBe(lost)
+    expect(timedOut).toBe(lost)
+    expect(refused).toBe(lost)
     expect(anew).not.toBe(lost)
   })
 

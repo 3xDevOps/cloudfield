@@ -2849,14 +2849,15 @@ one the control shows, and a refusal from `run.launch` appears in the dialog
 verbatim under "Launch failed" while the dialog stays open, until another
 agent or mode is chosen. On a server whose `server.info` lists `launch-wait` the
 dialog sends `wait` and an `idempotency_key`, so a launch the server has no
-memory or disk for is not a failure: the server keeps it (unless the member
-already has 8 waiting, which it refuses), the dialog closes with the toast
+memory or disk for is not a failure: the server keeps it (unless it is over
+the server's limits for waiting launches, which it refuses), the dialog closes with the toast
 `The server has no room yet. The launch waits and starts by itself.`, and
 the dashboard opens the [waiting launch](#missing-run) under the session ID
-reserved for it. A launch whose answer never arrived is sent again under the
-same key when the member presses Launch with the form unchanged, so the
-server returns the launch it kept and not a second; a reload forgets the
-key. A launch that does not wait is answered only once the session is
+reserved for it. A launch whose answer never arrived (no response, or the
+gateway's "server did not answer") is sent again under the same key when the
+member presses Launch with the form unchanged, so the server returns the
+launch it kept and not a second; a refusal, a changed form and a reload each
+end the key. A launch that does not wait is answered only once the session is
 provisioned, which can take seconds, so the dialog navigates only then: until
 the answer the button reads "Launching…" with a spinner,
 and past the deadline "Still waiting for the server…". A refusal that
@@ -5824,9 +5825,12 @@ member's own from `launch.waiting.list`, waiting or ended without a session
 in the last day (the server leaves out those the member cancelled), and any
 other a tab shows, read by ID. Hydration reads them before it closes the
 tabs of unknown sessions, so a waiting launch's tab and link survive a
-reload and a reconnect. While one is open the connection asks again every 5
-seconds, one read at a time; a launch that started is replaced by its
-session, fetched with `run.get` when its event has not arrived. An ID the
+reload and a reconnect; when that read fails, no tab is closed until one
+succeeds. While the store holds a launch whose ending it has not seen the
+connection asks again every 5 seconds, one read at a time, and once a minute
+it reads the list for a launch made elsewhere. A launch that started is
+replaced by its session, fetched with `run.get` when its event has not
+arrived; when that session has been deleted since, nothing is left of it. An ID the
 server answers "not found" for shows "Session not found"; any other read
 error is shown as it is and asked again. The phone's Sessions list and the
 All workspaces list show the member's launches above their sessions: each

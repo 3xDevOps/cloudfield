@@ -21,7 +21,7 @@ import { LoaderCircle, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Callout } from '@/components/ui/callout'
 import { SlideOut } from '@/components/ui/slide-out'
-import { api, ApiError, type RunLaunchParams } from '@/lib/api'
+import { api, ApiError, codeUnavailable, type RunLaunchParams } from '@/lib/api'
 import { launchWaitFeature } from '@/lib/types'
 import { useClock } from '@/lib/clock'
 import { mobileScreen, useIsMobile } from '@/lib/breakpoints'
@@ -267,8 +267,10 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
       sent.current = null
       return result
     } catch (err) {
-      // The server answered: nothing is kept under the key.
-      if (err instanceof ApiError && err.code !== undefined) sent.current = null
+      // A refusal ends the key: nothing is kept under it. Without an answer
+      // the launch may be, and the gateway reports a server that did not
+      // answer as unavailable, as it does a server short of room.
+      if (err instanceof ApiError && err.code !== undefined && (err.code !== codeUnavailable || err.message.includes('waited for room and ended'))) sent.current = null
       throw err
     }
   }
@@ -304,7 +306,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
     if (!signedIn()) return
     rememberChoice(harness, mode, chosenModel)
     if (run) upsertRun(run)
-    if (waiting) useStore.getState().upsertWaitingLaunch(waiting)
+    if (waiting) useStore.getState().upsertWaitingLaunch(waiting, true)
     if (useStore.getState().launchDraft?.id === draftID) discard()
     navigate('run', { runId: run?.id ?? waiting?.id ?? '' })
     if (run) toast.success('Session launched')

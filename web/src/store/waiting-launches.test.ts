@@ -46,6 +46,33 @@ describe('loadWaitingLaunches', () => {
     expect(store.getState().waitingLaunches).toEqual({})
   })
 
+  it('forgets a started launch whose session was deleted, and keeps one whose session could not be read', async () => {
+    const store = keeping()
+    const started = async () => [launch({ state: 'started', refusal: '' })]
+    await loadWaitingLaunches(store, fakeApi({ launchWaitingList: started, runGet: async () => Promise.reject(new ApiError(503, 'run.get: server restarting')) }))
+    expect(store.getState().waitingLaunches.run_w?.state).toBe('started')
+
+    await loadWaitingLaunches(store, fakeApi({ launchWaitingList: started, runGet: async () => Promise.reject(new ApiError(404, 'run.get: not found')) }))
+    expect(store.getState().waitingLaunches).toEqual({})
+    expect(store.getState().runs.run_w).toBeUndefined()
+  })
+
+  it('lets what the store learned during the read stand: a launch just made, and one just cancelled', async () => {
+    const store = keeping()
+    await loadWaitingLaunches(store, fakeApi({ launchWaitingList: async () => [launch()] }))
+    let answer: (list: LaunchWaiting[]) => void = () => {}
+    const reading = loadWaitingLaunches(store, fakeApi({
+      launchWaitingList: (id?: string) => (id ? Promise.resolve([]) : new Promise<LaunchWaiting[]>((resolve) => { answer = resolve })),
+    }))
+    store.getState().upsertWaitingLaunch(launch({ id: 'run_new' }), true)
+    store.getState().upsertWaitingLaunch(launch({ state: 'cancelled', refusal: 'cancelled by mem-alice' }))
+    answer([launch()])
+    await reading
+    expect(store.getState().waitingLaunches.run_new?.state).toBe('waiting')
+    expect(store.getState().waitingLaunches.run_w?.state).toBe('cancelled')
+    expect(store.getState().ownLaunches).toEqual(['run_w', 'run_new'])
+  })
+
   it('leaves out a shown ID that is no launch, and holds nothing for a server that keeps none', async () => {
     const store = keeping()
     const list = vi.fn(async (id?: string) => (id ? Promise.reject(new ApiError(404, 'launch.waiting.list: no waiting launch run_x')) : [launch()]))

@@ -7,7 +7,7 @@ import { useIsMobile } from '@/lib/breakpoints'
 import { errorSentence, formatDuration, timeAgo } from '@/lib/format'
 import type { LaunchWaiting } from '@/lib/types'
 import { useStore } from '@/store'
-import { keepsLaunches, launchOpen, loadWaitingLaunches } from '@/store/waiting-launches'
+import { keepsLaunches, launchOpen, refreshWaitingLaunches } from '@/store/waiting-launches'
 
 const retryMs = 5000
 
@@ -67,20 +67,23 @@ export function WaitingLaunch({ runId, fallback }: { runId: string; fallback: Re
     const abort = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     const ask = () =>
-      api.launchWaitingList(runId, abort.signal).then(
-        ([found]) => {
+      api.launchWaitingList(runId, abort.signal)
+        .then(async ([found]) => {
+          // A launch that started is its session, which this tile shows once
+          // the store has it; deleted since, it is nothing.
+          const run = found?.state === 'started' ? await api.runGet(runId) : undefined
           if (abort.signal.aborted) return
-          if (found) useStore.getState().upsertWaitingLaunch(found)
+          if (run) useStore.getState().upsertRun(run)
+          else if (found) useStore.getState().upsertWaitingLaunch(found)
           else setNone(true)
-        },
-        (err: unknown) => {
+        })
+        .catch((err: unknown) => {
           if (abort.signal.aborted) return
           if (err instanceof ApiError && err.status === 404) return setNone(true)
           // Not an answer about the launch: say so and ask again.
           setError(errorSentence(err))
           timer = setTimeout(() => void ask(), retryMs)
-        },
-      )
+        })
     void ask()
     return () => {
       abort.abort()
@@ -190,8 +193,8 @@ export function WaitingLaunches({ narrow }: { narrow?: boolean }) {
   const own = useStore((s) => s.ownLaunches)
   const shown = useStore((s) => (s.route.name === 'run' ? s.route.params.runId : undefined))
   useEffect(() => {
-    // The store only asks after launches it knows are open: one made elsewhere shows when a list opens.
-    if (offered) void loadWaitingLaunches(useStore, api).catch(() => {})
+    // A launch made elsewhere shows when a list opens, without waiting for the minute's read.
+    if (offered) refreshWaitingLaunches(useStore, api)
   }, [offered])
   const { cancelling, cancel } = useCancel()
   const list = own.flatMap((id) => launches[id] ?? [])
@@ -205,7 +208,7 @@ export function WaitingLaunches({ narrow }: { narrow?: boolean }) {
           <li
             key={w.id}
             aria-current={narrow && shown === w.id ? 'page' : undefined}
-            className={`flex min-w-0 flex-wrap items-start gap-x-2.5 gap-y-1.5 border-t border-seam/60 px-3 py-2 first:border-t-0 aria-[current]:bg-hover-chrome ${over ? 'border-l-2 border-l-state-failed' : ''}`}
+            className={`flex min-w-0 flex-wrap items-start gap-x-2.5 gap-y-1.5 border-t border-seam/60 px-3 py-2 first:border-t-0 aria-[current]:bg-hover-chrome border-l-2 ${over ? 'border-l-state-failed' : 'border-l-transparent'}`}
           >
             <Icon className={`mt-0.5 size-4 shrink-0 ${over ? 'text-state-failed' : 'text-state-paused'}`} aria-hidden />
             <Button
@@ -216,8 +219,8 @@ export function WaitingLaunches({ narrow }: { narrow?: boolean }) {
               <span className="block truncate text-ui leading-5">{w.task || `${w.harness} session`}</span>
               <span className={`block text-ui-sm leading-5 text-muted ${narrow ? 'truncate' : ''}`}>
                 <span className={over ? 'text-state-failed' : undefined}>{heading[w.state]}</span>
-                {!narrow && ` · asked ${timeAgo(w.created_at)}`}
-                {!narrow && !over && ` · gives up in ${left(w)}`}
+                {!narrow && <> <span className="whitespace-nowrap">· asked {timeAgo(w.created_at)}</span></>}
+                {!narrow && !over && <> <span className="whitespace-nowrap">· gives up in {left(w)}</span></>}
               </span>
               {/* The launch's page has the refusal in full. */}
               {!narrow && <span className="line-clamp-2 break-words font-mono text-ui-sm leading-5 text-muted">{w.refusal}</span>}
