@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -67,6 +68,18 @@ func Serve(socket, user string, argv []string) int {
 
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL, Credential: cred}
+	var unprotected error
+	if name := os.Getenv(CommandPrefixEnv); name != "" {
+		// The agent's commands must not take it for a request to them.
+		cmd.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool { return strings.HasPrefix(kv, CommandPrefixEnv+"=") })
+		// A prefix the session already sets stays the agent's.
+		if os.Getenv(name) == "" {
+			var prefix string
+			if prefix, unprotected = protectAgent(); unprotected == nil {
+				cmd.Env = append(cmd.Env, name+"="+prefix)
+			}
+		}
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "acp-keeper:", err)
@@ -103,6 +116,9 @@ func Serve(socket, user string, argv []string) int {
 		return 125
 	}
 	k.cfg.Logger = slog.New(slog.NewTextHandler(os.Stderr, nil))
+	if unprotected != nil {
+		k.cfg.Logger.Info("acpkeeper: the agent's OOM score is not lowered", "error", unprotected)
+	}
 
 	go func() {
 		for {

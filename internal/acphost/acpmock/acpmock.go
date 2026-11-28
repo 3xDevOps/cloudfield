@@ -115,7 +115,8 @@ const (
 	// PromptRun followed by a shell command on the same line runs it in
 	// the agent's container, as an agent's tool call would, replies with
 	// its output and ends the turn. Lines after it, such as the run's
-	// instructions, are ignored.
+	// instructions, are ignored. With CLAUDE_CODE_SHELL_PREFIX set the
+	// command runs through that program, as Claude Code's Bash tool does.
 	PromptRun = "run: "
 )
 
@@ -599,7 +600,11 @@ func (a *Agent) prompt(ctx context.Context, text string) (any, *acp.RequestError
 	}
 	if command, ok := strings.CutPrefix(text, PromptRun); ok {
 		command, _, _ = strings.Cut(command, "\n")
-		out, err := exec.CommandContext(ctx, "sh", "-c", command).CombinedOutput()
+		argv := []string{"sh", "-c", command}
+		if prefix := os.Getenv("CLAUDE_CODE_SHELL_PREFIX"); prefix != "" {
+			argv = []string{prefix, command}
+		}
+		out, err := exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput()
 		if err != nil {
 			out = append(out, []byte("\n"+err.Error())...)
 		}

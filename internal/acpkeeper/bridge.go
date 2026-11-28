@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 )
 
 // Bridge connects in and out, the stdio of the exec a server attaches
@@ -13,6 +14,10 @@ import (
 func Bridge(socket string, in io.Reader, out io.Writer) error {
 	if err := undumpable(); err != nil {
 		return err
+	}
+	if os.Getenv(CommandPrefixEnv) != "" {
+		// A bridge that keeps its score relays all the same.
+		_ = lowerOOMScore()
 	}
 	conn, err := net.Dial("unix", socket)
 	if err != nil {
