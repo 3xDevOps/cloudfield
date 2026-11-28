@@ -101,7 +101,35 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 			}
 		}
 	}
-	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Usage, c.OwnerID, string(c.AccountID), c.Harness, c.Fallback)
+	// The parent's login is checked again here: its owner may have turned
+	// it off for shares, or it may have stopped signing in, since the
+	// subsession was queued.
+	login, err := s.cfg.Runs.ChildLogin(ctx, c.WorkspaceID, c.OwnerID, c.AccountID, c.AccountLogin, c.Harness, c.Mode, p.parent.Permission)
+	if err != nil {
+		refuse(err.Error())
+		return
+	}
+	payer := sync.OnceValues(func() (string, error) {
+		return s.cfg.Runs.LoginPayer(ctx, c.WorkspaceID, c.OwnerID, c.Harness, c.Mode)
+	})
+	// A subsession names no login, so one billed per use, or whose kind
+	// cannot be read, serves it only when no login with readable usage left
+	// can, unless something else signs the agent in: that pays on every
+	// account.
+	unknown, err := s.cfg.Runs.LoginUsageUnknown(ctx, c.OwnerID, domain.Account{Member: c.AccountID, Login: login}, c.Harness)
+	if err != nil {
+		refuse(err.Error())
+		return
+	}
+	if unknown {
+		paidBy, payerErr := payer()
+		if payerErr != nil {
+			refuse(payerErr.Error())
+			return
+		}
+		unknown = paidBy == ""
+	}
+	measured, err := fallback.MeasureStart(ctx, s.cfg.Store, s.cfg.Usage, c.OwnerID, domain.Account{Member: c.AccountID, Login: login}, c.Harness, c.Fallback, unknown)
 	if err != nil {
 		refuse(err.Error())
 		return
@@ -124,11 +152,16 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 		refuse(err.Error())
 		return
 	}
-	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, c.OwnerID, domain.AccountOf(requested), workspaces, c.Fallback, func(ctx context.Context, account domain.Account) (bool, error) {
+	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, c.OwnerID, domain.Account{Member: requested, Login: login}, c.Harness, workspaces, c.Fallback, func(ctx context.Context, account domain.Account) (bool, error) {
 		if p.settings.Off.Covers(c.Harness, account.Member) {
 			return false, nil
 		}
-		return s.cfg.Runs.FallbackLaunchable(ctx, c.OwnerID, requested, account.Member, c.Harness, c.Mode)
+		if account.Login.Added() {
+			if paidBy, payerErr := payer(); payerErr != nil || paidBy != "" {
+				return false, payerErr
+			}
+		}
+		return s.cfg.Runs.FallbackLaunchable(ctx, c.OwnerID, requested, account, c.Harness, c.Mode, parent.Permission)
 	})
 	account := chosen.Member
 	if excluded != nil {
@@ -136,7 +169,7 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 	}
 	created := false
 	_, err = s.cfg.Runs.LaunchWithOptions(ctx, c.WorkspaceID, c.OwnerID, account, c.Task, c.Harness, c.Mode, domain.LaunchOptions{
-		Model: c.Model, Permission: parent.Permission, RequestedAccount: requested, Fallback: c.Fallback, ReservedRunID: c.RunID,
+		Model: c.Model, Permission: parent.Permission, RequestedAccount: requested, AccountLogin: chosen.Login, Fallback: c.Fallback, ReservedRunID: c.RunID,
 		FromCommit: c.BaseCommit, FromBranch: c.BaseBranch, ExtraWorkspaces: workspaces[1:], Admitted: unlock,
 		LinearIssueURL: cmp.Or(linear.FindIssueURL(c.Task), parent.LinearIssueURL),
 		Created: func(domain.RunID) {

@@ -243,7 +243,7 @@ func TestRevocationClosesLiveConnections(t *testing.T) {
 				t.Fatal(err)
 			}
 			start = time.Now()
-			if err = da.edge.Logout(context.Background()); err != nil {
+			if _, err = da.edge.Logout(context.Background()); err != nil {
 				t.Fatal(err)
 			}
 			closedWithin(t, "aether logout", live[da], start, 2*time.Second)

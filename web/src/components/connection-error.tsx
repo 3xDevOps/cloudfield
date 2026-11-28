@@ -6,6 +6,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
+import { edgeHost } from '@/lib/format'
 import { isApprovalCode, shellQuote } from '@/lib/shell'
 import type { UnreachableKind } from '@/store/server'
 type ConnectionErrorProps = {
@@ -18,6 +19,8 @@ type ConnectionErrorProps = {
   serverID?: string
   /** Set only when nobody can approve this device in the app. */
   approvalCode?: string | null
+  /** The edge address dialed refused as retired; the error carries its text. */
+  retired?: boolean
   onRetry: () => void
 }
 
@@ -27,6 +30,8 @@ type ErrorCopy = {
   title: string
   description: ReactNode
   action: string | null
+  /** The action cannot change the outcome, so it is not the primary one. */
+  quietAction?: boolean
 }
 
 /** A command the user is told to run, styled so it reads as one. */
@@ -45,7 +50,7 @@ function Cmd({ children }: { children: string }) {
  * never be described as one they can, which is why `gateway` is the desktop
  * origin only.
  */
-function copyFor({ kind, dead, edge, serverID, approvalCode }: ConnectionErrorProps): ErrorCopy {
+function copyFor({ kind, dead, edge, serverID, approvalCode, retired }: ConnectionErrorProps): ErrorCopy {
   if (dead) {
     return {
       icon: KeyRound,
@@ -124,6 +129,23 @@ function copyFor({ kind, dead, edge, serverID, approvalCode }: ConnectionErrorPr
         </>
       ),
       action: 'Retry connection',
+    }
+  }
+
+  if (kind === 'edge-refused' && retired) {
+    return {
+      icon: ShieldOff,
+      eyebrow: 'Refused by the edge',
+      title: `${edge ? edgeHost(edge) : 'The edge address'} says it is retired`,
+      description: (
+        <>
+          It refused the connection with the text under Technical details, which names its new address. Confirm that address with whoever
+          runs the edge, sign in there with <Cmd>cloudfield login --edge &lt;new address&gt;</Cmd>, and link your server
+          again.
+        </>
+      ),
+      action: 'Retry connection',
+      quietAction: true,
     }
   }
 
@@ -268,8 +290,8 @@ function copyFor({ kind, dead, edge, serverID, approvalCode }: ConnectionErrorPr
  * rather than sitting inside it: an empty sidebar and an empty board around
  * a toast tell the user nothing about what broke or what to do next.
  */
-export function ConnectionError({ kind, dead, error, edge, serverID, approvalCode, onRetry }: ConnectionErrorProps) {
-  const content = copyFor({ kind, dead, error, edge, serverID, approvalCode, onRetry })
+export function ConnectionError({ kind, dead, error, edge, serverID, approvalCode, retired, onRetry }: ConnectionErrorProps) {
+  const content = copyFor({ kind, dead, error, edge, serverID, approvalCode, retired, onRetry })
   const Icon = content.icon
 
   return (
@@ -299,7 +321,7 @@ export function ConnectionError({ kind, dead, error, edge, serverID, approvalCod
 
           {content.action && (
             <div>
-              <Button type="button" size="sm" onClick={onRetry}>
+              <Button type="button" size="sm" variant={content.quietAction ? 'secondary' : 'primary'} onClick={onRetry}>
                 <RefreshCw aria-hidden />
                 {content.action}
               </Button>

@@ -722,8 +722,8 @@ session branches and pull requests go. A source URL must not contain credentials
 - Pushes to a mirrored base are refused. Only a forward refresh, or an admin
   adopting a new revision by its full commit SHA, moves it.
 - A failed refresh blocks the launch instead of starting from stale code. A
-  launch within 10 seconds of a successful refresh starts from that refresh, so
-  a credential revoked or a commit pushed upstream in those seconds does not
+  launch can start from a successful refresh up to 10 seconds old, so a
+  credential revoked or a commit pushed upstream in those seconds does not
   reach it
   ([Launch and mirror failures](failure-handling.md#launch-and-mirror-failures)).
 

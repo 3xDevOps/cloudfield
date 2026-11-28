@@ -24,7 +24,7 @@ import { hasImages, useComposerImages, type ComposerImageState } from '@/routes/
 import { ContextWindow } from '@/routes/run/context-window'
 import { usePromptHistory } from '@/routes/run/composer-history'
 import { commandSuggestions, currentChoice, OptionPills, SuggestionList, triggerAt, useFileSuggestions, type Suggestion } from '@/routes/run/composer-menus'
-import { beginDraftRequest, composerBlock, composerDraft, draftSendKey, enhancedBlock, pillFor, pillHint, saveComposerDraft, sentDraft, useComposerDraft, type ComposerDraft, type Pill } from '@/routes/run/composer-state'
+import { beginDraftRequest, composerBlock, composerDraft, draftSendKey, enhancedBlock, pillFor, pillHint, saveComposerDraft, sentDraft, startingHint, useComposerDraft, type ComposerDraft, type Pill } from '@/routes/run/composer-state'
 import { TemplateInsert } from '@/routes/run/composer-templates'
 import type { RunRoom } from '@/routes/run/room'
 import { TypingIndicator, useTypingSignal } from '@/routes/run/typing'
@@ -449,12 +449,12 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
   const lastLive = useRef<{ canAct: boolean; waiting: boolean }>(undefined)
   if (stream === 'live') lastLive.current = { canAct: control.canAct, waiting: backgroundWait(run, session) !== null }
   const shape = lastLive.current
+  const starting = session?.starting ?? false
   const gate = enhancedBlock({
     run,
     maySteer,
     canReopen: maySteer && cap.hasMethod('run.relaunch') && canReopenRun(run),
     refused: stream === 'refused' ? session?.streamError ?? 'The agent stream was refused.' : undefined,
-    sessionLive: shape ? session?.live ?? false : true,
     pending: session?.pending.length ?? 0,
     hasLease: shape?.canAct ?? true,
   })
@@ -462,8 +462,8 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
   const turnRunning = state?.turn_in_flight ?? false
   const waiting = shape?.waiting ?? false
   const blocked = Boolean(gate || connecting)
-  // A sleeping session's agent reports its prompt types once a wake starts it.
-  const supportsImages = state?.prompt_images === true || Boolean(run.asleep_since)
+  // A sleeping or starting session's agent reports its prompt types once it runs.
+  const supportsImages = state?.prompt_images === true || Boolean(run.asleep_since) || starting
   const images = useComposerImages(run.id, !blocked && cap.hasMethod('terminal.file'))
   const attachOff = busy || blocked || !cap.hasMethod('terminal.file')
   const drop = dropRoom(images, attachOff)
@@ -604,7 +604,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
 
   const stops = pill === 'interrupt' || pill === 'stop-waiting'
   const pillDisabled = busy || Boolean(connecting) || images.uploading || (!stops && pill !== 'resume' && (!images.ready || !hasContent || refusedImages || dictating))
-  const hintText = connecting ?? (moderated ? (control.waits ? 'Delivers in 45 s unless the controller decides sooner.' : '') : turnRunning || pill === 'stop-waiting' || pill === 'resume' ? pillHint[pill] : '')
+  const hintText = connecting ?? (moderated ? (control.waits ? 'Delivers in 45 s unless the controller decides sooner.' : '') : turnRunning || pill === 'stop-waiting' || pill === 'resume' ? pillHint[pill] : starting ? startingHint : '')
   const keyHint = coarse || stops ? undefined : pill === 'steer' ? `${shortcutLabel('composer-send')}; ${shortcutLabel('composer-queue')} queues` : shortcutLabel(pill === 'queue' && state?.steering ? 'composer-queue' : 'composer-send')
 
   return (
@@ -683,7 +683,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
           if (hasContent) act(turnRunning ? 'queue' : 'send')
         }}
         onEscape={onEscape}
-        placeholder={connecting ?? (turnRunning || waiting ? 'Message the agent while it works' : notFinishedYet(run) ? 'Say what is left to do, / for commands, @ for files' : 'Message the agent, / for commands, @ for files')}
+        placeholder={connecting ?? (starting ? 'Message the agent while it starts' : turnRunning || waiting ? 'Message the agent while it works' : notFinishedYet(run) ? 'Say what is left to do, / for commands, @ for files' : 'Message the agent, / for commands, @ for files')}
         describedBy={hintID}
         combobox={{ expanded: suggestions.length > 0, controls: listID, active: suggestions.length ? `${listID}-${current}` : undefined }}
         menu={<SuggestionList id={listID} items={suggestions} active={current} onPick={pick} />}

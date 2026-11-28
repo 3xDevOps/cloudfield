@@ -114,6 +114,19 @@
     "Is the subsession's agent one other than claude?",
     "Was the fix committed before the subsession was started?"
    ]
+  },
+  {
+   "id": "review-findings",
+   "title": "A subsession that must deliver findings",
+   "prompt": "You are a reviewer. Review the stock and slug packages for bugs, missing input checks and untested behaviour. Change no file. Deliver every finding to the session that started you, each with its file and line and a sentence on why it matters; it will act on your findings without reading anything else.",
+   "parent": "run-parent",
+   "checks": {
+    "min_starts": 0,
+    "max_starts": 0
+   },
+   "review": [
+    "Did the findings reach the parent in the report's body, with no message sent before the report?"
+   ]
   }
  ]
 }

@@ -1,7 +1,10 @@
-import { memo, useState } from 'react'
+import { memo, useId, useRef, useState } from 'react'
 import { ArrowRight, CircleHelp, ClipboardCheck, type LucideIcon, MessageSquare, Reply } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { CopyButton } from '@/components/ui/copy-button'
 import { RelativeTime } from '@/components/ui/relative-time'
+import { api, type Api } from '@/lib/api'
+import { formatBytes } from '@/lib/format'
 import { plainReason } from '@/lib/reasons'
 import { runLabel } from '@/lib/status'
 import type { RunMessage, RunMessageKind } from '@/lib/types'
@@ -61,13 +64,36 @@ export const MessageRow = memo(function MessageRow({
   onThread,
   label,
   flush = false,
+  client = api,
 }: {
   message: RunMessage
   onThread?: (thread: string) => void
   label?: ParticipantLabel
   flush?: boolean
+  client?: Api
 }) {
   const [expanded, setExpanded] = useState(false)
+  // Whether the report's body is shown, and what the one read of it gave.
+  const [fullOpen, setFullOpen] = useState(false)
+  const [full, setFull] = useState<{ loading?: boolean; body?: string; error?: string }>({})
+  const bodyBytes = message.kind === 'report' ? (message.report_body_bytes ?? 0) : 0
+  const fullRef = useRef<HTMLPreElement>(null)
+  const fullID = useId()
+  const loadFull = () => {
+    if (full.loading) return
+    setFull({ loading: true })
+    client
+      .coordMessagesList({ workspace_id: message.workspace_id, correlation_id: message.correlation_id, report_bodies: true })
+      .then((page) => {
+        const row = page.messages.find((m) => m.id === message.id)
+        setFull(row?.report_body ? { body: row.report_body } : { error: 'the server returned no body for this report' })
+      })
+      .catch((error: unknown) => setFull({ error: error instanceof Error ? error.message : String(error) }))
+  }
+  const toggleFull = () => {
+    if (!fullOpen && full.body === undefined) loadFull()
+    setFullOpen((open) => !open)
+  }
   const long = message.body.split('\n').length > 3 || message.body.length > 280
   const thread = message.correlation_id || (message.kind === 'question' || message.kind === 'report' ? message.id : '')
   const report = message.kind === 'report' ? [['Outcome', message.outcome], ['Summary', message.summary === message.body ? '' : message.summary], ['Next', message.next_action && plainReason(message.next_action)]].filter(([, value]) => value) : []
@@ -101,10 +127,32 @@ export const MessageRow = memo(function MessageRow({
           ))}
         </dl>
       )}
-      {(long || (thread && onThread)) && (
-        <div className="col-start-2 flex gap-3">
+      {(long || bodyBytes > 0 || (thread && onThread)) && (
+        <div className="col-start-2 flex min-h-6 flex-wrap items-center gap-x-3">
           {long && <Button variant="link" size="sm" onClick={() => setExpanded((open) => !open)}>{expanded ? 'Show less' : 'Show more'}</Button>}
+          {bodyBytes > 0 && (
+            <Button variant="link" size="sm" aria-expanded={fullOpen} aria-controls={fullID} onClick={toggleFull}>
+              {fullOpen ? 'Hide full report' : `Full report (${formatBytes(bodyBytes)})`}
+            </Button>
+          )}
+          {fullOpen && full.body !== undefined && <CopyButton text={full.body} label="Copy full report" source={fullRef} />}
           {thread && onThread && <Button variant="link" size="sm" onClick={() => onThread(thread)}>Thread</Button>}
+        </div>
+      )}
+      {fullOpen && (
+        <div id={fullID} className="col-start-2 mt-1 min-w-0">
+          {full.loading && <p role="status" className="text-ui-sm text-muted">Loading the full report…</p>}
+          {full.error && (
+            <p role="alert" className="text-ui-sm break-words text-state-failed">
+              Reading the full report failed: {full.error}{' '}
+              <Button variant="link" size="sm" onClick={loadFull}>Retry</Button>
+            </p>
+          )}
+          {full.body !== undefined && (
+            <pre ref={fullRef} tabIndex={0} role="region" aria-label="Full report" className="max-h-96 min-w-0 overflow-auto overscroll-contain max-sm:max-h-none rounded-control border border-seam bg-chrome p-3 font-code text-ui break-words whitespace-pre-wrap text-text">
+              {full.body}
+            </pre>
+          )}
         </div>
       )}
     </article>

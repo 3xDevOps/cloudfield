@@ -161,6 +161,13 @@ type edgePath struct {
 	Online   []edgeproto.ServerInfo `json:"online,omitempty"`
 }
 
+// retiredAddress is the error data "retired": the edge refused because
+// the address dialed is retired, and Replacement is the address it named.
+// The refusal's own text is in "refusal".
+type retiredAddress struct {
+	Replacement string `json:"replacement"`
+}
+
 // refusalData is the error data of a failure on the edge path, nil for
 // any other: "refusal", an *edgeproto.Refused, when the server, the edge
 // or this client refused, and "edge_path" when the failure is a
@@ -171,6 +178,7 @@ func refusalData(err error) json.RawMessage {
 		data struct {
 			Refusal  *edgeproto.Refused `json:"refusal,omitempty"`
 			EdgePath *edgePath          `json:"edge_path,omitempty"`
+			Retired  *retiredAddress    `json:"retired,omitempty"`
 		}
 		edgeRefused *edgeclient.RefusedError
 		path        *cli.EdgePathError
@@ -179,6 +187,9 @@ func refusalData(err error) json.RawMessage {
 	case errors.As(err, &data.Refusal):
 	case errors.As(err, &edgeRefused):
 		data.Refusal = edgeproto.RefusedBy(edgeproto.Refusal(edgeRefused.Message))
+		if edgeRefused.Retired != "" {
+			data.Retired = &retiredAddress{Replacement: edgeRefused.Retired}
+		}
 	case errors.Is(err, edgeclient.ErrNotSignedIn):
 		data.Refusal = &edgeproto.Refused{Kind: edgeproto.RefusedNotSignedIn}
 	}
@@ -230,9 +241,21 @@ type signedInEdge struct {
 	Account      *edgeproto.AccountInfo `json:"account,omitempty"`
 	Device       *edgeproto.Device      `json:"device,omitempty"`
 	Error        string                 `json:"error,omitempty"`
+	Retiring     *edgeNotice            `json:"retiring,omitempty"`
 }
 
-func (g *Gateway) localEdgeStatus(*http.Request, []byte) (any, *protocol.Error) {
+// localEdgeStatus answers the edges signed in to and the sign-in this
+// gateway runs. The sign-in is read first: one that ends meanwhile still
+// shows as pending, so its edge is never reported signed in without its
+// entry. With notices it asks each edge for its retiring notice.
+func (g *Gateway) localEdgeStatus(r *http.Request, body []byte) (any, *protocol.Error) {
+	var params struct {
+		Notices bool `json:"notices"`
+	}
+	if perr := decodeParams(body, &params); perr != nil {
+		return nil, perr
+	}
+	login := g.local.edge.view()
 	dir, err := cli.Dir()
 	if err != nil {
 		return nil, &protocol.Error{Code: protocol.CodeInternal, Message: err.Error()}
@@ -252,10 +275,13 @@ func (g *Gateway) localEdgeStatus(*http.Request, []byte) (any, *protocol.Error) 
 		}
 		edges = append(edges, entry)
 	}
+	if params.Notices {
+		addNotices(r.Context(), g.local.notices, dir, edges)
+	}
 	return struct {
 		Edges []signedInEdge `json:"edges"`
 		Login *loginView     `json:"login,omitempty"`
-	}{Edges: edges, Login: g.local.edge.view()}, nil
+	}{Edges: edges, Login: login}, nil
 }
 
 func sessionOn(dir, origin string) (edgeclient.Session, error) {
@@ -278,7 +304,7 @@ func (g *Gateway) localEdgeLogout(r *http.Request, body []byte) (any, *protocol.
 		return nil, perr
 	}
 	g.local.edge.forget(client.URL())
-	if err := client.Logout(r.Context()); err != nil {
+	if _, err := client.Logout(r.Context()); err != nil {
 		return nil, edgeError(err)
 	}
 	return struct {
