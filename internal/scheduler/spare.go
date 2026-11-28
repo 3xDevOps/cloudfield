@@ -255,7 +255,10 @@ func (s *Scheduler) removeSpareRun(run domain.RunID) {
 		}
 	}
 	if err != nil {
-		slog.Warn("scheduler: remove a spare session", "run", run, "error", err)
+		slog.Warn("scheduler: remove a spare session; trying again", "run", run, "error", err)
+		s.mu.Lock()
+		s.sparesLeft = append(s.sparesLeft, run)
+		s.mu.Unlock()
 		return
 	}
 	s.cfg.Bus.(runHider).Show(run)
@@ -317,10 +320,17 @@ func (s *Scheduler) removeWorkspaceSpares(ctx context.Context, workspace domain.
 }
 
 // sweepSpares removes the spare of a member who has not launched within
-// spareWindow and one whose run ended on its own.
+// spareWindow and one whose run ended on its own, and tries again the
+// removals that failed.
 func (s *Scheduler) sweepSpares() {
 	var gone []*spare
 	s.mu.Lock()
+	left := s.sparesLeft
+	s.sparesLeft = nil
+	if s.superCtx.Err() != nil {
+		left = nil
+	}
+	s.wg.Add(len(left))
 	for member, m := range s.members {
 		old := time.Since(m.last) >= spareWindow
 		switch sp := m.spare; {
@@ -337,6 +347,12 @@ func (s *Scheduler) sweepSpares() {
 	for _, sp := range gone {
 		slog.Info("scheduler: removed a spare session nobody claimed", "member", sp.member, "run", sp.run)
 		s.goRemoveSpare(sp)
+	}
+	for _, run := range left {
+		go func() {
+			defer s.wg.Done()
+			s.removeSpareRun(run)
+		}()
 	}
 }
 

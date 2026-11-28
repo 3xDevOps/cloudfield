@@ -834,7 +834,9 @@ changed`, or the error of a read that failed. `scheduler: spare session
 ready member=<member id> run=<run id>` marks a spare whose agent has
 started, and `scheduler: no spare session member=<member id> error=...` one
 that could not be made, which is not tried again before the member's next
-launch.
+launch. A spare whose removal fails logs `scheduler: remove a spare session;
+trying again run=<run id> error=...` and is removed again on every poll
+(`--poll-interval`) until it is gone.
 
 ## Enhanced sessions
 

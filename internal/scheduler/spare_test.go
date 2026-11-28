@@ -690,6 +690,31 @@ func TestASpareNobodyClaimsIsRemovedAfterTheWindow(t *testing.T) {
 	}
 }
 
+// A spare whose removal fails holds memory nobody sees: the sweep tries
+// again until it is gone.
+func TestASpareThatCouldNotBeRemovedIsRemovedByTheNextSweep(t *testing.T) {
+	t.Parallel()
+	e, rt := newSpareEnv(t)
+	e.opened(t, e.launchClaude(t, "say pong", domain.LaunchOptions{}).ID)
+	spare := e.waitSpare(t)
+	cid := e.cid(t, spare)
+	e.git.mu.Lock()
+	e.git.historyErr = errors.New("disk I/O error")
+	e.git.mu.Unlock()
+	e.sched.DropSpares(t.Context(), e.member.ID, true)
+	if _, err := e.sched.cfg.Store.GetRun(t.Context(), spare); err != nil {
+		t.Fatalf("the spare's row after a removal that failed: %v, want it kept for the next try", err)
+	}
+	e.git.mu.Lock()
+	e.git.historyErr = nil
+	e.git.mu.Unlock()
+	e.sched.sweepSpares()
+	e.waitNoSpares(t)
+	if _, err := rt.get(cid); !errors.Is(err, runtime.ErrNotFound) {
+		t.Fatalf("the spare's VM after the sweep: %v, want it gone", err)
+	}
+}
+
 // A spare is never taken up again by the next server: its member's next
 // launch may no longer match it.
 func TestARestartRemovesTheSpareTheLastServerLeft(t *testing.T) {

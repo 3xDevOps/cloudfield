@@ -698,6 +698,8 @@ type fakeGit struct {
 	root string
 
 	mu sync.Mutex
+	// historyErr fails RemoveRunHistory.
+	historyErr error
 	// released are the branches ReleaseRunBranch gave back.
 	released      []string
 	commits       map[domain.RunID][]string
@@ -833,6 +835,12 @@ func (g *fakeGit) RemoveRunCheckout(_ context.Context, run domain.RunID) error {
 }
 
 func (g *fakeGit) RemoveRunHistory(_ context.Context, run domain.RunID) error {
+	g.mu.Lock()
+	historyErr := g.historyErr
+	g.mu.Unlock()
+	if historyErr != nil {
+		return historyErr
+	}
 	return errors.Join(os.RemoveAll(g.checkoutPath(run)), os.RemoveAll(g.checkoutPath(run)+".diffsnap"))
 }
 

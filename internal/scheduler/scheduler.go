@@ -251,8 +251,10 @@ type Scheduler struct {
 	// memoryClaims is guarded by capacityGate.
 	memoryClaims []*memoryClaim
 
-	// members is what the spare sessions follow of each member, guarded by mu.
-	members map[domain.MemberID]*memberSpare
+	// members is what the spare sessions follow of each member, and
+	// sparesLeft the spares whose removal failed, both guarded by mu.
+	members    map[domain.MemberID]*memberSpare
+	sparesLeft []domain.RunID
 
 	// vmDiskMu serializes the disk guard's checks. vmDiskBase is each VM's
 	// disk use when the filesystem first fell below the reserve, held while
