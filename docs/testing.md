@@ -1023,6 +1023,12 @@ under `$TMPDIR` (default `/tmp`) that it removes at the end: root runs that
 server, so no other user may be able to replace it. A VM in the default run gets at most 5 GiB; on a CI runner the tests take
 about 24 minutes.
 
+`TestKVMASaveKeepsItsLiftedMemoryLimitWhenSystemdAppliesTheUnitAgain` runs
+`systemctl daemon-reload` during a save only when
+`AETHER_VM_TEST_DAEMON_RELOAD` is set, as CI's `kvm` job sets it. A reload
+applies the settings of every unit on the host again, so leave it unset on
+a host that runs sessions.
+
 On a KVM host without Go, build on your machine, copy the directory over,
 and run each test binary there with the variables `make test-kvm` sets:
 
