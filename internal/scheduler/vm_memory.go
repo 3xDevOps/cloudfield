@@ -361,6 +361,21 @@ func (s *Scheduler) saveFits(c memoryCandidate, writing uint64) bool {
 	return true
 }
 
+// recoveredSaveFits is saveFits for the VM of entry, a run recorded asleep
+// that still runs. A save that fits counts in memoryCandidates' writing
+// until the returned func runs, so the saves recovery makes at once each
+// leave room for the others.
+func (s *Scheduler) recoveredSaveFits(ctx context.Context, entry *supervised) (func(), bool) {
+	s.vmMemoryMu.Lock()
+	defer s.vmMemoryMu.Unlock()
+	candidates, writing := s.memoryCandidates(ctx)
+	i := slices.IndexFunc(candidates, func(c memoryCandidate) bool { return c.e == entry })
+	if i < 0 || !s.saveFits(candidates[i], writing) {
+		return nil, false
+	}
+	return s.markSaving(entry), true
+}
+
 // saveCandidate saves c unless its run is busy with another lifecycle change,
 // such as a wake waiting on admission while it holds the lock. A run it
 // saves while it works carries its wake mark, the memory it holds, in the

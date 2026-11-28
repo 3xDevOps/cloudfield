@@ -20,8 +20,10 @@ import (
 
 // woke is how a wake brought a sleeping session's container back.
 type woke struct {
-	// restored is a VM restored with every process it had.
+	// restored is a VM restored with every process it had. running is one
+	// that was never saved and still ran.
 	restored bool
+	running  bool
 	// restoreErr is why a VM's saved state could not be restored, so it
 	// started again from its disks.
 	restoreErr error
@@ -46,6 +48,8 @@ func (w woke) notice() string {
 		kept = "the files and checkout are kept, and the agent restores its conversation if it can."
 	}
 	switch {
+	case w.running:
+		return "Cloudfield had left this sleeping session's VM running, not saved to disk, and took it up again. Its processes, terminals and conversation carry on where they were; connections to outside the session may have dropped while it slept."
 	case w.restored:
 		return "Cloudfield had saved this session to disk and restored it. Its processes, terminals and conversation carry on where they were; connections to outside the session may have dropped while it slept."
 	case w.restoreErr != nil:
@@ -272,8 +276,8 @@ func (s *Scheduler) restoreAsleep(ctx context.Context, entry *supervised, saver 
 				return woke{}, fmt.Errorf("resume the restored session: %w", err)
 			}
 		} else {
-			// As below: an open session saved frozen, as the memory guard
-			// and recovery save one, comes back frozen.
+			// As below: only a session saved with its processes frozen in
+			// the guest comes back frozen, and resuming any other fails.
 			_ = s.cfg.Runtime.Resume(ctx, cid)
 		}
 		s.superviseWoken(entry)
@@ -297,7 +301,7 @@ func (s *Scheduler) restoreAsleep(ctx context.Context, entry *supervised, saver 
 	if !info.Exited {
 		_ = s.cfg.Runtime.Resume(ctx, cid)
 		s.superviseWoken(entry)
-		return woke{restored: true}, nil
+		return woke{restored: true, running: errors.Is(restoreErr, runtime.ErrNotSaved)}, nil
 	}
 	// A shutdown cut the restore short before the guest ran: its saved state
 	// stays for the next server's wake.
@@ -458,7 +462,7 @@ func (s *Scheduler) superviseWoken(entry *supervised) {
 	s.mu.Lock()
 	// The ACP driver will not exec into a container it thinks is frozen.
 	entry.paused = false
-	entry.asleepSaved = false
+	entry.asleepSaved, entry.asleepRunning = false, false
 	entry.sleepGen++
 	entry.waitStarted = true
 	s.wg.Add(1)
@@ -470,7 +474,7 @@ func (s *Scheduler) superviseWoken(entry *supervised) {
 func (s *Scheduler) recordSaved(entry *supervised, saved bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	entry.asleepSaved = saved
+	entry.asleepSaved, entry.asleepRunning = saved, false
 	if err := s.writeSidecar(entry.sidecar()); err != nil {
 		return fmt.Errorf("record whether the sleeping session is saved: %w", err)
 	}

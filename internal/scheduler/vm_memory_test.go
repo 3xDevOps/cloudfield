@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/acphost/acpmock"
+	"github.com/3xDevOps/cloudfield/internal/disk"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
@@ -904,5 +906,80 @@ func TestALastingStallSavesOneVMAndWakesItOnlyOnceTheStallEases(t *testing.T) {
 	e.guard(t)
 	if e.asleep(run) {
 		t.Fatal("the guard did not wake the VM once the stall eased")
+	}
+}
+
+// A release that paused idle VMs in memory left such a VM paused, with
+// asleep_resident in its sidecar. Recovery saves it only when its memory
+// fits on the data disk, and the next prompt restores it. One that does not
+// fit stays paused and reads as asleep with every process: a prompt resumes
+// it, and the memory guard saves it once the disk has room.
+func TestRecoverySavesAVMAnOlderServerLeftPausedOnlyWhenItFitsOnDisk(t *testing.T) {
+	// A 100 GiB disk has room for 1 GiB with 80 GiB free and none with 9.5,
+	// as in TestTheMemoryGuardSkipsSavesThatFailedOrWouldNotFitOnDisk.
+	const room, full = 80 << 30, 19 << 29
+	cases := map[string]struct {
+		free       uint64
+		guardSaves bool
+	}{
+		"with room, recovery saves it":                        {free: room},
+		"with no room, a prompt resumes it":                   {free: full},
+		"with no room, the guard saves it once there is some": {free: full, guardSaves: true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e, mr := newMemoryEnv(t)
+			cid := e.launchVM(t, mr, "say pong", 1<<30)
+			run := e.runOf(t, cid)
+			waitItems(t, e.sched, run, "the task's turn", turnEnded("end_turn", 1))
+			e.sched.mu.Lock()
+			entry := e.sched.runs[run]
+			e.sched.mu.Unlock()
+			if err := e.sched.markAsleep(entry); err != nil {
+				t.Fatal(err)
+			}
+			path := e.sched.sidecarPath(run)
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw = bytes.Replace(raw, []byte("{"), []byte(`{"asleep_resident":true,`), 1)
+			if err = os.WriteFile(path, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err = mr.Pause(t.Context(), cid); err != nil {
+				t.Fatal(err)
+			}
+			var free atomic.Uint64
+			free.Store(tc.free)
+			e.cfg.filesystemCapacity = func(string) (disk.Usage, error) {
+				return disk.Usage{TotalBytes: 100 << 30, FreeBytes: free.Load()}, nil
+			}
+
+			s2 := e.restartACP(t)
+			waitFor(t, "the paused VM read as asleep with every process", func() bool { return s2.Sleep(run).Saved })
+			fits := tc.free == room
+			if state := containerState(e.container(t, run)); mr.isSaved(cid) != fits || !fits && (mr.saveCount() != 0 || state != "paused") {
+				t.Fatalf("recovery left the VM saved %v after %d saves and %s; want saved %v, and paused after no save when not",
+					mr.isSaved(cid), mr.saveCount(), state, fits)
+			}
+			if tc.guardSaves {
+				free.Store(room)
+				mr.setAvailable(3 << 30)
+				s2.guardVMMemory(t.Context())
+				if !mr.isSaved(cid) || !s2.Sleep(run).Saved {
+					t.Fatal("the guard did not save the VM recovery left paused once the disk had room")
+				}
+				mr.setAvailable(24 << 30)
+			}
+			if _, err = s2.Inject(t.Context(), run, e.member.ID, domain.AgentPrompt{Text: "after the update"}, false, nil); err != nil {
+				t.Fatalf("a prompt to the session: %v", err)
+			}
+			if state := containerState(e.container(t, run)); state != "running" || mr.isSaved(cid) {
+				t.Fatalf("the prompt left the VM %s, saved %v; want running", state, mr.isSaved(cid))
+			}
+			waitItems(t, s2, run, "a turn after the wake", turnEnded("end_turn", 2))
+		})
 	}
 }

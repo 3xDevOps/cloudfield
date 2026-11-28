@@ -488,7 +488,7 @@ The memory guard reads `/proc/meminfo` and
 falls below the floor, or when the host stalls on memory: `full avg10` at
 60% or more for 30 seconds, which means every task was blocked on memory
 for most of the time. Those are systemd-oomd's defaults, where it starts
-killing. The guard never kills a session. It saves awake session VMs to
+killing. The guard never kills a session. It saves running session VMs to
 disk, with every process in them, as an idle sleep does
 ([Sessions in VMs](#sessions-in-vms)), in this order:
 
@@ -1155,6 +1155,14 @@ disk runs low, Cloudfield deletes the saved memory of the longest-sleeping
 sessions first
 ([Recover from disk pressure](#recover-from-disk-pressure)). A server
 restart or update leaves sleeping VMs asleep; the next use wakes them. A
+VM recorded asleep that still runs when the server starts, as a stop during
+its save leaves one, is saved then only if its memory fits on the data disk
+by the memory guard's rule
+([Recover from memory pressure](#recover-from-memory-pressure)).
+One that does not fit stays as it is and logs `scheduler: save a sleeping
+session's VM; it stays running run=<id>`: its session reads as asleep with
+its processes kept, a wake resumes it, and the memory guard saves it once
+the host is short of memory and the disk has room. A
 stop cuts short a wake still running and leaves its session asleep: with
 its saved state, or, once the restore has resumed the guest, with its VM
 running, which the next server saves again, or wakes if the memory guard

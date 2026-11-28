@@ -953,45 +953,6 @@ func TestASavedRunWakesWithItsAgentAfterARestart(t *testing.T) {
 	waitItems(t, s2, run.ID, "a turn after the restart", turnEnded("end_turn", 2))
 }
 
-// A release that paused idle VMs in memory left such a VM paused, with
-// asleep_resident in its sidecar. Recovery saves it to disk, and the next
-// prompt restores and resumes it.
-func TestRecoverySavesAVMAnOlderServerLeftPausedInMemory(t *testing.T) {
-	t.Parallel()
-	e, _, sr := newSaveEnv(t, false)
-	run := e.launchACP(t, "say pong")
-	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
-	e.sched.mu.Lock()
-	entry := e.sched.runs[run.ID]
-	e.sched.mu.Unlock()
-	if err := e.sched.markAsleep(entry); err != nil {
-		t.Fatal(err)
-	}
-	path := e.sched.sidecarPath(run.ID)
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw = bytes.Replace(raw, []byte("{"), []byte(`{"asleep_resident":true,`), 1)
-	if err = os.WriteFile(path, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cid := e.cid(t, run.ID)
-	if err = sr.Pause(t.Context(), cid); err != nil {
-		t.Fatal(err)
-	}
-
-	s2 := e.restartACP(t)
-	waitFor(t, "the paused VM saved", func() bool { return sr.isSaved(cid) && s2.Sleep(run.ID).Saved })
-	if _, err = s2.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "after the update"}, false, nil); err != nil {
-		t.Fatalf("a prompt to the saved session: %v", err)
-	}
-	if state := containerState(e.container(t, run.ID)); sr.restores != 1 || state != "running" {
-		t.Fatalf("the prompt restored the session %d times and left its VM %s, want once and running", sr.restores, state)
-	}
-	waitItems(t, s2, run.ID, "a turn after the wake", turnEnded("end_turn", 2))
-}
-
 // A stop that cuts a wake short while it reattaches to the agent's keeper
 // leaves the keeper running and recorded, and the next server's wake adopts
 // it instead of starting another agent beside it.

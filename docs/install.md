@@ -833,13 +833,29 @@ keeps serving. `AETHER_NO_UPDATE_CHECK=1` turns that check off.
 Releases from `v0.10.0-nightly.6` on left an idle session VM paused, holding
 its memory, where this release saves it to disk
 ([Sessions in VMs](failure-handling.md#sessions-in-vms)). The first start
-after an update from one of them saves every VM still paused that way,
-while it reconnects sessions, 4 at a time. A VM with a checkout disk first
-writes its dirty data and waits up to 40 seconds for the host to get its
-page cache back, so that update's wait at the end is longer. A wake then
-restores the VM from disk and reads all of its saved memory back first
-([vm-guest.md](vm-guest.md#save-and-restore)), where a paused VM only
-resumed. The
+after an update from one of them saves each VM still paused that way whose
+memory fits on the data disk, while it reconnects sessions, 4 at a time. A
+VM with a checkout disk first writes its dirty data and waits up to 40
+seconds for the host to get its page cache back, so that update's wait at
+the end is longer. A wake then restores the VM from disk and reads all of
+its saved memory back first ([vm-guest.md](vm-guest.md#save-and-restore)),
+where a paused VM only resumed.
+
+A VM fits when the data disk keeps its reserve, 4 GiB and the memory of
+the saves still writing free after it, the rule the memory guard saves by
+([Recover from memory pressure](failure-handling.md#recover-from-memory-pressure)).
+One that does not fit stays paused and holds its memory. The server log
+names it twice:
+
+```
+scheduler: memory guard: no room on disk to save a session VM run=<id> memory=<bytes> writing=<bytes> free=<bytes>
+scheduler: save a sleeping session's VM; it stays running run=<id> error="its memory is unknown or does not fit on the data disk; the memory guard saves it once it fits and the host is short of memory, and a wake resumes it"
+```
+
+Its session reads as asleep with its processes kept, and a wake resumes it
+without a restore. The memory guard saves it once the host is short of
+memory and the disk has room; free disk space first if you want that
+memory back ([Recover from disk pressure](failure-handling.md#recover-from-disk-pressure)). The
 [capacity counters](failure-handling.md#what-the-server-did-for-want-of-memory-or-disk)
 no longer write rows with the `op` `paused`; stored ones stay for their 90
 days. Timeline rows of past sleeps that only paused a VM now read
