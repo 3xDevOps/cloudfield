@@ -10,6 +10,8 @@ const (
 	// CapacityWaitEnd one that stopped waiting: Cause says how.
 	CapacityWait    = "wait"
 	CapacityWaitEnd = "wait-end"
+	// CapacityPass is a launch admitted while others waited for room.
+	CapacityPass = "pass"
 	// CapacityFreeze is the memory brake freezing the session VMs.
 	CapacityFreeze = "freeze"
 	// CapacitySave is the memory guard, or an admission short of memory,

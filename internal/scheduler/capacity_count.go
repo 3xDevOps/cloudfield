@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -128,4 +129,17 @@ func (s *Scheduler) countSave(c memoryCandidate, available, floor uint64) {
 		op = "idle"
 	}
 	s.countCapacity(domain.CapacityEvent{Kind: domain.CapacitySave, Op: op, Run: c.e.runID, AvailableBytes: available, FloorBytes: floor, VMBytes: c.memory}, false)
+}
+
+// passWaitingLaunches counts the launch of run against every launch that
+// waits for room: it got the room first.
+func (s *Scheduler) passWaitingLaunches(ctx context.Context, run domain.RunID) {
+	passed, err := s.cfg.Store.PassLaunchIntents(ctx)
+	if err != nil {
+		slog.Warn("scheduler: capacity: count the waiting launches a launch passed", "run", run, "error", err)
+		return
+	}
+	if passed > 0 {
+		s.countCapacity(domain.CapacityEvent{Kind: domain.CapacityPass, Op: opLaunch, Run: run, Text: fmt.Sprintf("passed %d waiting launches", passed)}, false)
+	}
 }

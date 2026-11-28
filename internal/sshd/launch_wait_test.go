@@ -1,0 +1,245 @@
+package sshd
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/scheduler"
+	"github.com/3xDevOps/cloudfield/internal/store"
+)
+
+var errTestNoRoom = fmt.Errorf("%w: 100 available bytes; reserve 200 bytes", scheduler.ErrMemoryPressure)
+
+type waitEnv struct {
+	*testEnv
+	t *testing.T
+}
+
+func newWaitEnv(t *testing.T) waitEnv {
+	e := newTestEnv(t, nil)
+	e.runs.admitInto = e.store
+	e.setRoom(false)
+	return waitEnv{e, t}
+}
+
+func (e *testEnv) setRoom(room bool) {
+	e.runs.mu.Lock()
+	defer e.runs.mu.Unlock()
+	e.runs.noRoom = errTestNoRoom
+	if room {
+		e.runs.noRoom = nil
+	}
+}
+
+func (e waitEnv) launch(member domain.MemberID, p protocol.RunLaunchParams) (protocol.RunLaunchResult, *protocol.Error) {
+	e.t.Helper()
+	p.WorkspaceID, p.Harness = string(e.ws.ID), "claude"
+	raw, perr := callJSON(e.t, e.testEnv, member, protocol.MethodRunLaunch, p)
+	var result protocol.RunLaunchResult
+	if perr == nil {
+		if err := json.Unmarshal(raw, &result); err != nil {
+			e.t.Fatal(err)
+		}
+	}
+	return result, perr
+}
+
+func (e waitEnv) launches() int {
+	n := 0
+	for _, call := range e.runs.Calls() {
+		if strings.HasPrefix(call, "launch:") {
+			n++
+		}
+	}
+	return n
+}
+
+func (e waitEnv) intent(id string) *domain.LaunchIntent {
+	e.t.Helper()
+	in, err := e.db.GetLaunchIntent(e.t.Context(), domain.RunID(id))
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return in
+}
+
+func (e waitEnv) listed(member domain.MemberID) []protocol.LaunchWaiting {
+	e.t.Helper()
+	raw, perr := callJSON(e.t, e.testEnv, member, protocol.MethodLaunchWaitingList, protocol.LaunchWaitingListParams{})
+	if perr != nil {
+		e.t.Fatal(perr)
+	}
+	var out protocol.LaunchWaitingListResult
+	if err := json.Unmarshal(raw, &out); err != nil {
+		e.t.Fatal(err)
+	}
+	return out.Waiting
+}
+
+// A launch that asks to wait is kept when the server has no room, answers
+// its key with the same waiting launch, and starts once there is room, as
+// one session under the ID it was promised, from the base it was asked at.
+func TestALaunchWithNoRoomWaitsAndStartsOnce(t *testing.T) {
+	e := newWaitEnv(t)
+	if _, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: "no wait"}); perr == nil || perr.Code != protocol.CodeUnavailable || !strings.Contains(perr.Message, "insufficient host memory headroom") {
+		t.Fatalf("a launch that does not ask to wait = %v, want the refusal it always got", perr)
+	}
+	first, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: "wait", IdempotencyKey: "k-1", Wait: true})
+	if perr != nil || first.Waiting == nil || first.Run.ID != "" || first.Waiting.State != "waiting" || first.Waiting.Refusal != errTestNoRoom.Error() {
+		t.Fatalf("a launch that asks to wait = %+v, %v; want it waiting with the refusal and no session", first, perr)
+	}
+	if _, err := e.db.GetRun(t.Context(), domain.RunID(first.Waiting.ID)); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the reserved session ID before the start = %v, want no session", err)
+	}
+	tried := e.launches()
+	for _, wait := range []bool{true, false} {
+		again, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: "wait", IdempotencyKey: "k-1", Wait: wait})
+		if perr != nil || again.Waiting == nil || again.Waiting.ID != first.Waiting.ID {
+			t.Fatalf("the same key again (wait %v) = %+v, %v; want the same waiting launch", wait, again, perr)
+		}
+	}
+	if e.launches() != tried {
+		t.Fatalf("a retry of a waiting launch was tried %d more times, want none", e.launches()-tried)
+	}
+	if _, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: "another", IdempotencyKey: "k-1", Wait: true}); perr == nil || perr.Code != protocol.CodeConflict {
+		t.Fatalf("the key with another task = %v, want a conflict", perr)
+	}
+	if list := e.listed(e.member.ID); len(list) != 1 || list[0].ID != first.Waiting.ID || list[0].Task != "wait" {
+		t.Fatalf("waiting launches listed = %+v", list)
+	}
+
+	// Still no room: it stays, with the latest refusal.
+	created := e.intent(first.Waiting.ID).CreatedAt
+	e.srv.startWaitingLaunches(t.Context(), created.Add(launchRetryEvery))
+	if in := e.intent(first.Waiting.ID); in.State != domain.IntentWaiting || in.Attempts != 1 {
+		t.Fatalf("after an attempt with no room = %+v, want it waiting, tried once", in)
+	}
+
+	e.setRoom(true)
+	e.srv.startWaitingLaunches(t.Context(), created.Add(2*launchRetryEvery))
+	in := e.intent(first.Waiting.ID)
+	run, err := e.db.GetRun(t.Context(), in.ID)
+	if err != nil || in.State != domain.IntentStarted || run.MemberID != e.member.ID || run.Task != "wait" || run.BaseCommit != in.Base.Commit {
+		t.Fatalf("once there is room: intent %+v, session %+v, %v; want it started as that session from the kept base", in, run, err)
+	}
+	opts := e.runs.launchOptions[len(e.runs.launchOptions)-1]
+	if !opts.Intent || opts.ReservedRunID != in.ID || !opts.Retry || opts.Queue || opts.Base == nil {
+		t.Fatalf("the start's options = %+v, want the intent's ID, its base, and a retry", opts)
+	}
+	tried = e.launches()
+	replay, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: "wait", IdempotencyKey: "k-1", Wait: true})
+	if perr != nil || replay.Waiting != nil || replay.Run.ID != string(in.ID) || !replay.Replayed || e.launches() != tried {
+		t.Fatalf("the key after the start = %+v, %v; want the session, replayed, and no second launch", replay, perr)
+	}
+	e.srv.startWaitingLaunches(t.Context(), created.Add(3*launchRetryEvery))
+	if e.launches() != tried {
+		t.Fatal("a started launch was tried again")
+	}
+}
+
+// Every check a fresh launch makes is made again when a waiting launch is
+// tried: one whose member may no longer launch ends refused with that
+// error, and the one behind it is still tried.
+func TestAWaitingLaunchIsCheckedAgainWhenItStarts(t *testing.T) {
+	e := newWaitEnv(t)
+	_, member := addMember(t, e.testEnv, "Grace", domain.RoleCollaborator, false)
+	lost, perr := e.launch(member.ID, protocol.RunLaunchParams{Task: "by a member who loses the right", Wait: true})
+	if perr != nil || lost.Waiting == nil {
+		t.Fatalf("launch = %+v, %v", lost, perr)
+	}
+	kept, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: "behind it", Wait: true})
+	if perr != nil || kept.Waiting == nil {
+		t.Fatalf("launch = %+v, %v", kept, perr)
+	}
+	if _, err := e.db.SetMemberRole(t.Context(), member.ID, domain.RoleViewer, ""); err != nil {
+		t.Fatal(err)
+	}
+	e.setRoom(true)
+	e.srv.startWaitingLaunches(t.Context(), time.Now().Add(launchRetryEvery))
+	in := e.intent(lost.Waiting.ID)
+	if in.State != domain.IntentRefused || in.Refusal == "" || in.Refusal == errTestNoRoom.Error() {
+		t.Fatalf("a waiting launch of a member who may no longer launch = %+v, want it refused with that error", in)
+	}
+	if _, err := e.db.GetRun(t.Context(), in.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("its session = %v, want none", err)
+	}
+	if list := e.listed(member.ID); len(list) != 1 || list[0].State != "refused" || list[0].Refusal != in.Refusal {
+		t.Fatalf("what its member sees = %+v, want the refused launch with the error", list)
+	}
+	if got := e.intent(kept.Waiting.ID); got.State != domain.IntentStarted {
+		t.Fatalf("the launch behind it = %+v, want it started", got)
+	}
+}
+
+// A cancelled launch never starts, its key never launches again, and only
+// its member or a super admin may cancel it.
+func TestAWaitingLaunchIsCancelled(t *testing.T) {
+	e := newWaitEnv(t)
+	_, member := addMember(t, e.testEnv, "Grace", domain.RoleCollaborator, false)
+	w, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: "wait", IdempotencyKey: "k-c", Wait: true})
+	if perr != nil || w.Waiting == nil {
+		t.Fatalf("launch = %+v, %v", w, perr)
+	}
+	cancel := protocol.LaunchWaitingCancelParams{ID: w.Waiting.ID}
+	if _, perr := callJSON(t, e.testEnv, member.ID, protocol.MethodLaunchWaitingCancel, cancel); perr == nil || perr.Code != protocol.CodeNotFound {
+		t.Fatalf("another member's cancel = %v, want not found", perr)
+	}
+	if _, perr := callJSON(t, e.testEnv, e.member.ID, protocol.MethodLaunchWaitingCancel, cancel); perr != nil {
+		t.Fatal(perr)
+	}
+	e.setRoom(true)
+	tried := e.launches()
+	e.srv.startWaitingLaunches(t.Context(), time.Now().Add(launchRetryEvery))
+	if in := e.intent(w.Waiting.ID); in.State != domain.IntentCancelled || e.launches() != tried {
+		t.Fatalf("a cancelled launch = %+v, tried %d more times; want it cancelled and never tried", in, e.launches()-tried)
+	}
+	if _, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: "wait", IdempotencyKey: "k-c", Wait: true}); perr == nil || perr.Code != protocol.CodeConflict || !strings.Contains(perr.Message, "cancelled") {
+		t.Fatalf("the key of a cancelled launch = %v, want a conflict that says so", perr)
+	}
+	if list := e.listed(e.member.ID); len(list) != 0 {
+		t.Fatalf("waiting launches after the cancel = %+v, want none", list)
+	}
+}
+
+// A launch that found no room for a day ends with its last refusal, and
+// its member still sees why.
+func TestAWaitingLaunchExpiresAfterADay(t *testing.T) {
+	e := newWaitEnv(t)
+	w, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: "wait", Wait: true})
+	if perr != nil || w.Waiting == nil {
+		t.Fatalf("launch = %+v, %v", w, perr)
+	}
+	tried := e.launches()
+	e.srv.startWaitingLaunches(t.Context(), e.intent(w.Waiting.ID).CreatedAt.Add(launchWaitLimit))
+	in := e.intent(w.Waiting.ID)
+	if in.State != domain.IntentExpired || !strings.Contains(in.Refusal, errTestNoRoom.Error()) || e.launches() != tried {
+		t.Fatalf("after a day = %+v, want it expired with the last refusal and not tried", in)
+	}
+	if list := e.listed(e.member.ID); len(list) != 1 || list[0].State != "expired" {
+		t.Fatalf("what its member sees = %+v, want the expired launch", list)
+	}
+}
+
+// One member cannot fill the queue: past the cap a launch gets the refusal
+// it always got.
+func TestWaitingLaunchesAreCappedPerMember(t *testing.T) {
+	e := newWaitEnv(t)
+	for i := range maxWaitingLaunches {
+		if w, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: fmt.Sprintf("wait %d", i), Wait: true}); perr != nil || w.Waiting == nil {
+			t.Fatalf("launch %d = %+v, %v", i, w, perr)
+		}
+	}
+	if _, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: "one too many", Wait: true}); perr == nil || perr.Code != protocol.CodeUnavailable || !strings.Contains(perr.Message, "insufficient host memory headroom") {
+		t.Fatalf("a launch past the cap = %v, want the refusal", perr)
+	}
+	_, member := addMember(t, e.testEnv, "Grace", domain.RoleCollaborator, false)
+	if w, perr := e.launch(member.ID, protocol.RunLaunchParams{Task: "another member", Wait: true}); perr != nil || w.Waiting == nil {
+		t.Fatalf("another member's launch = %+v, %v; want it waiting", w, perr)
+	}
+}

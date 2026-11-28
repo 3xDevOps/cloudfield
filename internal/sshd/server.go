@@ -68,11 +68,14 @@ type Config struct {
 	Store       store.Store
 	// RunLimits are the server's flags with the automatic values filled in,
 	// what a run gets when neither an admin nor the launch sets a limit.
-	RunLimits       domain.RunLimits
-	Bus             events.Bus
-	Git             GitTransport
-	PTY             PTYAttacher
-	Runs            RunController
+	RunLimits domain.RunLimits
+	Bus       events.Bus
+	Git       GitTransport
+	PTY       PTYAttacher
+	Runs      RunController
+	// Recovered closes once the scheduler recovered the sessions a restart
+	// left, so no waiting launch starts before that.
+	Recovered       <-chan struct{}
 	DeleteWorkspace func(context.Context, domain.WorkspaceID, domain.MemberID) error
 	// Control owns the per-run controller lease shared by SSH and local
 	// gateway attaches. Nil preserves deployments without controller
@@ -489,6 +492,11 @@ func (s *Server) Serve(ctx context.Context) error {
 	go func() {
 		defer s.wg.Done()
 		s.replayHandoffOutbox(serveCtx, outbox, rooms, evidenceCapture)
+	}()
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.dispatchLaunchIntents(serveCtx)
 	}()
 	s.mu.Unlock()
 

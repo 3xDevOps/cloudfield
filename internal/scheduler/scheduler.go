@@ -273,7 +273,7 @@ type Scheduler struct {
 	vmMemoryBraked bool
 	// vmFreezeCounted is set once that freeze was counted.
 	vmFreezeCounted bool
-	vmBrakeTargets []runtime.ID
+	vmBrakeTargets  []runtime.ID
 	// vmMemoryWaking holds, under mu, while a wake the guard started runs.
 	vmMemoryWaking bool
 

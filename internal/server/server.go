@@ -547,6 +547,7 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 		Git:               lazyGit{s.git},
 		PTY:               s.pty,
 		Runs:              s.sched,
+		Recovered:         s.sched.RecoveryReady(),
 		Control:           s.control,
 		Homes:             homes,
 		Logins:            logins,

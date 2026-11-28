@@ -332,6 +332,15 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	if err != nil {
 		return nil, err
 	}
+	if opts.Queue {
+		ahead, listErr := s.cfg.Store.LaunchIntents(ctx, "", domain.IntentWaiting, domain.IntentStarting)
+		if listErr != nil {
+			return nil, listErr
+		}
+		if len(ahead) > 0 {
+			return nil, fmt.Errorf("%w: %d ahead of this one", ErrLaunchesWaiting, len(ahead))
+		}
+	}
 	release, err := s.reserveLaunch(ctx, reservedID, opts.Retry)
 	if err != nil {
 		return nil, err
@@ -423,6 +432,9 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	defer s.finishPending(run.ID, pending)
 	if opts.Admitted != nil {
 		opts.Admitted()
+	}
+	if !opts.Intent {
+		s.passWaitingLaunches(ctx, run.ID)
 	}
 	if err := s.provision(ctx, run, ws, actor, argv, profile); err != nil {
 		return nil, err

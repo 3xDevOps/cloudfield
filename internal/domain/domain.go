@@ -346,6 +346,9 @@ type LaunchOptions struct {
 	// that launch intent, ReservedRunID, marked started in one transaction.
 	Base   *LaunchBase
 	Intent bool
+	// Queue refuses the launch without an admission of its own while
+	// launches wait for room, so it waits behind them.
+	Queue bool
 	// LinearIssueURL is recorded on the run as its Linear issue.
 	LinearIssueURL string
 }

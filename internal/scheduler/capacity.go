@@ -24,12 +24,18 @@ var (
 	ErrMemoryPressure     = errors.New("scheduler: insufficient host memory headroom")
 	ErrBrowserCPUCapacity = errors.New("scheduler: insufficient browser CPU capacity")
 	ErrCapacityUnknown    = errors.New("scheduler: host capacity unavailable")
+	// ErrLaunchesWaiting sends a launch that asked to wait behind the
+	// launches already waiting for room, without an admission of its own.
+	ErrLaunchesWaiting = errors.New("scheduler: launches asked for earlier are waiting for room")
 )
 
 // CapacityRefused reports whether err is a refusal for want of disk or
 // memory, or a failed measurement of them: a later attempt can succeed.
-func (s *Scheduler) CapacityRefused(err error) bool {
-	return errors.Is(err, ErrDiskFull) || errors.Is(err, ErrMemoryPressure) || errors.Is(err, ErrCapacityUnknown)
+func (s *Scheduler) CapacityRefused(err error) bool { return IsCapacityRefusal(err) }
+
+// IsCapacityRefusal is CapacityRefused for a caller without the scheduler.
+func IsCapacityRefusal(err error) bool {
+	return errors.Is(err, ErrDiskFull) || errors.Is(err, ErrMemoryPressure) || errors.Is(err, ErrCapacityUnknown) || errors.Is(err, ErrLaunchesWaiting)
 }
 
 const (
