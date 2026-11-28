@@ -66,6 +66,7 @@ type acpDriver struct {
 	runs    map[domain.RunID]*acpRun
 	ops     map[domain.RunID]*opLock
 	waiters map[domain.RunID]*waiter
+	opening map[domain.RunID]*opening
 }
 
 // opLock and waiter entries live only while someone holds or waits on them.
@@ -104,6 +105,7 @@ func newACPDriver(s *Scheduler) *acpDriver {
 		runs:    make(map[domain.RunID]*acpRun),
 		ops:     make(map[domain.RunID]*opLock),
 		waiters: make(map[domain.RunID]*waiter),
+		opening: make(map[domain.RunID]*opening),
 	}
 }
 
@@ -126,23 +128,6 @@ func (d *acpDriver) lockOp(run domain.RunID) func() {
 			delete(d.ops, run)
 		}
 	}
-}
-
-func (d *acpDriver) Start(ctx context.Context, entry *supervised, att runtime.Attachment) error {
-	if err := d.s.cfg.PTY.StartSession(ctx, ptyhost.RunSession(entry.runID), att); err != nil {
-		return err
-	}
-	if !d.continuationOwed(entry) {
-		d.connect(ctx, entry, openNew)
-		return nil
-	}
-	// The move that started this container reports a failed restore as its
-	// own error, so it is recorded here rather than reported.
-	if err := d.openRestored(ctx, entry, openContinue); err != nil {
-		d.setRun(entry.runID, &acpRun{err: err})
-		d.notice(entry.runID, "error", "Enhanced agent failed", err.Error())
-	}
-	return nil
 }
 
 func (d *acpDriver) continuationOwed(entry *supervised) bool {
@@ -222,10 +207,17 @@ func (d *acpDriver) LastActivity(run domain.RunID) time.Time {
 }
 
 func (d *acpDriver) Deliver(ctx context.Context, run *domain.Run, _ *domain.Member, prompt domain.AgentPrompt, steer bool, delivered func(error)) (string, error) {
+	if d.hold(ctx, run, prompt, steer, delivered) {
+		return acphost.OutcomeQueued, nil
+	}
 	sess, err := d.live(ctx, run.ID)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", ptyhost.ErrNoSession, err)
 	}
+	return d.prompt(ctx, sess, run, prompt, steer, delivered)
+}
+
+func (d *acpDriver) prompt(ctx context.Context, sess *acphost.Session, run *domain.Run, prompt domain.AgentPrompt, steer bool, delivered func(error)) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, acpSteerTimeout)
 	defer cancel()
 	blocks := make([]acp.ContentBlock, 0, len(prompt.Attachments)+1)
@@ -325,11 +317,15 @@ func (d *acpDriver) session(run domain.RunID) *acphost.Session {
 	return nil
 }
 
-// live waits, while Start recovers runs, for a run that has no session or
-// failure recorded yet, and then for an adopted session's replay of the
-// agent's unanswered requests, so a call right after a restart is not
-// refused. A cancelled ctx ends the wait.
+// live waits for the open a launch left running, then, while Start recovers
+// runs, for a run that has no session or failure recorded yet, and then for
+// an adopted session's replay of the agent's unanswered requests, so a call
+// right after a launch or a restart is not refused. A cancelled ctx ends the
+// wait.
 func (d *acpDriver) live(ctx context.Context, run domain.RunID) (*acphost.Session, error) {
+	if err := d.awaitOpening(ctx, run); err != nil {
+		return nil, err
+	}
 	sess, err, opened := d.liveNow(run)
 	if !opened && d.s.recovering.Load() {
 		_, started, release := d.started(run)
@@ -386,7 +382,8 @@ func (d *acpDriver) openError(run domain.RunID) error {
 }
 
 // started returns the live session, or else a channel closed when the next
-// one starts and the release for it, both read under one lock.
+// one starts or a launch's open ends without one, and the release for it,
+// both read under one lock.
 func (d *acpDriver) started(run domain.RunID) (*acphost.Session, <-chan struct{}, func()) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -427,8 +424,14 @@ const (
 	openWake
 )
 
+var errKeeperUnreached = errors.New("reattach to the agent's keeper")
+
 func (d *acpDriver) connect(ctx context.Context, entry *supervised, how acpOpen) {
 	defer d.lockOp(entry.runID)()
+	d.connectLocked(ctx, entry, how)
+}
+
+func (d *acpDriver) connectLocked(ctx context.Context, entry *supervised, how acpOpen) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), acpConnectTimeout)
 	defer cancel()
 	if err := d.open(ctx, entry, how); err != nil {
@@ -440,6 +443,12 @@ func (d *acpDriver) connect(ctx context.Context, entry *supervised, how acpOpen)
 				entry.failReason = acpFailedReason + err.Error()
 			}
 			d.s.mu.Unlock()
+		}
+		// Running out of time to reach the agent's keeper proves nothing
+		// about the agent, so it ends no Background run as a failure does.
+		if how == openRestore && errors.Is(err, errKeeperUnreached) && d.oneShot(entry) {
+			d.disconnected(entry, err)
+			return
 		}
 		d.fail(entry, err)
 	}
@@ -500,7 +509,10 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 	if !ok {
 		return fmt.Errorf("%w: the runtime cannot run a managed exec", runtime.ErrExecUnavailable)
 	}
-	fresh := how == openNew
+	// A restart during a launch's open leaves no session to restore: the
+	// run's first one is still owed, with its mode, model, effort and task,
+	// whatever a keeper of the unfinished open holds.
+	fresh := how == openNew || how == openRestore && run.HarnessSessionID == "" && cachedSession == ""
 	sessionID, mode := "", profile.ACPMode
 	if !fresh {
 		sessionID = run.HarnessSessionID
@@ -519,7 +531,7 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 	var exec, bridge runtime.ManagedExec
 	var keeper *acpkeeper.Client
 	var adopt *acphost.Adoption
-	if (how == openRestore || how == openWake) && kept {
+	if (how == openRestore || how == openWake) && kept && !fresh {
 		exec, keeper, bridge, err = d.reattach(ctx, entry, managed, cid)
 		if err == nil {
 			state := keeper.State()
@@ -530,7 +542,7 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 			d.record(entry, func() { entry.keeperDelivered, entry.keeperAdopted = state.Delivered, true })
 		} else {
 			if ctx.Err() != nil {
-				return fmt.Errorf("reattach to the agent's keeper: %w", err)
+				return fmt.Errorf("%w: %w", errKeeperUnreached, err)
 			}
 			slog.Warn("scheduler: reattach to the agent's keeper", "run", entry.runID, "error", err)
 			after := "the server restarted"
@@ -675,12 +687,6 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 		}
 		return adapterError(fmt.Errorf("open the agent conversation: %w", err), stderr)
 	}
-	if id := sess.SessionID(); id != run.HarnessSessionID {
-		if err := d.s.cfg.Store.SetRunAgentSession(ctx, runID, id); err != nil {
-			slog.Warn("scheduler: record agent session", "run", runID, "error", err)
-		}
-	}
-	d.record(entry, func() { entry.agentSessionID = sess.SessionID() })
 	// An adopted session keeps the mode, model and effort it had.
 	if adopt != nil {
 		mode = ""
@@ -741,6 +747,14 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 			}
 		}
 	}
+	// Recorded once the session is set up: a restart that finds none opens
+	// the run's first session again.
+	if id := sess.SessionID(); id != run.HarnessSessionID {
+		if err := d.s.cfg.Store.SetRunAgentSession(ctx, runID, id); err != nil {
+			slog.Warn("scheduler: record agent session", "run", runID, "error", err)
+		}
+	}
+	d.record(entry, func() { entry.agentSessionID = sess.SessionID() })
 	r.session = sess
 	// A session that started anew, here or after a failed restore, or
 	// refused its prompts so far has not had them yet.
@@ -803,17 +817,26 @@ func (d *acpDriver) setRun(run domain.RunID, r *acpRun) {
 	defer d.mu.Unlock()
 	d.runs[run] = r
 	if r.session != nil {
-		if w := d.waiters[run]; w != nil {
-			close(w.ch)
-			delete(d.waiters, run)
-		}
+		d.wakeLocked(run)
 	}
 }
 
-func (d *acpDriver) fail(entry *supervised, err error) {
+func (d *acpDriver) wakeLocked(run domain.RunID) {
+	if w := d.waiters[run]; w != nil {
+		close(w.ch)
+		delete(d.waiters, run)
+	}
+}
+
+// disconnected records err as why the run has no agent session.
+func (d *acpDriver) disconnected(entry *supervised, err error) {
 	slog.Warn("scheduler: enhanced session failed", "run", entry.runID, "error", err)
 	d.setRun(entry.runID, &acpRun{err: err})
 	d.notice(entry.runID, "error", "Enhanced agent failed", err.Error())
+}
+
+func (d *acpDriver) fail(entry *supervised, err error) {
+	d.disconnected(entry, err)
 	idle := agentstatus.Report{State: agentstatus.Idle, Reason: acpFailedReason + err.Error()}
 	if d.oneShot(entry) {
 		d.endOneShot(entry, false, idle)
@@ -921,8 +944,10 @@ func (d *acpDriver) activity(entry *supervised, kind, target string) {
 }
 
 func (d *acpDriver) resumeAfterPause(ctx context.Context, entry *supervised) {
+	// Behind a launch's open, which a pause does not wait for.
+	defer d.lockOp(entry.runID)()
 	if d.session(entry.runID) == nil {
-		d.connect(ctx, entry, openRestore)
+		d.connectLocked(ctx, entry, openRestore)
 		return
 	}
 	d.wakeIdle(entry.runID)

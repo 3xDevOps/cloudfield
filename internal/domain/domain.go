@@ -318,7 +318,10 @@ type LaunchOptions struct {
 	// RequestedAccount is the account the launcher asked for, recorded on the
 	// run when a fallback launched it on another one.
 	RequestedAccount MemberID
-	Fallback         AccountFallback
+	// AccountLogin is the added login of the account the run spends; empty
+	// for its default login.
+	AccountLogin LoginID
+	Fallback     AccountFallback
 	// Admitted is called once the run's row is durable and a Kill of the run
 	// stops its provisioning, before any provisioning work. A launcher that
 	// holds an admission lock releases it here; a replayed or refused launch
@@ -330,6 +333,10 @@ type LaunchOptions struct {
 	ExtraWorkspaces []WorkspaceID
 	// ReservedRunID creates the run under an ID minted beforehand.
 	ReservedRunID RunID
+	// Retry marks a launch tried again unasked after the server had no
+	// room for it: it reclaims no disk, and its refusals are counted apart
+	// from first attempts.
+	Retry bool
 	// FromCommit starts the checkout at this commit of the workspace repo,
 	// recorded with FromBranch, instead of capturing the workspace base.
 	FromCommit string
@@ -647,6 +654,19 @@ func NormalizeOrigin(origin string) string {
 	return "https://github.com/" + strings.TrimPrefix(path, "/")
 }
 
+// OriginForNote returns origin when it is safe to show in a note every reader
+// of the workspace sees, and "" when it may hold a credential. Userinfo
+// (https://user:token@host, a token given as the ssh or scp-like user), a
+// query and a fragment can each carry one, so an origin with any of "@", "?"
+// or "#" is not shown at all. A token mistyped into the host or path with
+// none of those is not caught.
+func OriginForNote(origin string) string {
+	if strings.ContainsAny(origin, "@?#") {
+		return ""
+	}
+	return origin
+}
+
 // Member is a person. Identity is the SSH public key, the tailnet login
 // resolved via Tailscale WhoIs, or both - either may be empty, never both.
 // The color is the stable attribution color used everywhere in the UI.
@@ -826,9 +846,11 @@ type Run struct {
 	// exhausted; empty otherwise.
 	RequestedAccountMemberID MemberID
 	// AccountLogin is the added login of AccountMemberID the run spends;
-	// empty for their default login.
-	AccountLogin LoginID
-	Fallback     AccountFallback
+	// empty for their default login. AccountLoginPerUse: that login is
+	// billed per use, decided when the run's account is set.
+	AccountLogin       LoginID
+	AccountLoginPerUse bool
+	Fallback           AccountFallback
 	// HomeMemberID is whose home the container mounts: the launcher. A
 	// handoff changes MemberID, never this. Empty on rows created before
 	// account shares were narrowed.

@@ -280,7 +280,7 @@ type fakeUnits struct {
 	rebootOnResume bool
 	resumeWrites   string
 	// cgroups is the cgroup root, which holds a memory.current, a
-	// memory.stat and a cgroup.freeze for each running unit.
+	// memory.stat, a cgroup.freeze and a memory.max for each running unit.
 	cgroups string
 }
 
@@ -314,6 +314,9 @@ func (u *fakeUnits) Start(_ context.Context, name string, argv, properties []str
 		return err
 	}
 	if err = os.WriteFile(filepath.Join(u.cgroup(name), "cgroup.freeze"), []byte("0\n"), 0o644); err != nil {
+		return err
+	}
+	if err = os.WriteFile(filepath.Join(u.cgroup(name), "memory.max"), nil, 0o644); err != nil {
 		return err
 	}
 	u.mu.Lock()
@@ -528,6 +531,8 @@ type fakeHelper struct {
 	bootHangs bool
 	syncErr   error
 	syncs     int
+	// onSync, when set, runs during each Sync.
+	onSync func()
 	// cacheUse and cacheUseErr are what CacheUse answers.
 	cacheUse    guest.CacheUse
 	cacheUseErr error
@@ -681,7 +686,11 @@ func (g *fakeHelper) Sync(context.Context) error {
 	}
 	g.mu.Lock()
 	g.syncs++
+	onSync := g.onSync
 	g.mu.Unlock()
+	if onSync != nil {
+		onSync()
+	}
 	return g.syncErr
 }
 

@@ -130,6 +130,9 @@ func TestIntegrationEnhancedRunGateway(t *testing.T) {
 		t.Fatalf("run.launch status %d", status)
 	}
 	runID := launched.Run.ID
+	// A stream opened while the agent still starts ends once it has, for the
+	// viewer to subscribe again.
+	waitTurns(ctx, t, env.srv, domain.RunID(runID), 1)
 
 	stream := dialWS(t, ctx, web, "/ws/acp/"+runID)
 	defer func() { _ = stream.CloseNow() }()

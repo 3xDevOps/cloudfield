@@ -265,3 +265,22 @@ func TestIdentityOfAnOversizedConfiguration(t *testing.T) {
 		t.Fatalf("Inspect = %+v, %v", got, err)
 	}
 }
+
+// An identity field with a line or paragraph separator is dropped, as one
+// with a control character is; so is a name written with a zero-width
+// non-joiner or joiner, which some scripts use between letters.
+func TestIdentityDropsSeparatorsAndZeroWidthJoiners(t *testing.T) {
+	for _, name := range []string{"Ada\u2028Org", "Ada\u2029Org", "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645", "\u0915\u094d\u200d\u0937"} {
+		l := newTestLogins(t)
+		dir, err := l.Add("mem-ada", "claude", "lgn-one0000000")
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeLoginFile(t, dir, LoginCredentials, subscriptionLogin)
+		writeLoginFile(t, dir, LoginConfig, `{"oauthAccount":{"emailAddress":"ada@example.test","organizationUuid":"org-ada","organizationName":"`+name+`"}}`)
+		got, err := l.Inspect("mem-ada", "claude", "lgn-one0000000")
+		if err != nil || got.OrganizationName != "" || got.Email != "ada@example.test" {
+			t.Fatalf("Inspect with organisation %q = %+v, %v; want the name dropped and the rest kept", name, got, err)
+		}
+	}
+}

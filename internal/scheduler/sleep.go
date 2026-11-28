@@ -186,6 +186,10 @@ func (s *Scheduler) holdAwake(ctx context.Context, run domain.RunID) (release fu
 // the same time: the first runs the wake and the others wait for its result.
 func (s *Scheduler) wake(ctx context.Context, entry *supervised) error {
 	timed := runtime.WithSteps(s.superCtx)
+	// Callers that ask while this wake runs share it and its counter.
+	if ctx.Value(autoWake{}) != nil {
+		timed = context.WithValue(timed, autoWake{}, true)
+	}
 	for {
 		s.mu.Lock()
 		switch {
@@ -194,6 +198,11 @@ func (s *Scheduler) wake(ctx context.Context, entry *supervised) error {
 			return fmt.Errorf("%w: the session ended while it was asleep", ErrNoLiveEnvironment)
 		case entry.sleeping:
 			done := entry.sleepDone
+			entry.wakeWaits = true
+			// A shutdown lets a save finish, so the VM survives it.
+			if entry.abortSleep != nil && s.superCtx.Err() == nil {
+				entry.abortSleep()
+			}
 			s.mu.Unlock()
 			select {
 			case <-done:
@@ -291,7 +300,9 @@ func (s *Scheduler) noteWake(ctx context.Context, run domain.RunID, how woke) {
 // agent again, as Relaunch reopens a closed one. A failure puts the run back
 // to sleep, with nothing half started.
 func (s *Scheduler) wakeLive(ctx context.Context, entry *supervised) (woke, error) {
-	entry.lifecycleMu.Lock()
+	if err := entry.lockLifecycle(ctx); err != nil {
+		return woke{}, err
+	}
 	defer entry.lifecycleMu.Unlock()
 	s.mu.Lock()
 	if s.runs[entry.runID] != entry || entry.asleepSince.IsZero() || entry.finalizing || entry.killRequested || entry.retained || entry.destroyPending {
@@ -311,7 +322,7 @@ func (s *Scheduler) wakeLive(ctx context.Context, entry *supervised) (woke, erro
 		resident = inspectErr == nil && !info.Exited
 	}
 	if !resident {
-		release, err = s.reserveWake(ctx, cid)
+		release, err = s.reserveWake(ctx, entry.runID, cid)
 	}
 	if err == nil {
 		defer release()
@@ -916,7 +927,7 @@ func (s *Scheduler) stopSleeping(ctx context.Context, entry *supervised) error {
 // sleeping run paused.
 func (s *Scheduler) endSleep(entry *supervised, asleep bool) {
 	s.mu.Lock()
-	entry.sleeping = false
+	entry.sleeping, entry.abortSleep, entry.wakeWaits = false, nil, false
 	if asleep {
 		entry.paused = true
 	}

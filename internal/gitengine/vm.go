@@ -148,35 +148,59 @@ func (e *Engine) preparedCheckout(ws domain.WorkspaceID, repo, base string, uid,
 
 // prepareCheckouts builds, in the background, the prepared checkout disk of
 // the base branch's new commit for every owner a session of ws started as,
-// so the next launch does not build it.
+// so the next launch does not build it. A workspace builds for one commit at
+// a time and skips a commit the base has left by the time its turn comes.
 func (e *Engine) prepareCheckouts(ws domain.WorkspaceID, repo, base string) {
 	if e.cfg.VM == nil {
 		return
 	}
+	e.mu.Lock()
+	_, building := e.prepareNext[ws]
+	e.prepareNext[ws] = base
+	e.mu.Unlock()
+	if building {
+		return
+	}
+	e.preparing.Go(func() {
+		for {
+			e.prepareSlots(ws, repo, base)
+			e.mu.Lock()
+			next := e.prepareNext[ws]
+			if next == base {
+				delete(e.prepareNext, ws)
+			}
+			e.mu.Unlock()
+			if next == base {
+				return
+			}
+			base = next
+		}
+	})
+}
+
+func (e *Engine) prepareSlots(ws domain.WorkspaceID, repo, base string) {
 	slots, err := e.cfg.VM.Disks.KeptCheckoutDisks(string(ws))
 	if err != nil {
 		slog.Warn("gitengine: list kept checkout disks", "workspace", ws, "error", err)
 		return
 	}
-	if len(slots) == 0 {
-		return
-	}
-	e.preparing.Go(func() {
-		for _, slot := range slots {
-			if e.pruneCtx.Err() != nil {
-				return
-			}
-			var uid, gid int
-			if _, scanErr := fmt.Sscanf(slot, "%d-%d", &uid, &gid); scanErr != nil {
-				slog.Warn("gitengine: kept checkout disk has no owner", "workspace", ws, "slot", slot, "error", scanErr)
-				continue
-			}
-			key, fill := e.preparedCheckout(ws, repo, base, uid, gid)
-			if keepErr := e.cfg.VM.Disks.KeepCheckoutDisk(e.pruneCtx, string(ws), slot, key, vmCheckoutDiskBytes, fill); keepErr != nil {
-				slog.Warn("gitengine: prepare checkout disk", "workspace", ws, "base", base, "error", keepErr)
-			}
+	for _, slot := range slots {
+		e.mu.Lock()
+		superseded := e.prepareNext[ws] != base
+		e.mu.Unlock()
+		if superseded || e.pruneCtx.Err() != nil {
+			return
 		}
-	})
+		var uid, gid int
+		if _, scanErr := fmt.Sscanf(slot, "%d-%d", &uid, &gid); scanErr != nil {
+			slog.Warn("gitengine: kept checkout disk has no owner", "workspace", ws, "slot", slot, "error", scanErr)
+			continue
+		}
+		key, fill := e.preparedCheckout(ws, repo, base, uid, gid)
+		if keepErr := e.cfg.VM.Disks.KeepCheckoutDisk(e.pruneCtx, string(ws), slot, key, vmCheckoutDiskBytes, fill); keepErr != nil {
+			slog.Warn("gitengine: prepare checkout disk", "workspace", ws, "base", base, "error", keepErr)
+		}
+	}
 }
 
 // fillPreparedCheckout makes the checkout a prepared disk holds: a

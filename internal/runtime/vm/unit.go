@@ -2,6 +2,7 @@ package vm
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -57,7 +58,9 @@ func (SystemdUnits) Stop(ctx context.Context, name string) error {
 func (SystemdUnits) State(ctx context.Context, name string) (unitState, error) {
 	out, err := exec.CommandContext(ctx, "systemctl", "show", "--property=ActiveState,MainPID", name).Output()
 	if err != nil {
-		return unitState{}, fmt.Errorf("vm runtime: systemctl show %s: %w", name, err)
+		// A command killed for its context reports the signal, not the
+		// context.
+		return unitState{}, fmt.Errorf("vm runtime: systemctl show %s: %w", name, cmp.Or(ctx.Err(), err))
 	}
 	var st unitState
 	for line := range strings.SplitSeq(string(out), "\n") {

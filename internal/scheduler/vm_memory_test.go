@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -513,6 +514,30 @@ func TestTheMemoryGuardSavesAWorkingVMWhenNoneIsIdleAndWakesEachOnceItsMemoryFit
 	}
 }
 
+func TestAnInterruptOfAVMSavedWhileItWorkedIsRefusedUntilItWakes(t *testing.T) {
+	t.Parallel()
+	e, mr := newMemoryEnv(t)
+	id := e.runOf(t, e.launchVM(t, mr, acpmock.PromptWait, 3<<30))
+	run := e.waitStoreStatus(t, id, domain.RunRunning)
+	mr.setAvailable(3 << 30)
+	e.guard(t)
+	if e.memorySaved(id) == 0 {
+		t.Fatal("the guard did not save the working VM")
+	}
+	if err := e.interrupt(t, run); !errors.Is(err, ErrInvalidTransition) || !strings.Contains(err.Error(), "cloudfield resume "+string(id)) {
+		t.Fatalf("Interrupt of a VM saved while it worked = %v, want it refused naming cloudfield resume", err)
+	}
+	mr.setAvailable(2*memoryFloor(32<<30) + 3<<30)
+	e.guard(t)
+	if err := e.interrupt(t, run); err != nil {
+		t.Fatalf("Interrupt once the VM woke: %v", err)
+	}
+	waitFor(t, "the woken turn stopped", func() bool {
+		sess := e.sched.acp.session(id)
+		return sess != nil && !sess.State().TurnInFlight
+	})
+}
+
 func TestAMemoryRefusalSavesIdleVMsAndAdmitsAgain(t *testing.T) {
 	t.Parallel()
 	e, mr := newMemoryEnv(t)
@@ -751,7 +776,7 @@ func TestABootToCommitAndAWakeCountEachOthersMemory(t *testing.T) {
 	mr.memMu.Unlock()
 	mr.setAvailable(memoryFloor(32<<30) + 7<<30)
 
-	release, err := e.sched.reserveBoot(t.Context(), booted)
+	release, err := e.sched.reserveBoot(t.Context(), run, booted)
 	if err != nil {
 		t.Fatalf("a boot to commit with room for its saved memory: %v", err)
 	}
@@ -762,7 +787,7 @@ func TestABootToCommitAndAWakeCountEachOthersMemory(t *testing.T) {
 	if err = e.sched.WakeRun(t.Context(), run, ""); err != nil {
 		t.Fatalf("a wake once the boot ended: %v", err)
 	}
-	if _, err = e.sched.reserveBoot(t.Context(), booted); !errors.Is(err, ErrMemoryPressure) {
+	if _, err = e.sched.reserveBoot(t.Context(), run, booted); !errors.Is(err, ErrMemoryPressure) {
 		t.Fatalf("a boot to commit while a woken VM has 6 GiB to load = %v, want the memory refusal", err)
 	}
 }
@@ -921,13 +946,13 @@ func TestAVMSavedWhileItWorkedSurvivesLowDiskAndWakesOnceThereIsRoom(t *testing.
 	}
 
 	var free atomic.Uint64
-	free.Store(5 << 30)
+	free.Store(512 << 20)
 	setFreeBytes(e, &free)
 	e.sched.reclaimDisk(t.Context(), "")
 	mr.setAvailable(2*memoryFloor(32<<30) + 4<<30)
 	e.guard(t)
 	if !mr.isSaved(working) || !e.asleep(run) || e.memorySaved(run) != 3<<30 {
-		t.Fatalf("with the disk at its reserve: saved %v, asleep %v, mark %d; want the saved turn kept and marked",
+		t.Fatalf("with less disk free than a wake needs: saved %v, asleep %v, mark %d; want the saved turn kept and marked",
 			mr.isSaved(working), e.asleep(run), e.memorySaved(run))
 	}
 	free.Store(80 << 30)

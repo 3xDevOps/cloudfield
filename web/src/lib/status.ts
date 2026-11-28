@@ -32,14 +32,17 @@ export type PresentationState = LiveState | Outcome | 'paused' | 'stalled' | 're
 
 export type RunGroup = 'needs-you' | 'working' | 'review' | 'finished'
 
+/** The run's `cause` from the server, or `agent-start` while the open session's agent has not started. */
+export type StateCause = RunStatusCause | 'agent-start'
+
 export interface RunPresentation {
   state: PresentationState
   reason: string
   /** What happens next, or what the viewer can do; absent when nothing is to say. */
   next?: string
   needsYou?: NeedsYouCondition
-  /** What chose the server's state, from the run's `cause`; absent once the run is not live. */
-  cause?: RunStatusCause
+  /** What chose the state; absent once the run is not live. */
+  cause?: StateCause
   /** What Aether verified about the wait the server's state shows. */
   wait?: RunWait
 }
@@ -105,6 +108,7 @@ const stateNext: Partial<Record<PresentationState, string>> = {
 function liveState(run: RunRecord, ctx: StateContext): Omit<RunPresentation, 'needsYou'> {
   if (run.status === 'queued') return { state: 'working', reason: 'Queued' }
   if (run.status === 'provisioning') return { state: 'working', reason: 'Starting' }
+  if (run.status === 'running' && ctx.startingRuns[run.id]) return { state: 'working', reason: 'Starting', next: 'A message you send now is delivered when the agent is ready.', cause: 'agent-start' }
   const state = liveStateOf(run.status as 'running' | 'needs-attention', run.state)
   const waiter = waitingOn(run, ctx)
   if (waiter !== undefined) {
@@ -158,7 +162,7 @@ export function presentRun(run: RunRecord, ctx: StateContext): RunPresentation {
     (shown.state === liveStateOf(run.status as 'running' | 'needs-attention', run.state) || shown.state === 'stalled')
   const own = served && waitingOn(run, ctx) === undefined
   const wait = run.wait && (own || (served && shown.needsYou !== undefined))
-  return { ...shown, ...(own && run.cause && { cause: run.cause }), ...(wait && { wait: run.wait }) }
+  return { ...(own && run.cause && { cause: run.cause }), ...shown, ...(wait && { wait: run.wait }) }
 }
 
 function presentation(run: RunRecord, ctx: StateContext): RunPresentation {
@@ -221,10 +225,11 @@ export function stateWords(
   const label = stateName(shown)
   // A stale wait's reason already says how long nothing happened.
   const ran = since && shown.state === 'waiting-ci' && !stale ? compactAge(since, now) : undefined
-  return { label, detail: [ran, reason].filter(Boolean).join(' · ') || undefined }
+  return { label, detail: [ran, reason !== label && reason].filter(Boolean).join(' · ') || undefined }
 }
 
 export function stateName({ state, cause }: Pick<RunPresentation, 'state' | 'cause'>): string {
+  if (cause === 'agent-start') return 'Starting'
   return state === 'ended' && cause === 'wait-expired' ? 'Stale wait' : stateLabel[state]
 }
 
@@ -246,6 +251,7 @@ const causeWords: Record<string, string> = {
   'tasks-held': 'it holds background tasks',
   human: 'a request waits on a person',
   disconnect: 'the agent exited',
+  'agent-start': 'the session opened before its agent started',
 }
 
 /**

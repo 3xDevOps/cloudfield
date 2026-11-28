@@ -754,3 +754,20 @@ func TestSweepKeepsPinnedBrowserImageRepo(t *testing.T) {
 		}
 	}
 }
+
+// Disk reclaim removes what closed and sleeping sessions keep, so a launch
+// the server tries again by itself measures once and reclaims nothing.
+func TestALaunchTriedAgainUnaskedReclaimsNoDisk(t *testing.T) {
+	e := newTestEnv(t, nil)
+	calls := 0
+	e.sched.cfg.filesystemCapacity = func(string) (disk.Usage, error) {
+		calls++
+		return disk.Usage{TotalBytes: 100 << 30, FreeBytes: 1}, nil
+	}
+	if _, err := e.sched.reserveLaunch(t.Context(), "", true); !errors.Is(err, ErrDiskFull) {
+		t.Fatalf("a retry under disk pressure = %v, want the refusal", err)
+	}
+	if calls != 1 {
+		t.Fatalf("a retry measured the disk %d times, want once and no reclaim pass", calls)
+	}
+}

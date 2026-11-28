@@ -52,7 +52,7 @@ func (s *Scheduler) closeIdleRuns(ctx context.Context, now time.Time) {
 			continue
 		}
 		if wake {
-			err := s.WakeRun(ctx, e.runID, "")
+			err := s.WakeRun(context.WithValue(ctx, autoWake{}, true), e.runID, "")
 			if errors.Is(err, ErrMemoryPressure) || errors.Is(err, ErrDiskFull) || errors.Is(err, ErrCapacityUnknown) {
 				slog.Info("scheduler: admission refused to wake a session idle for 7 days to close it; trying again at the next sweep", "run", e.runID, "error", err)
 				continue

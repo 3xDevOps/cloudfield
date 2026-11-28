@@ -127,6 +127,11 @@ func SignEnrollment(signer ssh.Signer, origin string, nonce []byte) ([]byte, err
 	return ssh.Marshal(sig), nil
 }
 
+// ErrEnrollmentSignature is a hello whose signature does not verify for
+// the origin the edge expects; a relay's refusal names it in its close
+// reason.
+var ErrEnrollmentSignature = errors.New("edgeproto: enrollment signature")
+
 // VerifyEnrollment checks a hello's signature against the challenge the
 // edge sent and returns the server id derived from hostKey.
 func VerifyEnrollment(hostKey ssh.PublicKey, origin string, nonce, signature []byte) (string, error) {
@@ -146,7 +151,7 @@ func VerifyEnrollment(hostKey ssh.PublicKey, origin string, nonce, signature []b
 		return "", errors.New("edgeproto: enrollment signature uses ssh-rsa (SHA-1), want rsa-sha2-256")
 	}
 	if err := hostKey.Verify(msg, &sig); err != nil {
-		return "", fmt.Errorf("edgeproto: enrollment signature: %w", err)
+		return "", fmt.Errorf("%w: %w", ErrEnrollmentSignature, err)
 	}
 	return serverID, nil
 }

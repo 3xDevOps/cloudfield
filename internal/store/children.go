@@ -77,7 +77,7 @@ const terminalStatuses = `'completed', 'merged', 'abandoned', 'failed', 'interru
 const childCols = `rc.run_id, rc.parent_run_id, rc.root_run_id, rc.tree_key, rc.workspace_id,
 	rc.owner_member_id, rc.account_member_id, rc.harness, rc.mode, rc.model, rc.purpose, rc.task,
 	rc.base_commit, rc.base_branch, rc.fallback_disabled, rc.fallback_order, rc.idempotency_key, rc.request_hash, rc.state,
-	rc.detached, rc.error, rc.end_notified, rc.created_at`
+	rc.detached, rc.error, rc.end_notified, rc.created_at, rc.account_login`
 
 // childReported holds for a reservation whose run's latest word is a
 // finalized success or failure report, before its run parks on it, and that
@@ -108,7 +108,7 @@ func scanChild(row interface{ Scan(...any) error }) (*domain.ChildReservation, e
 	if err := row.Scan(&c.RunID, &c.ParentRunID, &c.RootRunID, &c.TreeKey, &c.WorkspaceID,
 		&c.OwnerID, &c.AccountID, &c.Harness, &c.Mode, &c.Model, &c.Purpose, &c.Task,
 		&c.BaseCommit, &c.BaseBranch, &c.Fallback.Disabled, &order, &c.IdempotencyKey, &c.RequestHash, &c.State,
-		&c.Detached, &c.Error, &c.EndNotified, &createdAt); err != nil {
+		&c.Detached, &c.Error, &c.EndNotified, &createdAt, &c.AccountLogin); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal([]byte(order), &c.Fallback.Order); err != nil {
@@ -149,11 +149,11 @@ func (d *DB) ReserveChild(ctx context.Context, c *domain.ChildReservation) (*dom
 	if _, err = tx.ExecContext(ctx,
 		`INSERT INTO run_children (run_id, parent_run_id, root_run_id, tree_key, workspace_id,
 			owner_member_id, account_member_id, harness, mode, model, purpose, task, base_commit,
-			base_branch, fallback_disabled, fallback_order, idempotency_key, request_hash, state, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			base_branch, fallback_disabled, fallback_order, idempotency_key, request_hash, state, created_at, account_login)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		c.RunID, c.ParentRunID, c.RootRunID, c.TreeKey, c.WorkspaceID, c.OwnerID, c.AccountID,
 		c.Harness, c.Mode, c.Model, c.Purpose, c.Task, c.BaseCommit, c.BaseBranch,
-		c.Fallback.Disabled, order, c.IdempotencyKey, c.RequestHash, c.State, createdAt); err != nil {
+		c.Fallback.Disabled, order, c.IdempotencyKey, c.RequestHash, c.State, createdAt, c.AccountLogin); err != nil {
 		return nil, false, fmt.Errorf("store: reserve subsession: %w", mapConstraint(err, ErrNotFound))
 	}
 	if err = tx.Commit(); err != nil {

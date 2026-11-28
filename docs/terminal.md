@@ -68,7 +68,9 @@ the view switch (`[` and `]` cycle the views). A Standard session opens on it. T
 it shows what the agent is doing with **Open terminal**.
 
 An [Enhanced session](enhanced-sessions.md) has no agent terminal. Its Terminal view
-says **No agent terminal** and offers run shells.
+says **No agent terminal** and offers run shells. In your own terminal,
+`cloudfield logs <session-id> --follow` prints its conversation as it is
+written ([Scrollback and history](#scrollback-and-history)).
 
 ```mermaid
 flowchart LR
@@ -155,6 +157,22 @@ eight files per message.
 - If the agent has turned on bracketed paste, the message arrives as one paste
   and Enter follows 200 ms later, so a multi-line message is sent whole and
   once. Otherwise it is typed as written, then Enter.
+- While the agent reports an open question or permission request in its
+  terminal (**Question: answer in the terminal** or **Permission: answer in
+  the terminal** under **Needs you**), a message is **Not sent**: typed
+  there, it would become the answer. The row, the composer,
+  `cloudfield message` and the Slack bot give the reason, `agent prompt was
+  not sent: the agent is waiting for an answer in its terminal; answer it
+  there, then send the message again`. A message refused as you send it stays
+  in the composer as your draft. One that waited for the controller is refused
+  when it is approved or comes due, and its text stays only in its row. If
+  Claude Code's report of an answer is lost, its terminal shows no question
+  and messages stay refused until its main agent finishes a turn: type the
+  message into the terminal to start one. A turn you interrupt, or one that
+  ends as `working in background`, does not end the request.
+  A prompt the agent does not report still gets the message typed into it:
+  Claude Code's permission prompts, and every prompt of an agent without
+  [status reporting](harnesses.md#status-reporting).
 - Standard Codex takes the message through its app-server instead, as a new
   turn when idle or a steer added to the running turn
   ([Codex](harnesses.md#codex)). **Sent** then means Codex accepted it.
@@ -162,7 +180,7 @@ eight files per message.
   message.
 - `cloudfield message <session-id> "<text>"` (or `-` for stdin) prints the receipt:
   `delivered`, `queued for the member in control` with when it is delivered,
-  or the denial reason. `--attach <path>` uploads a file from your computer and
+  or the reason it was denied or not sent. `--attach <path>` uploads a file from your computer and
   sends it with the message. Repeat it for up to eight files, images up to
   8 MiB and other files up to 64 MiB; the text is then optional. A Standard
   agent gets each file as a path in the container, listed under the text.
@@ -431,9 +449,36 @@ layout, so some lines can appear on both sides of the boundary.
 The server keeps a session's terminal recording until you delete the session or
 terminal. Closing the container, reclaiming the checkout and archiving do not
 remove it. If earlier output has expired, history is marked truncated and
-cannot be recovered. `cloudfield logs <session-id> [--limit N]` prints the recorded
-terminal lines as plain text, and an Enhanced session's messages and tool calls,
-one line each. **Export session** in a session's **More** menu downloads
+cannot be recovered.
+
+`cloudfield logs <session-id> [--limit N]` prints the recorded terminal lines as
+plain text, and an Enhanced session's messages, thoughts, plans, tool calls,
+requests and notices, one line each. A tool call, plan or request is one line
+with its newest state:
+
+```text
+user: fix the flaky login test
+thought: The test waits on a fixed sleep.
+assistant: I will wait for the server instead of sleeping.
+plan: read the test (completed); replace the sleep (in_progress)
+request answered: Allow go test?
+tool completed: go test ./login/... (exit 0)
+notice error: Turn interrupted: The agent connection ended before the turn finished.
+```
+
+`cloudfield logs <session-id> --follow` prints the same lines, then keeps
+printing an Enhanced session's conversation as it is written: a message fills
+its line as it arrives, and a tool call, plan or request prints again each
+time its state changes. It only reads. It prints `[conversation reset]` when
+the agent's conversation starts over, and `[conversation skipped]` where it
+fell too far behind to print every line;
+`cloudfield logs <session-id> --limit N` with a large enough `N` prints the
+lines it left out. It exits when the session ends.
+`cloudfield sessions <session-id>` shows how to answer a pending request. A
+Standard session has no conversation to follow, so `--follow` is refused
+there; `cloudfield attach <session-id> --read-only` watches its terminal.
+
+**Export session** in a session's **More** menu downloads
 `<session-id>.md` for a live, finished or failed session: a header (title,
 session id, workspace, branch, agent, status and reason, pull requests, export
 time), then a Standard session's recorded terminal lines or an Enhanced
