@@ -288,7 +288,11 @@ func TestAHungWakeHoldsUpNeitherTheGuardNorAShutdown(t *testing.T) {
 		defer close(guarded)
 		e.sched.watchVMMemory(ctx)
 	}()
-	waitFor(t, "the guard waking the saved VM", func() bool { return e.sched.Sleep(run).Waking })
+	waitFor(t, "the guard's wake of the saved VM reaching its restore", func() bool {
+		mr.saveMu.Lock()
+		defer mr.saveMu.Unlock()
+		return mr.restores != 0 && e.sched.Sleep(run).Waking
+	})
 	mr.setAvailable(3 << 30)
 	waitFor(t, "the guard saving the other VM while the wake hangs", func() bool { return mr.isSaved(other) })
 
