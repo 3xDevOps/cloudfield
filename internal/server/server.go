@@ -942,15 +942,21 @@ func (s *Server) offerRoom(ctx context.Context) {
 		slog.Warn("server: subscribe to session status; waiting launches are tried on the clock only", "error", err)
 		return
 	}
-	for e := range sub.Events() {
-		// One ending, asleep or gone can give room back, and one that
-		// has started gives back what its start had claimed.
-		if status, ok := e.Payload.(events.RunStatusPayload); ok && !status.To.Terminal() && status.To != domain.RunRunning {
-			continue
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case e, ok := <-sub.Events():
+			if !ok {
+				slog.Warn("server: the session status subscription ended; waiting launches are tried on the clock only")
+				return
+			}
+			// One ending, asleep or gone can give room back, and one that
+			// has started gives back what its start had claimed.
+			if status, isStatus := e.Payload.(events.RunStatusPayload); isStatus && !status.To.Terminal() && status.To != domain.RunRunning {
+				continue
+			}
+			s.ssh.RoomAppeared()
 		}
-		s.ssh.RoomAppeared()
-	}
-	if ctx.Err() == nil {
-		slog.Warn("server: the session status subscription ended; waiting launches are tried on the clock only")
 	}
 }
