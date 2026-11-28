@@ -87,7 +87,17 @@ func (s *Scheduler) claimSpare(ctx context.Context, launch *domain.Run, ws *doma
 	}
 	s.mu.Unlock()
 	if err == nil {
-		s.updateHarness(run, plan, profile)
+		// updateHarness writes the member's cache records, under their
+		// cache lock. It is never waited for: an update that is due and
+		// skipped here starts with the member's next launch.
+		unlock, locked := func() {}, true
+		if s.cfg.Homes != nil {
+			unlock, locked = s.cfg.Homes.TryLockCaches(run.HomeMember())
+		}
+		if locked {
+			s.updateHarness(run, plan, profile)
+			unlock()
+		}
 		err = s.acp.claim(ctx, entry, run, profile, session)
 	}
 	if err != nil {
