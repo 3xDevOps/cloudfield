@@ -86,7 +86,7 @@ function useCapacity(client: CapacityClient) {
     setAsked(true)
     setReads((n) => n + 1)
   }, [])
-  return { result, readAt, error, reading: asked, refresh, live: connection === 'live' }
+  return { result, readAt, error, reading: asked, refresh, live: connection === 'live' || connection === 'connecting' }
 }
 
 export function MachinesSection({ client = api }: { client?: CapacityClient }) {
@@ -116,7 +116,7 @@ function Machine({ result: r, readAt, failed, reading, refresh, live }: { result
         <SettingRow
           label="Can a session launch now?"
           help={live
-            ? <>Read <RelativeTime at={readAt} />, and again every {readEveryMs / 1000} seconds while this page is open. The lines below are the least a launch needs: starts under way need more, and the server can free room for one.</>
+            ? <>Read <RelativeTime at={readAt} />, and again every {readEveryMs / 1000} seconds while this page is open, less often after a read fails. The lines below are the least a launch needs: starts under way need more, and the server can free room for one.</>
             : <>Last read <RelativeTime at={readAt} />. Not connected to the server, so this is not read again until it is.</>}
           control={<Button size="sm" variant="secondary" disabled={reading || !live} onClick={refresh}><RefreshCw />Refresh</Button>}
         >
@@ -352,8 +352,8 @@ function idleShare(counts: ServerCapacityCount[]): string {
   const refusals = counts.filter(memoryRefusal)
   const used = refusals.reduce((sum, c) => sum + (c.used_bytes ?? 0), 0)
   if (used === 0) return '–'
-  const idle = refusals.reduce((sum, c) => sum + (c.idle_hour_bytes ?? 0), 0)
-  // A refusal counted while memory could not be read adds idle bytes and no used ones: no share can be given.
+  // A counter whose refusals were counted while memory could not be read has idle bytes and no used ones: it is left out.
+  const idle = refusals.filter((c) => (c.used_bytes ?? 0) > 0).reduce((sum, c) => sum + (c.idle_hour_bytes ?? 0), 0)
   return idle > used ? '–' : `${Math.round((100 * idle) / used)}%`
 }
 

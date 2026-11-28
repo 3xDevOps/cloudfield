@@ -112,7 +112,7 @@ describe('Machines', () => {
     expect(screen.getByText('Memory and disk or the runtime could not be measured.')).toBeDefined()
   })
 
-  test('a stall the server could not read refuses, and one it does not measure is not claimed as checked', async () => {
+  test('a stall that could not be read is not known, and one the server does not measure is not claimed as checked', async () => {
     await show(full({ memory_available_bytes: 12 * gib, server_stall: undefined, stall_error: 'read memory.pressure: input/output error' }))
     expect(screen.getByText('Not known')).toBeDefined()
     expect(screen.getByText(/A memory stall could not be read\. If it is the server\u2019s own, every launch is refused/)).toBeDefined()

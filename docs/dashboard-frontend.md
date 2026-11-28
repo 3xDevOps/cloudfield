@@ -7461,7 +7461,8 @@ Categories:
   (`machines.tsx`): one section per machine, today the one the server runs
   on, with figures in GiB as `cloudfield-server status` prints them.
   - **Can a session launch now?** says when the figures were read and
-    whether a launch would start or be refused, and why: what could not be
+    whether a launch would start or be refused, or `Not known` when a
+    memory stall could not be read, and why: what could not be
     measured, memory or a disk under its launch line (what the server keeps
     free plus the least a launch needs), or the server's memory stall at
     its limit.
@@ -7481,7 +7482,8 @@ Categories:
   - **Last refusals** gives the last launch and wake refused in 14 days:
     when, in local time with its zone; the cause in words; `A wake the
     server tried by itself` for `wake-auto`; the server's text verbatim
-    with a copy button; and, for a super admin, the session as a link.
+    with a copy button; and, for a super admin, the session: a link when
+    the dashboard holds it, its id otherwise.
   - **Last 24 hours and 14 days**, in whole UTC hours: launches refused (a
     waiting subsession's retries included), subsessions that waited for
     room, the mean and the longest wait that ended in a start, the share of
@@ -7491,7 +7493,9 @@ Categories:
     raw counters. Nothing counted reads `Nothing counted in 14 days`.
   - The page reads `server.capacity` again every 5 seconds while it is
     open, the tab is visible and the connection is live, and has
-    **Refresh**. A failed read shows the error verbatim with **Try again**
+    **Refresh**. After a failed read it asks less often, up to once a
+    minute, and not again by itself after `method not found`. Not
+    connected, it says so and **Refresh** is disabled. A failed read shows the error verbatim with **Try again**
     and keeps the last figures, saying they are from the last good read.
 
   [failure-handling.md](failure-handling.md#what-the-server-did-for-want-of-memory-or-disk)
