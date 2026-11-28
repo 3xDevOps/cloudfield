@@ -43,12 +43,18 @@ func TestAMemoryRefusalIsCountedWithWhatIdleSessionsHeld(t *testing.T) {
 	t.Parallel()
 	e, mr := newMemoryEnv(t)
 	old := e.launchVM(t, mr, "say pong", 2<<30)
-	fresh := e.launchVM(t, mr, "say pong", 1<<30)
+	e.launchVM(t, mr, "say pong", 1<<30)
 	e.launchVM(t, mr, acpmock.PromptWait, 4<<30)
-	e.pauseIdle(t, old, fresh)
 	oldRun := e.runOf(t, old)
 	e.sched.mu.Lock()
-	e.sched.runs[oldRun].asleepSince = time.Now().UTC().Add(-2 * idleHour)
+	asleep := e.sched.runs[oldRun]
+	e.sched.mu.Unlock()
+	// Recorded asleep and still running, as a restart takes a VM up.
+	if err := e.sched.markAsleep(asleep); err != nil {
+		t.Fatal(err)
+	}
+	e.sched.mu.Lock()
+	asleep.asleepSince = time.Now().UTC().Add(-2 * idleHour)
 	e.sched.mu.Unlock()
 
 	// Too little for saving every idle VM to admit a start, so none is saved.
@@ -135,15 +141,20 @@ func TestSessionVMsAreCountedByWhatTheyHold(t *testing.T) {
 		got, at, err := e.db.VMCounts(t.Context())
 		return err == nil && !at.IsZero() && got.Awake == 4
 	})
-	e.pauseIdle(t, paused)
-	e.pauseIdle(t, saved)
 	stopped := e.launchVM(t, mr, "say pong", 1<<30)
-	e.pauseIdle(t, stopped)
-	savedRun, stoppedRun := e.runOf(t, saved), e.runOf(t, stopped)
+	pausedRun, savedRun, stoppedRun := e.runOf(t, paused), e.runOf(t, saved), e.runOf(t, stopped)
 	e.sched.mu.Lock()
-	e.sched.runs[savedRun].asleepResident, e.sched.runs[savedRun].asleepSaved = false, true
-	// Asleep with its saved memory reclaimed: nothing is kept.
-	e.sched.runs[stoppedRun].asleepResident, e.sched.runs[stoppedRun].asleepSaved = false, false
+	asleep := []*supervised{e.sched.runs[pausedRun], e.sched.runs[savedRun], e.sched.runs[stoppedRun]}
+	e.sched.mu.Unlock()
+	for _, entry := range asleep {
+		if err := e.sched.markAsleep(entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.sched.mu.Lock()
+	// As a restart leaves a VM it did not save, as one it saved, and as
+	// one whose saved memory was reclaimed: nothing is kept.
+	asleep[0].asleepRunning, asleep[1].asleepSaved = true, true
 	e.sched.mu.Unlock()
 	floor := memoryFloor(32 << 30)
 	e.brake(fr, 4*floor)
@@ -151,15 +162,16 @@ func TestSessionVMsAreCountedByWhatTheyHold(t *testing.T) {
 	if got, want := e.sched.VMs(), (domain.VMCounts{Frozen: 2, Paused: 1, Saved: 1, Stopped: 1}); got != want {
 		t.Fatalf("VMs = %+v, want %+v", got, want)
 	}
-	// A closed session's VM still in memory is counted as that.
+	// A closed session's VM still running is counted as that.
 	e.sched.mu.Lock()
-	e.sched.runs[stoppedRun].retained, e.sched.runs[stoppedRun].asleepResident = true, true
+	since := asleep[2].asleepSince
+	asleep[2].retained, asleep[2].asleepSince = true, time.Time{}
 	e.sched.mu.Unlock()
 	if got, want := e.sched.VMs(), (domain.VMCounts{Frozen: 2, Paused: 1, Saved: 1, Closed: 1}); got != want {
 		t.Fatalf("VMs with a closed session's VM in memory = %+v, want %+v", got, want)
 	}
 	e.sched.mu.Lock()
-	e.sched.runs[stoppedRun].retained, e.sched.runs[stoppedRun].asleepResident = false, false
+	asleep[2].retained, asleep[2].asleepSince = false, since
 	e.sched.mu.Unlock()
 	m := e.sched.Machine(t.Context())
 	if m.MemoryAvailableBytes != floor-1 || m.MemoryFloorBytes != floor || m.MemoryTotalBytes != 32<<30 || m.StartMemoryBytes != startupMemoryBytes {

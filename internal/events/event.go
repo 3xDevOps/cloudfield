@@ -282,15 +282,13 @@ func (RunEffortPayload) EventType() Type { return TypeRunEffort }
 func init() { registerPayload[RunEffortPayload](TypeRunEffort) }
 
 // RunSleepPayload reports a run's sleep state. A nil AsleepSince means the
-// run is awake; AsleepSaved means its VM sleeps with every process,
-// AsleepInMemory that it is paused in the host's memory rather than saved
-// to disk, and WakeError is the last wake's failure while it stays asleep.
+// run is awake; AsleepSaved means its VM was saved with every process, and
+// WakeError is the last wake's failure while it stays asleep.
 type RunSleepPayload struct {
-	AsleepSince    *time.Time `json:"asleep_since,omitempty"`
-	AsleepSaved    bool       `json:"asleep_saved,omitempty"`
-	AsleepInMemory bool       `json:"asleep_in_memory,omitempty"`
-	Waking         bool       `json:"waking,omitempty"`
-	WakeError      string     `json:"wake_error,omitempty"`
+	AsleepSince *time.Time `json:"asleep_since,omitempty"`
+	AsleepSaved bool       `json:"asleep_saved,omitempty"`
+	Waking      bool       `json:"waking,omitempty"`
+	WakeError   string     `json:"wake_error,omitempty"`
 }
 
 func (RunSleepPayload) EventType() Type { return TypeRunSleep }

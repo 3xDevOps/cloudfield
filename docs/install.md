@@ -594,7 +594,7 @@ after the key and value of `config set`.
 | `min-free-disk` | `0` (5% of the filesystem, 5 to 20 GiB) | Free-space reserve below which new sessions are refused, and which a stopped session VM's cache write-back must leave free with 4 GiB more. Negative turns both checks off. |
 | `checkout-ttl` | `72h` | How long a finished session's checkout is kept after the session ends. It also stays while the session's container is kept. Negative keeps it forever. |
 | `run-container-ttl` | `720h`; `168h` for a container that stays frozen in memory | How long a closed session's container or VM disks are kept so the session can be relaunched ([Relaunching a closed session](failure-handling.md#relaunching-a-closed-session)). A relaunched session's clock restarts at its next close. |
-| `run-sleep-after` | `30m`; `5m` for session VMs | How long an idle Enhanced Claude Code session keeps its container running before Cloudfield stops it until its next use, and how long an idle session VM runs before Cloudfield pauses it in memory ([Idle sleep](failure-handling.md#idle-sleep)). A value you set applies to both. `0` keeps every session awake. |
+| `run-sleep-after` | `30m`; `5m` for session VMs | How long an idle Enhanced Claude Code session keeps its container running before Cloudfield stops it until its next use, and how long an idle session VM runs before Cloudfield saves it to disk ([Idle sleep](failure-handling.md#idle-sleep)). A value you set applies to both. `0` keeps every session awake. |
 | `browser-image` | `ghcr.io/3xdevops/aether-browser:<release>` | The image a session's **Browser** tab starts from. Set it and updates stop moving it. |
 | `conflict-coordination` | on | Let overlapping sessions message each other ([coordination.md](coordination.md)). |
 
@@ -843,6 +843,55 @@ when the one there came from another release. That covers an update from a
 client or the dashboard, and a rollback. If it cannot during an update's first
 start, the update rolls back with the old Cloud Hypervisor still in place; on
 any other start the server logs the error and keeps serving. `AETHER_NO_UPDATE_CHECK=1` turns that check off.
+
+Releases from `v0.10.0-nightly.6` on left an idle session VM paused, holding
+its memory, where this release saves it to disk
+([Sessions in VMs](failure-handling.md#sessions-in-vms)). The first start
+after an update from one of them saves each VM still paused that way whose
+memory fits on the data disk, while it reconnects sessions, 4 at a time. A
+VM with a checkout disk first writes its dirty data and waits up to 40
+seconds for the host to get its page cache back, so that update's wait at
+the end is longer. A wake then restores the VM from disk and reads all of
+its saved memory back first ([vm-guest.md](vm-guest.md#save-and-restore)),
+where a paused VM only resumed.
+
+Those saves are part of the first start, which has 5 minutes from
+migrating the database to finish. An update that cannot finish them in
+that time rolls back, and `cloudfield server update --status` gives
+`<version> did not finish its boot within 5m0s of migrating the database`.
+
+Once this release has saved such a VM, a downgrade to `v0.10.0-nightly.5`
+or earlier wakes it with its processes still frozen.
+
+A VM fits when the data disk keeps its reserve, 4 GiB and the memory of
+the saves still writing free after it, the rule the memory guard saves by
+([Recover from memory pressure](failure-handling.md#recover-from-memory-pressure)).
+One that does not fit stays paused and holds its memory, as does one whose
+memory the server cannot read or whose data disk it cannot measure. The
+server log names one that does not fit twice:
+
+```
+scheduler: memory guard: no room on disk to save a session VM run=<id> memory=<bytes> writing=<bytes> free=<bytes>
+scheduler: save a sleeping session's VM; it stays running run=<id> error="its memory is unknown or does not fit on the data disk; the memory guard saves it once it fits and the host is short of memory, and a wake resumes it"
+```
+
+A VM whose memory is unknown gets the second line only. When the data disk
+cannot be measured, the first line is `scheduler: memory guard: measure the
+data filesystem error=<error>`, which does not name the session.
+
+`sudo cloudfield-server status` counts it under `asleep in memory`
+([failure-handling.md](failure-handling.md#what-the-server-did-for-want-of-memory-or-disk)).
+The dashboard and `cloudfield sessions <session-id>` word it as saved to
+disk with every process, as they do a saved VM, until the memory guard
+saves it. A wake resumes it without a restore. The memory guard saves it
+once the host is short of memory and the disk has room
+([Recover from disk pressure](failure-handling.md#recover-from-disk-pressure)).
+
+The
+[capacity counters](failure-handling.md#what-the-server-did-for-want-of-memory-or-disk)
+no longer write rows with the `op` `paused`; stored ones stay for their 90
+days. Timeline rows of past sleeps that only paused a VM now read
+`Fell asleep: saved to disk with every process`.
 
 `cloudfield server update --when idle` waits until no session is working, no terminal
 is attached and no SSH connection into a session is open; `--cancel` clears that

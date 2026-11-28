@@ -155,16 +155,16 @@ func (s *Scheduler) VMs() domain.VMCounts {
 		switch {
 		case e.retained:
 			// A closed session's VM counts while it can still hold memory:
-			// running until the guard stops it, or asleep in memory. One
-			// whose removal is owed may be gone already.
-			if !e.destroyPending && (e.asleepSince.IsZero() || e.asleepResident) {
+			// running until the guard stops it. One whose removal is owed
+			// may be gone already.
+			if !e.destroyPending && e.asleepSince.IsZero() {
 				c.Closed++
 			}
 		case e.asleepSince.IsZero() && frozen[e.containerID]:
 			c.Frozen++
 		case e.asleepSince.IsZero():
 			c.Awake++
-		case e.asleepResident:
+		case e.asleepRunning:
 			c.Paused++
 		case e.asleepSaved:
 			c.Saved++

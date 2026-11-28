@@ -41,13 +41,12 @@ const (
 var ErrClosedAsleep = fmt.Errorf("%w: the session is closed and its container is asleep; reopen it", ErrInvalidTransition)
 
 // SleepState is a live run's idle sleep: when its container was stopped or
-// its VM paused or saved, whether the VM keeps every process, whether it is
-// only paused in the host's memory, whether a wake is starting it, and the
-// last wake's failure.
+// its VM saved, whether the VM keeps every process, saved or still running
+// as a server restart left it, whether a wake is starting it, and the last
+// wake's failure.
 type SleepState struct {
 	AsleepSince *time.Time
 	Saved       bool
-	InMemory    bool
 	Waking      bool
 	WakeError   string
 }
@@ -62,7 +61,7 @@ func (s *Scheduler) Sleep(run domain.RunID) SleepState {
 		return SleepState{}
 	}
 	since := entry.asleepSince
-	state := SleepState{AsleepSince: &since, Saved: entry.asleepSaved || entry.asleepResident, InMemory: entry.asleepResident, Waking: entry.waking != nil}
+	state := SleepState{AsleepSince: &since, Saved: entry.asleepSaved || entry.asleepRunning, Waking: entry.waking != nil}
 	if entry.wakeErr != nil {
 		state.WakeError = entry.wakeErr.Error()
 	}
@@ -315,20 +314,10 @@ func (s *Scheduler) wakeLive(ctx context.Context, entry *supervised) (woke, erro
 		return woke{}, err
 	}
 	s.mu.Lock()
-	resident := entry.asleepResident
 	entry.admitting = true
 	s.mu.Unlock()
 
-	// A VM paused in memory holds what it wakes with, unless it stopped
-	// meanwhile: that one starts from its disks and must be admitted.
-	release, err := func() {}, error(nil)
-	if resident {
-		info, inspectErr := s.cfg.Runtime.Inspect(ctx, cid)
-		resident = inspectErr == nil && !info.Exited
-	}
-	if !resident {
-		release, err = s.reserveWake(ctx, entry.runID, cid)
-	}
+	release, err := s.reserveWake(ctx, entry.runID, cid)
 	if err == nil {
 		defer release()
 		defer s.needGuest(cid)()
@@ -451,7 +440,7 @@ func (s *Scheduler) startAsleep(ctx context.Context, entry *supervised) (woke, e
 	if err := s.cfg.Runtime.Start(ctx, cid); err != nil {
 		return woke{}, err
 	}
-	s.superviseWoken(entry, false)
+	s.superviseWoken(entry)
 	return how, nil
 }
 
@@ -484,7 +473,7 @@ func (s *Scheduler) publishSleep(entry *supervised) {
 	s.publish(context.Background(), events.Event{
 		WorkspaceID: entry.workspaceID,
 		RunID:       entry.runID,
-		Payload:     events.RunSleepPayload{AsleepSince: state.AsleepSince, AsleepSaved: state.Saved, AsleepInMemory: state.InMemory, Waking: state.Waking, WakeError: state.WakeError},
+		Payload:     events.RunSleepPayload{AsleepSince: state.AsleepSince, AsleepSaved: state.Saved, Waking: state.Waking, WakeError: state.WakeError},
 	})
 }
 
@@ -600,7 +589,6 @@ func (s *Scheduler) sessionFacts(run domain.RunID, enhanced, saving bool, f idle
 // every closed one retained that long, each in its own goroutine: Enhanced
 // runs in containers, and Standard and Enhanced runs in session VMs.
 func (s *Scheduler) sleepIdle(ctx context.Context) {
-	s.saveLongPaused(ctx)
 	if s.cfg.RunSleepAfter <= 0 && s.cfg.VMSleepAfter <= 0 {
 		return
 	}
@@ -810,12 +798,7 @@ func (s *Scheduler) sleepLive(ctx context.Context, entry *supervised) error {
 		return err
 	}
 	if saving {
-		// The guard could not take back the memory of a paused VM that does
-		// not fit on the data disk, so that one is saved now, and disk
-		// reclaim makes its room.
-		memory := s.vmMemoryUse(ctx)[cid]
-		park := memory == 0 || s.saveFits(memoryCandidate{e: entry, memory: memory}, 0, false)
-		return s.saveLive(ctx, entry, saver, park)
+		return s.saveLive(ctx, entry, saver)
 	}
 	undo := func(cause error) error {
 		undoCtx := context.WithoutCancel(ctx)
@@ -906,7 +889,7 @@ func (s *Scheduler) markAsleep(entry *supervised) error {
 	defer s.mu.Unlock()
 	entry.asleepSince = time.Now().UTC()
 	entry.wakeErr = nil
-	entry.asleepSaved, entry.asleepResident = false, false
+	entry.asleepSaved = false
 	entry.memorySaved = 0
 	if err := s.writeSidecar(entry.sidecar()); err != nil {
 		entry.asleepSince = time.Time{}
@@ -968,93 +951,6 @@ func (s *Scheduler) endSleep(entry *supervised, asleep bool) {
 	s.startSupervision(entry)
 }
 
-// recoverAsleep adopts an open run whose sidecar says it is asleep, and
-// reports false when its container is gone, which the caller handles as
-// for any run.
-func (s *Scheduler) recoverAsleep(ctx context.Context, r *domain.Run, sc sidecar) bool {
-	info, err := s.cfg.Runtime.Inspect(ctx, runtime.ID(sc.ContainerID))
-	if errors.Is(err, runtime.ErrNotFound) {
-		return false
-	}
-	// A VM that stopped while paused in memory, as with its host, sleeps
-	// on its disks.
-	if err != nil || info.Exited {
-		sc.AsleepResident = false
-	}
-	// Installed without waiting on or attaching to the container.
-	var entry *supervised
-	s.mu.Lock()
-	if s.runs[r.ID] == nil && s.pending[r.ID] == nil {
-		entry = s.entryFromSidecar(r, sc)
-		entry.paused = true
-		s.runs[r.ID] = entry
-		s.syncRunUserReservationsLocked()
-	}
-	s.mu.Unlock()
-	// Started by hand while the server was down, or a VM whose save the
-	// restart interrupted: this process holds none of its streams. A VM the
-	// memory guard marked to wake, one it was saving or the brake left
-	// frozen, is the guard's to save frozen or wake: a save here would let
-	// it run first. One the sleep sweep paused in memory stays there.
-	if entry != nil && err == nil && !info.Exited && sc.MemorySaved == 0 && !sc.AsleepResident {
-		s.stopRecoveredAsleep(ctx, entry)
-	}
-	return true
-}
-
-// stopRecoveredAsleep stops the running container of a run recovery adopted
-// asleep, or saves an open session's VM, as it stands if a server left it
-// frozen: the brake thaws a VM whose lifecycle lock is held. A wake or
-// Relaunch that won the lifecycle lock first and started the container on
-// purpose keeps it running.
-func (s *Scheduler) stopRecoveredAsleep(ctx context.Context, entry *supervised) {
-	s.mu.Lock()
-	cid := entry.containerID
-	s.mu.Unlock()
-	frozen := s.vmFrozen(cid)
-	entry.lifecycleMu.Lock()
-	defer entry.lifecycleMu.Unlock()
-	s.mu.Lock()
-	asleep, closed := s.runs[entry.runID] == entry && !entry.asleepSince.IsZero(), entry.retained
-	s.mu.Unlock()
-	if !asleep {
-		return
-	}
-	if frozen && !closed {
-		if err := s.saveAsleepRunning(ctx, entry); err != nil {
-			slog.Warn("scheduler: save a sleeping session's VM", "run", entry.runID, "error", err)
-		}
-		return
-	}
-	if saver, ok := s.entrySaver(entry); ok && !closed {
-		if err := s.saveRecoveredAsleep(ctx, entry, saver); err != nil {
-			slog.Warn("scheduler: save a sleeping session's VM", "run", entry.runID, "error", err)
-		}
-		return
-	}
-	if err := s.stopLeftoverAsleep(ctx, entry); err != nil {
-		slog.Warn("scheduler: stop a sleeping session's container", "run", entry.runID, "error", err)
-	}
-}
-
-// stopLeftoverAsleep finishes a sleep a crash interrupted: it removes the
-// browser companion and stops the container. Caller holds
-// entry.lifecycleMu.
-func (s *Scheduler) stopLeftoverAsleep(ctx context.Context, entry *supervised) error {
-	s.mu.Lock()
-	cid := entry.containerID
-	entry.sleepGen++
-	s.mu.Unlock()
-	// A companion left behind holds no agent: the container still stops,
-	// and the next Browser call removes the companion or reports why not.
-	if err := s.removeDevelopmentBrowser(ctx, entry.runID); err != nil {
-		s.mu.Lock()
-		entry.browserLeft = true
-		s.mu.Unlock()
-	}
-	return s.cfg.Runtime.Stop(ctx, cid, s.cfg.StopGrace)
-}
-
 // finalizeAsleep finishes, with exit code, a run whose container a sleep had
 // already stopped, which no Wait is left to see exit. Caller holds
 // entry.lifecycleMu, so the finish runs after it returns.
@@ -1076,49 +972,4 @@ func (s *Scheduler) finalizeAsleep(entry *supervised, code int) {
 		s.recordExitObserved(entry, code)
 		s.finalize(entry, code)
 	}()
-}
-
-// awakeExec keeps its run awake until the exec is seen to end.
-type awakeExec struct {
-	runtime.ManagedExec
-	done func()
-}
-
-func (s *Scheduler) keepAwake(run domain.RunID, exec runtime.ManagedExec) runtime.ManagedExec {
-	s.mu.Lock()
-	entry := s.runs[run]
-	if entry == nil {
-		s.mu.Unlock()
-		return exec
-	}
-	entry.awake++
-	entry.execAt = time.Now().UTC()
-	s.mu.Unlock()
-	return &awakeExec{ManagedExec: exec, done: sync.OnceFunc(func() {
-		s.mu.Lock()
-		entry.awake--
-		entry.execAt = time.Now().UTC()
-		s.mu.Unlock()
-	})}
-}
-
-func (e *awakeExec) Wait(ctx context.Context) (runtime.ExitStatus, error) {
-	st, err := e.ManagedExec.Wait(ctx)
-	if err == nil || errors.Is(err, runtime.ErrNotFound) {
-		e.done()
-	}
-	return st, err
-}
-
-func (e *awakeExec) Stop(ctx context.Context, grace time.Duration) (runtime.ExitStatus, error) {
-	st, err := e.ManagedExec.Stop(ctx, grace)
-	if err == nil {
-		e.done()
-	}
-	return st, err
-}
-
-func (e *awakeExec) Detach() error {
-	e.done()
-	return e.ManagedExec.Detach()
 }

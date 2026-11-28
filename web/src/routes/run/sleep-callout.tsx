@@ -11,7 +11,7 @@ import { useStore } from '@/store'
 import { useSelf } from '@/store/hooks'
 import { isTerminal, type RunRecord } from '@/store/runs'
 
-/** An idle session whose container Aether stopped or whose VM it paused or saved, and the wake that brings it back. */
+/** An idle session whose container Aether stopped or whose VM it saved, and the wake that brings it back. */
 export function SleepCallout({ run }: { run: RunRecord }) {
   const now = useClock()
   const self = useSelf(run.workspace_id)
@@ -41,17 +41,13 @@ export function SleepCallout({ run }: { run: RunRecord }) {
   }
   const failed = failure !== undefined && !waking
   const saved = run.asleep_saved === true
-  const inMemory = run.asleep_in_memory === true
   const at = <time dateTime={since}>{clockTime(since, now)}</time>
-  const kept = ' Its processes, terminals, files and conversation come back where they were; connections to outside the session may not.'
-  const about = (inMemory
-    ? 'Cloudfield paused the idle session in the server’s memory.' + kept
-    : saved
-      ? 'Cloudfield saved the idle session to disk.' + kept
-      : 'Cloudfield stopped the idle container. The conversation, files and checkout are kept; running processes are not.')
-    + (maySteer ? (inMemory ? ' Send a message or press Wake to resume it.' : saved ? ' Send a message or press Wake to restore it.' : ' Send a message or press Wake to start it.') : '')
+  const about = (saved
+    ? 'Cloudfield saved the idle session to disk. Its processes, terminals, files and conversation come back where they were; connections to outside the session may not.'
+    : 'Cloudfield stopped the idle container. The conversation, files and checkout are kept; running processes are not.')
+    + (maySteer ? (saved ? ' Send a message or press Wake to restore it.' : ' Send a message or press Wake to start it.') : '')
   const wakeButton = (variant: 'link' | 'secondary') => maySteer && (
-    <Button size="sm" variant={variant} hint={inMemory ? 'Resumes the paused session' : saved ? 'Restores the saved session' : 'Starts the container and restores the conversation'} onClick={() => void wake()}>
+    <Button size="sm" variant={variant} hint={saved ? 'Restores the saved session' : 'Starts the container and restores the conversation'} onClick={() => void wake()}>
       Wake
     </Button>
   )
@@ -68,7 +64,7 @@ export function SleepCallout({ run }: { run: RunRecord }) {
       {waking ? (
         <p className="flex min-h-6 items-center gap-2 py-0.5 text-ui-sm text-muted coarse:min-h-11">
           <Spinner label="Waking" />
-          <span className="min-w-0 flex-1 break-words">Waking… {inMemory ? 'Resuming the paused session.' : saved ? 'Restoring the saved session.' : 'Starting the container and restoring the agent’s conversation.'}</span>
+          <span className="min-w-0 flex-1 break-words">Waking… {saved ? 'Restoring the saved session.' : 'Starting the container and restoring the agent’s conversation.'}</span>
         </p>
       ) : (
         <>

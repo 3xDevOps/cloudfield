@@ -498,30 +498,6 @@ func (e *engine) pause(ctx context.Context, key string) error {
 	return nil
 }
 
-// park is pause after the guest wrote its dirty data and dropped its page
-// cache, as before a save, so the paused VM holds what its processes use.
-// A frozen session's guest kernel goes on reporting the freed pages to the
-// host; stopped vCPUs report nothing, so that VM waits for them first.
-func (e *engine) park(ctx context.Context, key string) error {
-	unlock := e.lock(key)
-	rec, err := e.requireRunning(ctx, key, "pause")
-	if err == nil {
-		if e.syncGuest(ctx, key) && len(rec.CheckoutDisks) == 0 {
-			e.awaitReported(ctx, key)
-		}
-		// As in save: the guest still runs, so a caller that gave up loses
-		// nothing.
-		if ctx.Err() != nil {
-			err = fmt.Errorf("vm runtime: pause VM %s: %w", key, ctx.Err())
-		}
-	}
-	unlock()
-	if err != nil {
-		return err
-	}
-	return e.pause(ctx, key)
-}
-
 func (e *engine) resume(ctx context.Context, key string) error {
 	unlock := e.lock(key)
 	defer unlock()

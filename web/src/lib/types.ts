@@ -273,10 +273,8 @@ export interface Run {
   paused?: boolean
   /** When idleness stopped the live session's container or saved its VM; absent while it is awake. */
   asleep_since?: string
-  /** The sleeping session's VM keeps every process, which a wake brings back. */
+  /** The sleeping session's VM was saved with every process, which a wake restores. */
   asleep_saved?: boolean
-  /** That VM is paused in the server's memory, not saved to disk: a wake resumes it. */
-  asleep_in_memory?: boolean
   /** A wake is starting the sleeping container. */
   waking?: boolean
   /** The last wake's failure while the session stays asleep. */
@@ -1017,7 +1015,6 @@ export interface RunEffortPayload {
 export interface RunSleepPayload {
   asleep_since?: string
   asleep_saved?: boolean
-  asleep_in_memory?: boolean
   waking?: boolean
   wake_error?: string
 }
