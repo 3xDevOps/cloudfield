@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	agentharness "github.com/3xDevOps/cloudfield/internal/harness"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/quota"
 	"github.com/3xDevOps/cloudfield/internal/store"
 )
 
@@ -37,11 +39,40 @@ type fakeRuns struct {
 	killed   []domain.RunID
 	closed   []domain.RunID
 	paused   map[domain.RunID]bool
+	// full is the capacity refusal every launch gets while set, and
+	// attempts counts the launches asked for.
+	full     error
+	attempts int
+	// childRefusal is what ChildLogin refuses with, when set.
+	childRefusal error
+	// payerReads counts LoginPayer's calls.
+	payerReads atomic.Int32
+	// payer is what LoginPayer answers, and perUse what LoginUsageUnknown
+	// does.
+	payer  string
+	perUse bool
 }
+
+var errNoRoom = errors.New("scheduler: insufficient host memory headroom")
+
+func (f *fakeRuns) tried() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.attempts
+}
+
+func (f *fakeRuns) CapacityRefused(err error) bool { return errors.Is(err, errNoRoom) }
 
 func (f *fakeRuns) LaunchWithOptions(ctx context.Context, ws domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode, opts domain.LaunchOptions) (*domain.Run, error) {
 	f.inflight.Add(1)
 	defer f.inflight.Add(-1)
+	f.mu.Lock()
+	f.attempts++
+	full := f.full
+	f.mu.Unlock()
+	if full != nil {
+		return nil, full
+	}
 	r := &domain.Run{ID: opts.ReservedRunID, WorkspaceID: ws, MemberID: member, AccountMemberID: account, Task: task, Harness: harness,
 		Mode: mode, Model: opts.Model, Status: domain.RunRunning, BaseCommit: opts.FromCommit}
 	if err := f.db.CreateRunWithID(ctx, r); err != nil {
@@ -107,8 +138,28 @@ func (f *fakeRuns) DefaultMode(_ context.Context, _, _ domain.MemberID, agent st
 	return domain.LaunchACP, nil
 }
 
-func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.MemberID, domain.MemberID, string, domain.LaunchMode) (bool, error) {
+func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.MemberID, domain.Account, string, domain.LaunchMode, domain.Permission) (bool, error) {
 	return true, nil
+}
+
+func (f *fakeRuns) LoginPayer(context.Context, domain.WorkspaceID, domain.MemberID, string, domain.LaunchMode) (string, error) {
+	f.payerReads.Add(1)
+	return f.payer, nil
+}
+
+func (f *fakeRuns) LoginUsageUnknown(context.Context, domain.MemberID, domain.Account, string) (bool, error) {
+	return f.perUse, nil
+}
+
+// ChildLogin inherits an added login and starts on the default otherwise.
+func (f *fakeRuns) ChildLogin(_ context.Context, _ domain.WorkspaceID, _, _ domain.MemberID, inherited domain.LoginID, _ string, _ domain.LaunchMode, _ domain.Permission) (domain.LoginID, error) {
+	if f.childRefusal != nil {
+		return "", f.childRefusal
+	}
+	if inherited.Added() {
+		return inherited, nil
+	}
+	return "", nil
 }
 
 func (f *fakeRuns) AgentModels(context.Context, domain.MemberID, domain.MemberID, string, bool) (protocol.AgentModelsResult, error) {
@@ -308,7 +359,10 @@ func (h *harness) settle() {
 		if err != nil {
 			h.t.Fatal(err)
 		}
-		if len(launching) == 0 && h.runs.inflight.Load() == 0 {
+		h.svc.mu.Lock()
+		held := len(h.svc.inFlight)
+		h.svc.mu.Unlock()
+		if len(launching) == 0 && h.runs.inflight.Load() == 0 && held == 0 {
 			h.svc.reconcile(h.ctx)
 			return
 		}
@@ -1106,5 +1160,293 @@ func TestSubsessionInheritsTheParentsLinearIssue(t *testing.T) {
 	want := []string{"https://linear.app/acme/issue/ENG-1", "https://linear.app/acme/issue/ENG-2"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("subsession Linear issues = %v, want %v", got, want)
+	}
+}
+
+// A subsession that will run on its parent's added login is not refused,
+// nor listed as not signed in, because the account's default login is
+// signed out.
+func TestASubsessionOnAnAddedLoginIgnoresASignedOutDefault(t *testing.T) {
+	h := newHarness(t)
+	h.agents.missing[h.ada.ID] = true
+	h.addLogin(h.ada.ID, "lgn-work000000", "work")
+	parent := &domain.Run{WorkspaceID: h.ws.ID, MemberID: h.ada.ID, AccountMemberID: h.ada.ID, AccountLogin: "lgn-work000000", Task: "parent", Harness: "claude", Mode: domain.LaunchACP, Status: domain.RunRunning}
+	if err := h.db.CreateRun(h.ctx, parent); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(protocol.ChildOptionsParams{})
+	out, err := h.svc.HandleAgent(h.ctx, parent.ID, protocol.MethodChildOptions, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]string{}
+	for _, c := range out.(protocol.ChildOptionsResult).Choices {
+		listed[c.Harness] = c.Status
+	}
+	if listed["claude"] != choiceReady || listed["codex"] != choiceNotSignedIn {
+		t.Fatalf("options = %v; want claude ready on the parent's login, codex not signed in", listed)
+	}
+	h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "claude", Task: "on work"})
+	if _, err := h.start(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "on the default"}); code(err) != protocol.CodeDenied || !strings.Contains(err.Error(), "Ada is not signed in to codex") {
+		t.Fatalf("a subsession on Ada's signed-out default = %v, want refused", err)
+	}
+}
+
+func (h *harness) addLogin(member domain.MemberID, id domain.LoginID, name string) {
+	h.t.Helper()
+	if _, err := h.db.AddAgentLogin(h.ctx, domain.AgentLogin{MemberID: member, Agent: "claude", ID: id, Name: name, CreatedAt: time.Now()}, ""); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+func (h *harness) options(parent domain.RunID) map[string]protocol.ChildChoice {
+	h.t.Helper()
+	raw, _ := json.Marshal(protocol.ChildOptionsParams{})
+	out, err := h.svc.HandleAgent(h.ctx, parent, protocol.MethodChildOptions, raw)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	listed := map[string]protocol.ChildChoice{}
+	for _, c := range out.(protocol.ChildOptionsResult).Choices {
+		if c.AccountMemberID == string(h.ada.ID) {
+			listed[c.Harness] = c
+		}
+	}
+	return listed
+}
+
+// usageByLogin reports each login's used share of its Claude five-hour
+// window.
+type usageByLogin map[domain.Account]float64
+
+func (u usageByLogin) Read(ctx context.Context, account domain.MemberID, refresh bool) ([]quota.Provider, error) {
+	return u.ReadLogin(ctx, domain.AccountOf(account), refresh)
+}
+
+func (u usageByLogin) ReadLogin(_ context.Context, account domain.Account, _ bool) ([]quota.Provider, error) {
+	resets := time.Now().Add(time.Hour)
+	return []quota.Provider{{Provider: "claude", Status: "ok", Windows: []quota.Window{{ID: "five_hour", UsedPercent: u[account], ResetsAt: &resets}}}}, nil
+}
+
+// Where the account's owner keeps logins, a subsession is listed and
+// refused as dispatch would launch it: a default login the files show
+// signed out but that a login choice serves (one an apiKeyHelper signs in)
+// is ready, an account none of whose logins serves is not, and a spent
+// first login with a second that has usage left is not exhausted.
+func TestSubsessionOptionsJudgeTheLoginDispatchUses(t *testing.T) {
+	h := newHarness(t)
+	h.agents.missing[h.ada.ID] = true
+	h.addLogin(h.ada.ID, "lgn-work000000", "work")
+	parent := h.run(h.ada.ID, domain.LaunchACP, "parent")
+	if got := h.options(parent.ID)["claude"]; got.Status != choiceReady {
+		t.Fatalf("claude on Ada's account = %s (%s); want ready on the login a launch chooses", got.Status, got.Detail)
+	}
+	h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "claude", Task: "on the default"})
+	if got := h.options(parent.ID)["codex"]; got.Status != choiceNotSignedIn {
+		t.Fatalf("codex, for which Ada keeps no logins = %s; want not signed in, as before", got.Status)
+	}
+
+	h.runs.childRefusal = errors.New("no login of this account can start a session unnamed: default is automatic off; work is automatic off")
+	if got := h.options(parent.ID)["claude"]; got.Status != choiceNotSignedIn || !strings.Contains(got.Detail, "automatic off") {
+		t.Fatalf("claude with every login automatic off = %s (%s); want refused with the reason", got.Status, got.Detail)
+	}
+	if _, err := h.start(parent.ID, protocol.ChildStartParams{Harness: "claude", Task: "refused"}); code(err) != protocol.CodeDenied || !strings.Contains(err.Error(), "automatic off") {
+		t.Fatalf("a subsession with every login automatic off = %v; want refused", err)
+	}
+	h.runs.childRefusal = nil
+
+	work := domain.Account{Member: h.ada.ID, Login: "lgn-work000000"}
+	h.svc.cfg.Usage = usageByLogin{domain.AccountOf(h.ada.ID): 100, work: 10}
+	if got := h.options(parent.ID)["claude"]; got.Status != choiceReady {
+		t.Fatalf("claude with the default spent and work at 10%% = %s (%s); want ready", got.Status, got.Detail)
+	}
+	h.svc.cfg.Usage = usageByLogin{domain.AccountOf(h.ada.ID): 100, work: 100}
+	if got := h.options(parent.ID)["claude"]; got.Status != choiceExhausted {
+		t.Fatalf("claude with both logins spent = %s (%s); want exhausted", got.Status, got.Detail)
+	}
+}
+
+// Dispatching a subsession for an owner who keeps no logins reads nothing
+// of who would pay instead of an added login: there is none to choose.
+func TestDispatchWithoutLoginsReadsNoPayer(t *testing.T) {
+	h := newHarness(t)
+	h.enable(h.ada.ID, protocol.ChildSettingsParams{Enabled: on()})
+	parent := h.run(h.ada.ID, domain.LaunchACP, "parent")
+	h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "claude"})
+	h.settle()
+	if len(h.runs.launched) != 1 {
+		t.Fatalf("%d subsessions launched; want 1", len(h.runs.launched))
+	}
+	if n := h.runs.payerReads.Load(); n != 0 {
+		t.Fatalf("LoginPayer read %d times; want none", n)
+	}
+}
+
+// A subsession whose start is billed per use because something outside the
+// login signs the agent in stays on its owner's unspent account, and is
+// listed by that account's usage: that payer pays on a teammate's account
+// too.
+func TestDispatchWhereAPayerSignsInStaysOnTheOwnersAccount(t *testing.T) {
+	h := newHarness(t)
+	h.addLogin(h.ada.ID, "lgn-work000000", "work")
+	if _, err := h.db.ShareAccount(h.ctx, h.bob.ID, h.ada.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.db.GrantWorkspace(h.ctx, h.ws.ID, h.bob.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	h.svc.cfg.Usage = usageByLogin{domain.AccountOf(h.ada.ID): 10, domain.AccountOf(h.bob.ID): 10}
+	h.runs.perUse, h.runs.payer = true, "apiKeyHelper in ~/.claude/settings.json signs the agent in"
+	parent := h.run(h.ada.ID, domain.LaunchACP, "parent")
+	h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "claude"})
+	h.settle()
+	if len(h.runs.accounts) != 1 || h.runs.accounts[0] != h.ada.ID {
+		t.Fatalf("subsessions launched on %v; want one on Ada's own account", h.runs.accounts)
+	}
+	h.svc.cfg.Usage = usageByLogin{domain.AccountOf(h.ada.ID): 100, domain.AccountOf(h.bob.ID): 10}
+	if got := h.options(parent.ID)["claude"]; got.Status != choiceExhausted {
+		t.Fatalf("claude on Ada's spent account = %s (%s); want exhausted, as its usage reads", got.Status, got.Detail)
+	}
+}
+
+// A subsession the server has no room for is not lost: it returns to the
+// queue with the refusal, its parent is told once, one waiting subsession
+// is tried again no sooner than capacityRetryEvery, and each starts when
+// there is room.
+func TestSubsessionWithNoRoomWaitsAndStartsLater(t *testing.T) {
+	h := newHarness(t)
+	h.enable(h.ada.ID, protocol.ChildSettingsParams{Enabled: on()})
+	parent, other := h.run(h.ada.ID, domain.LaunchACP, "parent"), h.run(h.ada.ID, domain.LaunchACP, "other parent")
+	refusal := fmt.Errorf("%w: 100 available bytes; reserve 200 bytes", errNoRoom)
+	h.runs.full = refusal
+	h.mail.db = h.db
+	first := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "first"})
+	h.settle()
+	second := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "second"})
+	h.settle()
+	third := h.mustStart(other.ID, protocol.ChildStartParams{Harness: "codex", Task: "third"})
+	h.settle()
+	h.settle()
+	child, err := h.db.GetChild(h.ctx, domain.RunID(first.RunID))
+	if err != nil || child.State != domain.ChildQueued || child.Error != refusal.Error() {
+		t.Fatalf("subsession with no room = %+v, %v; want it queued with the refusal", child, err)
+	}
+	if got := h.runs.tried(); got != 2 {
+		t.Fatalf("launch attempts inside the retry time = %d, want 2: the first one's and the other parent's, not its younger sibling's", got)
+	}
+	for _, m := range h.mail.sent {
+		if !strings.Contains(m.body, "is waiting to start") || !strings.Contains(m.body, refusal.Error()) {
+			t.Fatalf("notice = %+v, want only waiting notices with the refusal", m)
+		}
+	}
+	if len(h.mail.sent) != 2 {
+		t.Fatalf("waiting notices = %d, want one for each subsession tried", len(h.mail.sent))
+	}
+
+	// The next refusal names other figures; the parent is not told again,
+	// and only the oldest waiting subsession was tried.
+	h.runs.mu.Lock()
+	h.runs.full = fmt.Errorf("%w: 150 available bytes; reserve 200 bytes", errNoRoom)
+	h.runs.mu.Unlock()
+	h.now = h.now.Add(capacityRetryEvery)
+	h.settle()
+	h.settle()
+	if child, err = h.db.GetChild(h.ctx, domain.RunID(first.RunID)); err != nil || !strings.Contains(child.Error, "150 available") {
+		t.Fatalf("subsession refused again = %+v, %v; want the latest refusal", child, err)
+	}
+	if got := h.runs.tried(); got != 3 {
+		t.Fatalf("launch attempts after the retry time = %d, want 3: one more, for the oldest", got)
+	}
+	if len(h.mail.errs) != 0 || len(h.mail.sent) != 2 {
+		t.Fatalf("notices = %d, refused by the mailbox %v; want none sent twice", len(h.mail.sent), h.mail.errs)
+	}
+
+	// With room again, one start lets the next waiting one follow at once.
+	h.runs.mu.Lock()
+	h.runs.full = nil
+	h.runs.mu.Unlock()
+	h.now = h.now.Add(capacityRetryEvery)
+	// Each start lets the next one follow in a later pass.
+	for range 3 {
+		h.settle()
+	}
+	for _, id := range []string{first.RunID, second.RunID, third.RunID} {
+		child, err = h.db.GetChild(h.ctx, domain.RunID(id))
+		if err != nil || child.State != domain.ChildStarted || child.Error != "" {
+			t.Fatalf("subsession once there is room = %+v, %v; want it started with no error", child, err)
+		}
+	}
+	if len(h.runs.launched) != 3 {
+		t.Fatalf("started %d sessions, want 3", len(h.runs.launched))
+	}
+	// The second subsession never met a refusal of its own, so two waited.
+	counts, err := h.db.CapacityCounts(h.ctx, h.now.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	for _, c := range counts {
+		got[c.Kind+" "+c.Op+" "+c.Cause] += c.Count
+		if c.Kind == domain.CapacityWaitEnd && c.MaxWaited < capacityRetryEvery {
+			t.Fatalf("longest wait counted = %s, want at least a retry time", c.MaxWaited)
+		}
+	}
+	if want := map[string]int64{"wait subsession ": 2, "wait-end subsession started": 2}; !maps.Equal(got, want) {
+		t.Fatalf("counted waits = %v, want %v", got, want)
+	}
+}
+
+// After capacityWaitLimit a capacity refusal is final, as it was at once
+// before subsessions waited.
+func TestSubsessionWithNoRoomIsRefusedAfterADay(t *testing.T) {
+	h := newHarness(t)
+	h.enable(h.ada.ID, protocol.ChildSettingsParams{Enabled: on()})
+	parent := h.run(h.ada.ID, domain.LaunchACP, "parent")
+	h.runs.full = errNoRoom
+	c := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex"})
+	h.settle()
+	h.now = h.now.Add(capacityWaitLimit + time.Minute)
+	h.settle()
+	child, err := h.db.GetChild(h.ctx, domain.RunID(c.RunID))
+	if err != nil || child.State != domain.ChildRefused || child.Error != errNoRoom.Error() {
+		t.Fatalf("subsession with no room for a day = %+v, %v; want it refused with the last refusal", child, err)
+	}
+	if last := h.mail.sent[len(h.mail.sent)-1]; !strings.Contains(last.body, "did not start") {
+		t.Fatalf("last notice = %q, want the refusal", last.body)
+	}
+}
+
+// A reservation left launching with no launch holding it, as when the
+// database could not record how its attempt ended, returns to the queue
+// and starts.
+func TestReservationNoLaunchHoldsReturnsToTheQueue(t *testing.T) {
+	h := newHarness(t)
+	h.enable(h.ada.ID, protocol.ChildSettingsParams{Enabled: on()})
+	parent := h.run(h.ada.ID, domain.LaunchACP, "parent")
+	h.runs.full = errNoRoom
+	c := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex"})
+	h.settle()
+	launching := func() {
+		t.Helper()
+		if err := h.db.SetChildState(h.ctx, domain.RunID(c.RunID), domain.ChildLaunching, errNoRoom.Error(), domain.ChildQueued); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A restart returns it to the queue with the refusal it waited on.
+	launching()
+	if err := h.svc.recover(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if child, err := h.db.GetChild(h.ctx, domain.RunID(c.RunID)); err != nil || child.State != domain.ChildQueued || child.Error != errNoRoom.Error() {
+		t.Fatalf("reservation recovered after a restart = %+v, %v; want it queued with its refusal", child, err)
+	}
+	launching()
+	h.runs.mu.Lock()
+	h.runs.full = nil
+	h.runs.mu.Unlock()
+	h.now = h.now.Add(capacityRetryEvery)
+	h.settle()
+	if child, err := h.db.GetChild(h.ctx, domain.RunID(c.RunID)); err != nil || child.State != domain.ChildStarted {
+		t.Fatalf("reservation left launching = %+v, %v; want it started", child, err)
 	}
 }

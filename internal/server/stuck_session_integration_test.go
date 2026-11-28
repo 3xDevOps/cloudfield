@@ -144,8 +144,13 @@ func TestIntegrationStuckSession(t *testing.T) {
 	case <-time.After(prompt):
 		t.Fatal("run.pause did not return once the runtime answered")
 	}
-	if child := waitRun(t, ctrl, childID, func(protocol.Run) bool { return true }); child.Status != string(domain.RunRunning) || !child.Paused {
-		t.Errorf("session %s after the cancels that gave up = %s (paused %v), want it running and paused", childID, child.Status, child.Paused)
+	// A cancel that still held its place stops the session only now, so
+	// watch it for as long as one cancel waited.
+	for watched := time.Now().Add(gaveUp); time.Now().Before(watched); time.Sleep(200 * time.Millisecond) {
+		if child := waitRun(t, ctrl, childID, func(protocol.Run) bool { return true }); child.Status != string(domain.RunRunning) || !child.Paused {
+			t.Errorf("session %s after the cancels that gave up = %s (paused %v), want it running and paused", childID, child.Status, child.Paused)
+			break
+		}
 	}
 	if err := coordtransport.Call(ctx, socketOf(parent.ID), protocol.MethodChildCancel, protocol.ChildRunParams{RunID: childID}, nil); err != nil {
 		t.Errorf("child.cancel of session %s once it was free: %v", childID, err)

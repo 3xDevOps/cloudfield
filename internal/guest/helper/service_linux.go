@@ -211,6 +211,14 @@ func (s *service) Sync(context.Context, *guestpb.SyncRequest) (*guestpb.SyncRepl
 	return &guestpb.SyncReply{}, nil
 }
 
+func (s *service) CacheUse(context.Context, *guestpb.CacheUseRequest) (*guestpb.CacheUseReply, error) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(cacheRoot, &st); err != nil {
+		return nil, status.Errorf(codes.Internal, "statfs %s: %v", cacheRoot, err)
+	}
+	return &guestpb.CacheUseReply{FreeBlocks: st.Bfree, FreeInodes: st.Ffree}, nil
+}
+
 func (s *service) PowerOff(context.Context, *guestpb.PowerOffRequest) (*guestpb.PowerOffReply, error) {
 	if s.powerOff == nil {
 		return nil, status.Error(codes.FailedPrecondition, "the helper is not PID 1")

@@ -425,7 +425,16 @@ func (e *testEnv) launchACP(t *testing.T, task string) *domain.Run {
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
+	e.opened(t, run.ID)
 	return run
+}
+
+// opened waits for the open the run's launch left running.
+func (e *testEnv) opened(t *testing.T, run domain.RunID) {
+	t.Helper()
+	if err := e.sched.acp.awaitOpening(t.Context(), run); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func waitItems(t *testing.T, s *Scheduler, run domain.RunID, what string, cond func([]acphost.Item) bool) []acphost.Item {
@@ -588,6 +597,9 @@ func TestEnhancedRunPermissionAnsweredOnce(t *testing.T) {
 	if pending[0].Kind != "permission" {
 		t.Fatalf("pending %+v", pending)
 	}
+	if outcome, err := e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "then say pong"}, false, nil); err != nil || outcome != acphost.OutcomeQueued {
+		t.Fatalf("Inject beside the request = %q, %v, want queued", outcome, err)
+	}
 	if err := e.sched.ACPAnswer(run.ID, pending[0].ID, "allow", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -652,7 +664,7 @@ func TestEnhancedRunCancel(t *testing.T) {
 	e, _ := newACPEnv(t)
 	run := e.launchACP(t, acpmock.PromptWait)
 	e.waitAgentWorking(t, run.ID)
-	if err := e.sched.ACPCancel(t.Context(), run.ID); err != nil {
+	if err := e.interrupt(t, run); err != nil {
 		t.Fatal(err)
 	}
 	waitItems(t, e.sched, run.ID, "cancelled turn", turnEnded("cancelled", 1))

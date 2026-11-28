@@ -108,11 +108,11 @@ func TestStopForParentAfterWaitingForTheChild(t *testing.T) {
 	}
 
 	entry.lifecycleMu.Lock()
-	gone, leave := context.WithCancel(t.Context())
-	leave()
+	gone, leave := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer leave()
 	err := e.sched.StopForParent(gone, run.ID, "run-parent", func() error { return nil })
 	entry.lifecycleMu.Unlock()
-	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), string(run.ID)) {
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), string(run.ID)) {
 		t.Fatalf("stop whose caller gave up = %v, want the caller's error naming session %s", err, run.ID)
 	}
 	untouched("a stop whose caller gave up")
@@ -122,6 +122,26 @@ func TestStopForParentAfterWaitingForTheChild(t *testing.T) {
 		t.Fatalf("stop of a child handed off meanwhile = %v, want %v", err, detached)
 	}
 	untouched("a stop of a child handed off meanwhile")
+}
+
+// A session recovery has not adopted has no lifecycle lock to wait for, but
+// its stop still commits and publishes first, so a handoff can land then.
+func TestStopForParentOfAnUnsupervisedChildHandedOffMeanwhile(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t, nil)
+	run, container := e.launchFake(t, "child before recovery")
+	if err := e.sched.Close(); err != nil {
+		t.Fatalf("Close scheduler: %v", err)
+	}
+	recovered := e.newScheduler(t, e.rt, newFakePTY())
+	detached := errors.New("handed off meanwhile")
+	if err := recovered.StopForParent(t.Context(), run.ID, "run-parent", func() error { return detached }); !errors.Is(err, detached) {
+		t.Fatalf("stop of a child handed off meanwhile = %v, want %v", err, detached)
+	}
+	if e.rt.byName(string(run.ID)) != container || container.currentState() != "running" {
+		t.Fatal("a stop of a child handed off meanwhile stopped its container")
+	}
+	e.waitStoreStatus(t, run.ID, domain.RunRunning)
 }
 
 func TestPauseResumeAndStallExemption(t *testing.T) {

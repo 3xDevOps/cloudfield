@@ -27,9 +27,17 @@ type Runs interface {
 	CloseRun(ctx context.Context, run domain.RunID, actor domain.MemberID, outcome domain.RunStatus) error
 	Review(ctx context.Context, run domain.RunID, actor domain.MemberID, action string, reportedOnly bool) (*domain.Run, error)
 	DefaultMode(ctx context.Context, member, account domain.MemberID, harnessName string) (domain.LaunchMode, error)
-	FallbackLaunchable(ctx context.Context, member, requested, account domain.MemberID, harnessName string, mode domain.LaunchMode) (bool, error)
+	// ChildLogin is the login a subsession of owner starts from on its
+	// parent's account.
+	ChildLogin(ctx context.Context, workspace domain.WorkspaceID, owner, account domain.MemberID, inherited domain.LoginID, harness string, mode domain.LaunchMode, permission domain.Permission) (domain.LoginID, error)
+	LoginPayer(ctx context.Context, workspace domain.WorkspaceID, home domain.MemberID, harness string, mode domain.LaunchMode) (string, error)
+	LoginUsageUnknown(ctx context.Context, home domain.MemberID, login domain.Account, harness string) (bool, error)
+	FallbackLaunchable(ctx context.Context, member, requested domain.MemberID, account domain.Account, harnessName string, mode domain.LaunchMode, permission domain.Permission) (bool, error)
 	AgentModels(ctx context.Context, member, account domain.MemberID, name string, refresh bool) (protocol.AgentModelsResult, error)
 	Paused(run domain.RunID) bool
+	// CapacityRefused reports whether a launch failed only because the
+	// server had no room for it.
+	CapacityRefused(err error) bool
 }
 
 // Git publishes run branches and copies a child's into its parent.
@@ -92,6 +100,11 @@ type Service struct {
 
 	mu   sync.Mutex
 	mail Mailer
+	// retryAt is when a subsession the server had no room for may next be
+	// tried. A restart forgets it and tries one at once.
+	retryAt time.Time
+	// inFlight are the reservations a launch goroutine holds.
+	inFlight map[domain.RunID]bool
 	// settingsMu serializes read-modify-write of member settings and
 	// workspace limits.
 	settingsMu sync.Mutex
@@ -109,7 +122,7 @@ func New(cfg Config) (*Service, error) {
 	if cfg.Interval <= 0 {
 		cfg.Interval = 3 * time.Second
 	}
-	return &Service{cfg: cfg, kick: make(chan struct{}, 1)}, nil
+	return &Service{cfg: cfg, kick: make(chan struct{}, 1), inFlight: map[domain.RunID]bool{}}, nil
 }
 
 // Start recovers reservations a restart interrupted, then reconciles until
@@ -199,7 +212,12 @@ func (s *Service) recover(ctx context.Context) error {
 		if _, getErr := s.cfg.Store.GetRun(ctx, c.RunID); getErr == nil {
 			to = domain.ChildStarted
 		}
-		if err := s.cfg.Store.SetChildState(ctx, c.RunID, to, "", domain.ChildLaunching); err != nil {
+		// One returned to the queue keeps the refusal it waited on.
+		errText := ""
+		if to == domain.ChildQueued {
+			errText = c.Error
+		}
+		if err := s.cfg.Store.SetChildState(ctx, c.RunID, to, errText, domain.ChildLaunching); err != nil {
 			return err
 		}
 	}
@@ -207,14 +225,23 @@ func (s *Service) recover(ctx context.Context) error {
 }
 
 // repairStarted marks started a launching reservation whose run row
-// exists, in case recording it at creation failed.
+// exists, in case recording it at creation failed, and returns to the queue
+// one no launch holds any more, whose last state could not be written.
 func (s *Service) repairStarted(ctx context.Context) error {
 	launching, err := s.cfg.Store.ChildrenInState(ctx, domain.ChildLaunching)
 	if err != nil {
 		return err
 	}
 	for _, c := range launching {
+		// Read before the row: a launch that ends between the two reads
+		// may have created it.
+		held := s.held(c.RunID)
 		if _, getErr := s.cfg.Store.GetRun(ctx, c.RunID); getErr != nil {
+			if errors.Is(getErr, store.ErrNotFound) && !held {
+				if err := s.cfg.Store.SetChildState(ctx, c.RunID, domain.ChildQueued, c.Error, domain.ChildLaunching); err != nil && !errors.Is(err, store.ErrConflict) {
+					return err
+				}
+			}
 			continue
 		}
 		if err := s.cfg.Store.SetChildState(ctx, c.RunID, domain.ChildStarted, "", domain.ChildLaunching); err != nil && !errors.Is(err, store.ErrConflict) {

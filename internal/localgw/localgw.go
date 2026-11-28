@@ -227,6 +227,7 @@ func (g *Gateway) requestExit(code int) {
 func (g *Gateway) Close() error {
 	g.cancel()
 	g.local.forward.Close()
+	g.local.notices.CloseIdleConnections()
 	backendErr := g.cfg.Backend.Close()
 	serveErr := g.core.Close()
 	// Wait even if never served: a rebuild's outcome must be recorded by

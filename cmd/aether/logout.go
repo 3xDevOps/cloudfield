@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"text/tabwriter"
 
 	"github.com/3xDevOps/cloudfield/internal/cli"
@@ -40,15 +41,72 @@ func runLogout(args []string) error {
 	if *deleteAccount {
 		return deleteEdgeAccount(context.Background(), client, os.Stdout)
 	}
-	if err = client.Logout(context.Background()); err != nil {
+	unrevoked, err := client.Logout(context.Background())
+	if err != nil {
 		return err
 	}
-	fmt.Printf("signed out of %s: the device token is revoked at the edge and deleted here; the device key and your links stay\n", client.Host())
 	dir, err := cli.Dir()
 	if err != nil {
 		return err
 	}
+	if unrevoked == nil {
+		fmt.Printf("signed out of %s: the device token is revoked at the edge and deleted here; the device key and your links stay\n", client.Host())
+		return printStillSignedIn(os.Stdout, dir)
+	}
+	fmt.Printf("deleted the device token for %s here, but the edge did not confirm the sign-out: it answered that this address is retired and that its new address is %s.\n",
+		client.Host(), unrevoked.Replacement)
+	fmt.Printf("Device %s may still be signed in; %s.\n", edgeclient.Clean(unrevoked.Device.ID), devicesPage(dir, client.URL(), unrevoked.Replacement))
 	return printStillSignedIn(os.Stdout, dir)
+}
+
+// devicesPage says where to revoke a device that old, a retired address,
+// named replacement as its successor for: the Devices page of the sign-in
+// origin this machine recorded for exactly replacement; without such a
+// record, of the one it recorded for every other spelling of it; else of
+// replacement's when this machine knows it otherwise. An address it does
+// not know is only the old address's word, and a record that cannot be
+// read, or records that disagree, name no page.
+func devicesPage(dir, old, replacement string) string {
+	const ask = "ask whoever runs the edge for the address of its Devices page and revoke it there"
+	signinAt := func(origin string) (string, bool) {
+		c, err := edgeclient.New(dir, origin)
+		if err != nil {
+			return "", false
+		}
+		s, err := c.Session()
+		return s.SigninOrigin, err == nil
+	}
+	page := func(signin string) string { return "revoke it on " + edgeclient.Clean(signin) + "/devices" }
+	signedIn, err := edgeclient.SignedIn(dir)
+	if err != nil {
+		return ask
+	}
+	if slices.Contains(signedIn, replacement) {
+		signin, ok := signinAt(replacement)
+		if !ok {
+			return ask
+		}
+		return page(signin)
+	}
+	holdings, err := cli.LoadEdgeHoldings(dir)
+	if err != nil || !holdings.Known(old, replacement) {
+		return ask
+	}
+	found := ""
+	for _, origin := range signedIn {
+		if !cli.SameEdge(origin, replacement) {
+			continue
+		}
+		signin, ok := signinAt(origin)
+		if !ok || (found != "" && signin != found) {
+			return ask
+		}
+		found = signin
+	}
+	if found == "" {
+		return "revoke it on the Devices page of the sign-in origin of " + replacement
+	}
+	return page(found)
 }
 
 // printStillSignedIn names the edges this machine still holds a token

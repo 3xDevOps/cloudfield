@@ -84,7 +84,7 @@ func rpcError(err error) *protocol.Error {
 		switch {
 		case errors.Is(err, store.ErrNotFound):
 			code = protocol.CodeNotFound
-		case errors.Is(err, scheduler.ErrSignedOut):
+		case errors.Is(err, scheduler.ErrSignedOut), errors.Is(err, scheduler.ErrNoStartLogin), errors.Is(err, scheduler.ErrEnvironmentPays):
 			code = protocol.CodeInvalidState
 		case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrInUse),
 			errors.Is(err, scheduler.ErrRunShellTabLimit), errors.Is(err, scheduler.ErrAgentInstallRunning),
@@ -97,7 +97,7 @@ func rpcError(err error) *protocol.Error {
 			errors.Is(err, scheduler.ErrTerminalNotRunning), errors.Is(err, scheduler.ErrGitHubNotLoggedIn),
 			errors.Is(err, scheduler.ErrGitHubScopeMissing), errors.Is(err, scheduler.ErrGitHubCLIMissing),
 			errors.Is(err, scheduler.ErrGitHubCLIBroken), errors.Is(err, scheduler.ErrGitHubCLIOutdated),
-			errors.Is(err, scheduler.ErrNoLiveEnvironment):
+			errors.Is(err, scheduler.ErrNoLiveEnvironment), errors.Is(err, scheduler.ErrNoInterrupt):
 			code = protocol.CodeInvalidState
 		case errors.Is(err, errWriteDenied), errors.Is(err, errMemberRemoved),
 			errors.Is(err, errMemberPending), errors.Is(err, permissions.ErrDenied):

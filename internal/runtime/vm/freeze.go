@@ -59,7 +59,7 @@ func (e *engine) freeze(key string) (bool, error) {
 	if e.frozen(key) {
 		return false, nil
 	}
-	if err := e.writeFreezer(key, "1"); err != nil {
+	if err := writeCgroup(e.freezeFile(key), "1"); err != nil {
 		return false, fmt.Errorf("vm runtime: freeze VM %s: %w", key, err)
 	}
 	e.mu.Lock()
@@ -89,7 +89,7 @@ func (e *engine) frozenVMs() []runtime.ID {
 // thaw lets key's VM run on; one that is not frozen, or no longer runs, is
 // left as it is.
 func (e *engine) thaw(key string) error {
-	if err := e.writeFreezer(key, "0"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := writeCgroup(e.freezeFile(key), "0"); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("vm runtime: thaw VM %s: %w", key, err)
 	}
 	e.mu.Lock()
@@ -98,8 +98,8 @@ func (e *engine) thaw(key string) error {
 	return nil
 }
 
-func (e *engine) writeFreezer(key, value string) error {
-	f, err := os.OpenFile(e.freezeFile(key), os.O_WRONLY, 0)
+func writeCgroup(path, value string) error {
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
 	if err != nil {
 		return err
 	}

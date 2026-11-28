@@ -349,6 +349,23 @@ func (c *Client) Sync(ctx context.Context) error {
 	return nil
 }
 
+// CacheUse is what the guest counts free on its cache volume.
+type CacheUse struct {
+	FreeBlocks uint64
+	FreeInodes uint64
+}
+
+// CacheUse counts what the cache volume has free. Two equal counts mean the
+// session between them added nothing to its caches: mounting the volume
+// changes neither number.
+func (c *Client) CacheUse(ctx context.Context) (CacheUse, error) {
+	r, err := retry(ctx, func() (*guestpb.CacheUseReply, error) { return c.api.CacheUse(ctx, &guestpb.CacheUseRequest{}) })
+	if err != nil {
+		return CacheUse{}, fmt.Errorf("guest: cache use: %w", err)
+	}
+	return CacheUse{FreeBlocks: r.GetFreeBlocks(), FreeInodes: r.GetFreeInodes()}, nil
+}
+
 // PowerOff flushes the VM's disks and powers it off. It returns once the
 // disks are flushed.
 func (c *Client) PowerOff(ctx context.Context) error {
