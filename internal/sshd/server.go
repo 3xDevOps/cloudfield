@@ -223,6 +223,8 @@ type Server struct {
 	// launchReclaimed is when a try of a waiting launch last could free
 	// disk, in Unix nanoseconds.
 	launchReclaimed atomic.Int64
+	// launchPruned is when ended waiting launches were last deleted.
+	launchPruned atomic.Int64
 	// launchPass keeps passes over the waiting launches from overlapping.
 	launchPass sync.Mutex
 	// launchRoom carries RoomAppeared to dispatchLaunchIntents.

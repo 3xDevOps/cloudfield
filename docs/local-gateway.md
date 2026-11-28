@@ -611,7 +611,7 @@ attempts, passed, idempotency_key, created_at, expires_at, ended_at}`, and
 the server starts it when there is room
 ([A launch that waits for room](failure-handling.md#a-launch-that-waits-for-room)).
 `id` is the session ID reserved for it; no session has that ID until
-`state` is `started`. The same request with the same `idempotency_key`
+`state` is `started`. `task` is the first 200 bytes of the task. The same request with the same `idempotency_key`
 returns the same `waiting` object while it waits and its session once it
 started. Without `wait`, that key answers `-32004` with the refusal and that
 the launch waits, so a caller that did not ask to wait never gets a result
@@ -621,7 +621,8 @@ launches nothing. `wait` is not part of what the key fingerprints. A server that
 not know `wait` refuses it as an unknown param, so send it only when
 `server.info` lists the `launch-wait` feature.
 
-`launch.waiting.list` (no params, or `{"id":"<id>"}` for one of any age)
+`launch.waiting.list` (no params, or `{"id":"<id>"}` for one, kept 7 days
+after it ended)
 returns `{"waiting":[...]}`: the caller's launches that wait, and those that
 ended in the last 24 hours `expired`, `refused`, or `cancelled` by someone
 else. `launch.waiting.cancel`

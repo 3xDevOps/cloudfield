@@ -15,7 +15,7 @@ func (e *testEnv) waitingIntent(t *testing.T) *domain.LaunchIntent {
 		MemberID: e.member.ID, WorkspaceID: e.ws.ID, Method: "run.launch", Params: []byte(`{}`),
 		Base:    domain.LaunchBase{Commit: testBaseCommit, Branch: "kept", Source: "origin", CheckedAt: time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)},
 		Refusal: "no room",
-	}, 8)
+	}, 8, 100)
 	if err != nil {
 		t.Fatal(err)
 	}

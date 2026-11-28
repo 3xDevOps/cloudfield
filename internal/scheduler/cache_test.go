@@ -764,7 +764,7 @@ func TestALaunchTriedAgainUnaskedReclaimsNoDisk(t *testing.T) {
 		calls++
 		return disk.Usage{TotalBytes: 100 << 30, FreeBytes: 1}, nil
 	}
-	if _, err := e.sched.reserveLaunch(t.Context(), "", true); !errors.Is(err, ErrDiskFull) {
+	if _, err := e.sched.reserveLaunch(t.Context(), "", true, false); !errors.Is(err, ErrDiskFull) {
 		t.Fatalf("a retry under disk pressure = %v, want the refusal", err)
 	}
 	if calls != 1 {

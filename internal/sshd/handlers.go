@@ -243,7 +243,10 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 	p.IdempotencyKey = ""
 	// Whether a launch may wait is not part of what it launches: a retry
 	// with or without it is the same request.
-	wait := p.Wait
+	// The assistant's launches do not wait: nothing of what asked for one,
+	// a connector or a device behind an assistant turn, would be there to
+	// check again when it starts.
+	wait := p.Wait && !fromAssistant(ctx)
 	p.Wait = false
 	attempt := attemptOf(ctx)
 	var earlier any
@@ -442,7 +445,7 @@ func (s *Server) launchRun(ctx, caller context.Context, member domain.MemberID, 
 	}
 	if attempt != nil {
 		in := attempt.intent
-		opts.ReservedRunID, opts.Intent, opts.Base, opts.Retry, opts.Queue, opts.CachedBase = in.ID, true, &in.Base, !attempt.reclaim, false, ""
+		opts.ReservedRunID, opts.Intent, opts.Base, opts.Retry, opts.Reclaim, opts.Queue, opts.CachedBase = in.ID, true, &in.Base, true, attempt.reclaim, false, ""
 	}
 	run, err := launchWithOptions(ctx, s.cfg.Runs, domain.WorkspaceID(p.WorkspaceID), member, account, p.Task, p.Harness, mode, opts)
 	if err != nil {
