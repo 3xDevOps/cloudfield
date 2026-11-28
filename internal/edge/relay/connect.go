@@ -81,6 +81,10 @@ func (r *Relay) refusal(err error) (int, string) {
 		r.countRefusal(string(ref))
 		return ref.Status(), string(ref)
 	}
+	if errors.Is(err, errUnchecked) {
+		r.countRefusal("internal error")
+		return http.StatusServiceUnavailable, errUnchecked.Error()
+	}
 	r.countRefusal("internal error")
 	slog.Error("relay: connection failed", "error", err)
 	return http.StatusInternalServerError, "internal error"
@@ -208,6 +212,9 @@ func (sc *spliceConn) Close() error {
 	if errors.As(context.Cause(sc.c.ctx), &ref) {
 		return sc.ws.Close(websocket.StatusPolicyViolation, closeReason(ref))
 	}
+	if errors.Is(context.Cause(sc.c.ctx), errUnchecked) {
+		return sc.ws.Close(websocket.StatusInternalError, closeReason(errUnchecked))
+	}
 	return sc.ws.Close(websocket.StatusNormalClosure, "")
 }
 
@@ -286,7 +293,9 @@ func (r *Relay) attachDevice(ctx context.Context, c *relayConn, msg edgeproto.Op
 	_, _, err := r.dir.Authenticate(actx, token)
 	cancel()
 	if err == nil && c.kind == edgeproto.KindSSH {
-		err = r.admitted(ctx, c)
+		actx, cancel = context.WithTimeout(ctx, directoryTimeout)
+		err = r.admitted(actx, c)
+		cancel()
 	}
 	if err != nil {
 		c.cancel(err)

@@ -40,6 +40,8 @@ type fakeDir struct {
 	// admittedErr fails Admit and Admitted for a principal, as a store
 	// that cannot be read does.
 	admittedErr map[edgeproto.Principal]error
+	// admittedCalls counts the Admit and Admitted calls for a principal.
+	admittedCalls map[edgeproto.Principal]int
 	// authHook, when set, runs once at the start of the next Authenticate.
 	authHook   func()
 	unenrolled []string
@@ -95,6 +97,7 @@ func (d *fakeDir) Admit(ctx context.Context, serverID string, a edgeproto.Accoun
 func (d *fakeDir) Admitted(_ context.Context, serverID string, a edgeproto.Account) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.admittedCalls[edgeproto.AccountPrincipal(a)]++
 	if err := d.admittedErr[edgeproto.AccountPrincipal(a)]; err != nil {
 		return err
 	}
@@ -291,13 +294,14 @@ func newEnvWith(t *testing.T, budget int64, egress *fakeEgress) *env {
 	port := ts.Listener.Addr().(*net.TCPAddr).Port
 	e := &env{
 		dir: &fakeDir{
-			tokens:   map[string]tokenEntry{},
-			owners:   map[string]bool{},
-			ownerOf:  map[string]edgeproto.Principal{},
-			policies: map[string]edgeproto.AccessPolicy{},
-			blocked:  map[string]bool{},
-			dirs:     map[string][]edgeproto.DirectoryEntry{},
-			pending:  map[string][]edgeproto.AccountDeleted{},
+			tokens:        map[string]tokenEntry{},
+			owners:        map[string]bool{},
+			ownerOf:       map[string]edgeproto.Principal{},
+			policies:      map[string]edgeproto.AccessPolicy{},
+			blocked:       map[string]bool{},
+			dirs:          map[string][]edgeproto.DirectoryEntry{},
+			admittedCalls: map[edgeproto.Principal]int{},
+			pending:       map[string][]edgeproto.AccountDeleted{},
 		},
 		egress:  egress,
 		edgeKey: key,

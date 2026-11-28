@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -133,6 +134,29 @@ func TestOriginsRecordedPerPair(t *testing.T) {
 	got := h.column(t, `SELECT group_concat(signin_origin || ':' || signin_origin_seen, ' ') FROM (SELECT * FROM devices ORDER BY created_at, id)`)
 	if got != testSignin2+":1 "+testSignin+":1" {
 		t.Errorf("devices without an origin next used on %s and through %s record %q, want %s then %s", testSignin2, testRelay, got, testSignin2, testSignin)
+	}
+}
+
+// The relay asks Admitted about connections that are already open. It
+// answers as Admit does and records no reach, which only an admission does.
+func TestAdmittedRecordsNoReach(t *testing.T) {
+	h := newRecordingHarness(t)
+	ctx := context.Background()
+	id := testServerID(t)
+	owner := edgeproto.Account{Provider: edgeproto.ProviderGitHub, Subject: "1", Login: "owner"}
+	h.claim(t, id, "workstation", owner)
+	relay := relayDirectory{h.svc}
+	reach := func() string { return h.column(t, `SELECT COUNT(*) FROM account_reach`) }
+	before := reach()
+	if err := relay.Admitted(ctx, id, owner); err != nil || reach() != before {
+		t.Fatalf("Admitted for the owner = %v, with %s reach records, was %s; want it admitted and nothing recorded", err, reach(), before)
+	}
+	stranger := edgeproto.Account{Provider: edgeproto.ProviderGitHub, Subject: "2", Login: "stranger"}
+	if err := relay.Admitted(ctx, id, stranger); !errors.Is(err, edgeproto.RefusalNotMember) {
+		t.Fatalf("Admitted for a stranger = %v, want %q", err, edgeproto.RefusalNotMember)
+	}
+	if err := relay.Admit(ctx, id, owner); err != nil || reach() == before {
+		t.Fatalf("Admit for the owner = %v, with %s reach records, was %s; want it admitted and its reach recorded", err, reach(), before)
 	}
 }
 

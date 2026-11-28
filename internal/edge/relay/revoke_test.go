@@ -2,7 +2,6 @@ package relay
 
 import (
 	"errors"
-	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -32,6 +31,22 @@ func (e *env) stores(t *testing.T, n int) {
 		defer e.dir.mu.Unlock()
 		return e.dir.dirWrites >= n
 	})
+}
+
+// checked returns a wait for the edge to ask once more whether a may
+// connect, as a pass over the relayed connections does.
+func (e *env) checked(t *testing.T, a edgeproto.Account) func() {
+	t.Helper()
+	calls := func() int {
+		e.dir.mu.Lock()
+		defer e.dir.mu.Unlock()
+		return e.dir.admittedCalls[edgeproto.AccountPrincipal(a)]
+	}
+	before := calls()
+	return func() {
+		t.Helper()
+		eventually(t, "the pass asking about a connection", func() bool { return calls() > before })
+	}
 }
 
 // A member the directory does not name yet stands in for "a later
@@ -149,7 +164,11 @@ func TestClaimConnectionOutlivesTheServerEnrollingAgain(t *testing.T) {
 	client, server := e.connectPath(t, a, edgeproto.ClaimConnectPath(a.id), token)
 
 	enroll(t, e, signer)
+	// The pass runs beside the enrollment and asks nothing about a claim
+	// connection, so there is nothing to wait for but time.
 	roundTrip(t, client, server, "the claim connection after its server enrolled again")
+	time.Sleep(100 * time.Millisecond)
+	roundTrip(t, client, server, "the claim connection a moment later")
 }
 
 // When a server reports that its owner changed or that it has none, the
@@ -171,6 +190,7 @@ func TestFormerOwnerIsCutUnlessTheDirectoryNamesThem(t *testing.T) {
 				}
 				_, token := e.addDevice(t, owner, "dev-owner")
 				client, server := e.connect(t, a, token)
+				passed := e.checked(t, owner)
 
 				if report == "ownerless" {
 					send(t, a.ws, edgeproto.Ownerless{})
@@ -182,16 +202,8 @@ func TestFormerOwnerIsCutUnlessTheDirectoryNamesThem(t *testing.T) {
 						t.Fatalf("transfer answered %+v, want it recorded", got)
 					}
 				}
-				// The answer to a refused transfer follows the end of the
-				// report's handling, the pass over the connections included.
-				e.dir.mu.Lock()
-				e.dir.recordErr = edgeproto.Refusal("refused")
-				e.dir.mu.Unlock()
-				send(t, a.ws, edgeproto.OwnerTransferred{ID: edgeproto.NewConnID(), Owner: heir})
-				if got := next[edgeproto.OwnerTransferResult](t, a); got.Error == "" {
-					t.Fatalf("the second transfer answered %+v, want it refused", got)
-				}
 				if named {
+					passed()
 					roundTrip(t, client, server, "the former owner's connection, a member's still")
 					return
 				}
@@ -201,35 +213,47 @@ func TestFormerOwnerIsCutUnlessTheDirectoryNamesThem(t *testing.T) {
 	}
 }
 
-// A connection whose access the edge cannot check ends, and the pass goes
-// on to the others.
+// A connection whose access the edge cannot check ends, told why, and the
+// pass goes on to the others.
 func TestConnectionTheEdgeCannotCheckIsEnded(t *testing.T) {
 	e := newEnv(t)
-	e.r.directoryInterval = 50 * time.Millisecond
 	a := claimedAgent(t, e)
-	alice, bob := account("1"), account("2")
-	e.dir.addMember(a.id, alice)
-	e.dir.addMember(a.id, bob)
-	_, aliceToken := e.addDevice(t, alice, "alice-laptop")
-	_, bobToken := e.addDevice(t, bob, "bob-laptop")
-	_, bobServer := e.connect(t, a, bobToken)
-	aliceClient, aliceServer := e.connect(t, a, aliceToken)
-
+	alice, bob, carol := account("1"), account("2"), account("3")
+	var entries []edgeproto.DirectoryEntry
+	clients := map[edgeproto.Account]net.Conn{}
+	var aliceServer net.Conn
+	for _, acct := range []edgeproto.Account{alice, bob, carol} {
+		e.dir.addMember(a.id, acct)
+		entries = append(entries, edgeproto.DirectoryEntry{Kind: edgeproto.EntryMember, Provider: acct.Provider, Subject: acct.Subject, Role: "admin"})
+		_, token := e.addDevice(t, acct, "laptop-"+acct.Subject)
+		client, server := e.connect(t, a, token)
+		clients[acct] = client
+		if acct == alice {
+			aliceServer = server
+		}
+	}
+	passed := e.checked(t, alice)
 	e.dir.mu.Lock()
-	e.dir.admittedErr = map[edgeproto.Principal]error{edgeproto.AccountPrincipal(bob): errors.New("store unavailable")}
+	e.dir.admittedErr = map[edgeproto.Principal]error{
+		edgeproto.AccountPrincipal(bob):   errors.New("store unavailable"),
+		edgeproto.AccountPrincipal(carol): errors.New("store unavailable"),
+	}
 	e.dir.mu.Unlock()
-	both := []edgeproto.DirectoryEntry{
-		{Kind: edgeproto.EntryMember, Provider: alice.Provider, Subject: alice.Subject, Role: "admin"},
-		{Kind: edgeproto.EntryMember, Provider: bob.Provider, Subject: bob.Subject, Role: "admin"},
+	send(t, a.ws, edgeproto.Directory{Entries: append(entries, later.Entries...)})
+	for _, acct := range []edgeproto.Account{bob, carol} {
+		_ = clients[acct].SetReadDeadline(time.Now().Add(5 * time.Second))
+		if _, err := clients[acct].Read(make([]byte, 1)); err == nil || !strings.Contains(err.Error(), "could not check this connection's access") {
+			t.Fatalf("a connection the edge could not check read %v; want it closed with the reason", err)
+		}
 	}
-	send(t, a.ws, edgeproto.Directory{Entries: both})
-	_ = bobServer.SetReadDeadline(time.Now().Add(5 * time.Second))
-	if _, err := bobServer.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
-		t.Fatalf("the connection the edge could not check read %v; want it closed", err)
+	passed()
+	roundTrip(t, clients[alice], aliceServer, "a checked member's connection")
+	e.dir.mu.Lock()
+	stores := e.dir.dirWrites
+	e.dir.mu.Unlock()
+	if stores != 1 {
+		t.Fatalf("%d directories stored; want the two closures from one pass", stores)
 	}
-	send(t, a.ws, edgeproto.Directory{Entries: append(both, later.Entries...)})
-	e.stores(t, 2)
-	roundTrip(t, aliceClient, aliceServer, "a checked member's connection")
 }
 
 // A connect the edge admitted before a directory dropped its account
