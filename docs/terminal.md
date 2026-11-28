@@ -157,6 +157,22 @@ eight files per message.
 - If the agent has turned on bracketed paste, the message arrives as one paste
   and Enter follows 200 ms later, so a multi-line message is sent whole and
   once. Otherwise it is typed as written, then Enter.
+- While the agent reports an open question or permission request in its
+  terminal (**Question: answer in the terminal** or **Permission: answer in
+  the terminal** under **Needs you**), a message is **Not sent**: typed
+  there, it would become the answer. The row, the composer,
+  `cloudfield message` and the Slack bot give the reason, `agent prompt was
+  not sent: the agent is waiting for an answer in its terminal; answer it
+  there, then send the message again`. A message refused as you send it stays
+  in the composer as your draft. One that waited for the controller is refused
+  when it is approved or comes due, and its text stays only in its row. If
+  Claude Code's report of an answer is lost, its terminal shows no question
+  and messages stay refused until its main agent finishes a turn: type the
+  message into the terminal to start one. A turn you interrupt, or one that
+  ends as `working in background`, does not end the request.
+  A prompt the agent does not report still gets the message typed into it:
+  Claude Code's permission prompts, and every prompt of an agent without
+  [status reporting](harnesses.md#status-reporting).
 - Standard Codex takes the message through its app-server instead, as a new
   turn when idle or a steer added to the running turn
   ([Codex](harnesses.md#codex)). **Sent** then means Codex accepted it.
@@ -164,7 +180,7 @@ eight files per message.
   message.
 - `cloudfield message <session-id> "<text>"` (or `-` for stdin) prints the receipt:
   `delivered`, `queued for the member in control` with when it is delivered,
-  or the denial reason. `--attach <path>` uploads a file from your computer and
+  or the reason it was denied or not sent. `--attach <path>` uploads a file from your computer and
   sends it with the message. Repeat it for up to eight files, images up to
   8 MiB and other files up to 64 MiB; the text is then optional. A Standard
   agent gets each file as a path in the container, listed under the text.

@@ -173,6 +173,8 @@ func TestKVMGuestWrittenQcow2HeadersStayData(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("save from a root disk over an image took %s", time.Since(start))
+	// Only a session that added files to its cache promotes it.
+	vmRun(t, e, "run-vmdisk-b", "echo more > /aether-cache/more")
 	writeHeader(t, e, "run-vmdisk-b", "cache", qcow2Header(other))
 	promote("run-vmdisk-b", other)
 	layered("run-vmdisk-e", qcow2Header(other))
@@ -202,6 +204,16 @@ func TestKVMGuestWrittenQcow2HeadersStayData(t *testing.T) {
 	}
 	if out, _ := vmRun(t, e, "run-vmdisk-e", "cat /aether-cache/again && echo later > /aether-cache/later && sync"); out != "again\n" {
 		t.Errorf("a VM started again reads %q from its cache, want what it wrote before it stopped", out)
+	}
+	// A session that only reads its cache leaves the pool's newest.
+	layered("run-vmdisk-f", qcow2Header(other))
+	kept := newest()
+	if err = e.stop(t.Context(), "run-vmdisk-f", 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	e.promotions.Wait()
+	if newest() != kept {
+		t.Errorf("a session that added nothing to its cache replaced the pool's newest %s with %s", kept, newest())
 	}
 
 	took = rootSession(t, e, "run-vmdisk-c", fromImage)
