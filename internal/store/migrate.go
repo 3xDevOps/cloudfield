@@ -2748,6 +2748,8 @@ CREATE TABLE launch_intents (
 	idempotency_key TEXT NOT NULL,
 	method          TEXT NOT NULL,
 	params          TEXT NOT NULL,
+	harness         TEXT NOT NULL,
+	task            TEXT NOT NULL,
 	base_commit     TEXT NOT NULL,
 	base_branch     TEXT NOT NULL,
 	base_source     TEXT NOT NULL,
@@ -2758,6 +2760,7 @@ CREATE TABLE launch_intents (
 	state           TEXT NOT NULL CHECK (state IN ('waiting', 'starting', 'started', 'cancelled', 'expired', 'refused')),
 	refusal         TEXT NOT NULL,
 	attempts        INTEGER NOT NULL,
+	failures        INTEGER NOT NULL,
 	passed          INTEGER NOT NULL,
 	created_at      INTEGER NOT NULL,
 	attempted_at    INTEGER NOT NULL,
@@ -2767,6 +2770,8 @@ CREATE UNIQUE INDEX launch_intents_open_key ON launch_intents (member_id, idempo
 	WHERE state IN ('waiting', 'starting') AND idempotency_key <> '';
 CREATE INDEX launch_intents_key ON launch_intents (member_id, idempotency_key);
 CREATE INDEX launch_intents_state ON launch_intents (state, created_at);
+CREATE INDEX launch_intents_ended ON launch_intents (ended_at);
+CREATE INDEX launch_intents_made ON launch_intents (member_id, created_at);
 `,
 }
 

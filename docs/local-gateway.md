@@ -621,7 +621,8 @@ launches nothing. `wait` is not part of what the key fingerprints. A server that
 not know `wait` refuses it as an unknown param, so send it only when
 `server.info` lists the `launch-wait` feature.
 
-`launch.waiting.list` (no params, or `{"id":"<id>"}` for one of any age)
+`launch.waiting.list` (no params, or `{"id":"<id>"}` for one, kept 7 days
+after it ended)
 returns `{"waiting":[...]}`: the caller's launches that wait, and those that
 ended in the last 24 hours `expired`, `refused`, or `cancelled` by someone
 else. `launch.waiting.cancel`

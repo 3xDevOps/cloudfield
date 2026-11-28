@@ -280,7 +280,7 @@ func TestWaitingLaunchesAreCappedPerMember(t *testing.T) {
 		}
 	}
 	if _, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: "one too many", Wait: true}); perr == nil || perr.Code != protocol.CodeUnavailable ||
-		!strings.Contains(perr.Message, "insufficient host memory headroom") || !strings.Contains(perr.Message, "8 launches waiting") {
+		!strings.Contains(perr.Message, "insufficient host memory headroom") || !strings.Contains(perr.Message, "was not kept to wait") || !strings.Contains(perr.Message, "8 launches waiting") {
 		t.Fatalf("a launch past the cap = %v, want the refusal", perr)
 	}
 	_, member := addMember(t, e.testEnv, "Grace", domain.RoleCollaborator, false)
@@ -297,7 +297,7 @@ func TestAWaitingLaunchOfARemovedConnectorDoesNotStart(t *testing.T) {
 		MemberID: e.member.ID, WorkspaceID: e.ws.ID, Method: protocol.MethodRunLaunch,
 		Params: []byte(fmt.Sprintf(`{"workspace_id":%q,"harness":"claude","task":"from a connector"}`, e.ws.ID)),
 		Via:    "ChatGPT", Connector: "con-removed", Refusal: errTestNoRoom.Error(),
-	}, maxWaitingLaunches)
+	}, maxWaitingLaunches, maxDailyWaiting)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestAWaitingLaunchOfARevokedDeviceDoesNotStart(t *testing.T) {
 		MemberID: e.member.ID, WorkspaceID: e.ws.ID, Method: protocol.MethodRunLaunch,
 		Params: []byte(fmt.Sprintf(`{"workspace_id":%q,"harness":"claude","task":"from a device"}`, e.ws.ID)),
 		Device: "dev-gone", Refusal: errTestNoRoom.Error(),
-	}, maxWaitingLaunches)
+	}, maxWaitingLaunches, maxDailyWaiting)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,8 +344,8 @@ func TestAWaitingLaunchSurvivesAFailedTry(t *testing.T) {
 	e.runs.mu.Unlock()
 	now := time.Now().Add(launchRetryEvery)
 	e.srv.startWaitingLaunches(t.Context(), now)
-	if in := e.intent(w.Waiting.ID); in.State != domain.IntentWaiting || !strings.Contains(in.Refusal, "database is locked") {
-		t.Fatalf("after a try that failed on a database error = %+v, want it waiting with the error", in)
+	if in := e.intent(w.Waiting.ID); in.State != domain.IntentWaiting || in.Failures != 1 || !strings.Contains(in.Refusal, "database is locked") {
+		t.Fatalf("after a try that failed on a database error = %+v, want it waiting with the error and one failure counted", in)
 	}
 	if err := e.db.ClaimLaunchIntent(t.Context(), domain.RunID(w.Waiting.ID), now); err != nil {
 		t.Fatal(err)
@@ -376,5 +376,45 @@ func TestALaunchCancelledBySomeoneElseStaysVisible(t *testing.T) {
 	}
 	if list := e.listed(e.member.ID); len(list) != 1 || list[0].State != "cancelled" || !strings.Contains(list[0].Refusal, string(admin.ID)) {
 		t.Fatalf("what the member sees after a super admin's cancel = %+v, want the cancelled launch and who cancelled it", list)
+	}
+}
+
+// A launch whose tries keep failing on something that is not room ends
+// refused with that error after a few, not after a day as if for room.
+func TestAWaitingLaunchThatKeepsFailingEndsRefused(t *testing.T) {
+	e := newWaitEnv(t)
+	w, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: "wait", Wait: true})
+	if perr != nil || w.Waiting == nil {
+		t.Fatalf("launch = %+v, %v", w, perr)
+	}
+	e.runs.mu.Lock()
+	e.runs.noRoom, e.runs.err = nil, errors.New("repo extras: origin is gone")
+	e.runs.mu.Unlock()
+	now := time.Now()
+	for i := range maxLaunchFailures {
+		if in := e.intent(w.Waiting.ID); in.State != domain.IntentWaiting {
+			t.Fatalf("before failing try %d = %+v, want it still waiting", i+1, in)
+		}
+		now = now.Add(launchRetryEvery)
+		e.srv.startWaitingLaunches(t.Context(), now)
+	}
+	if in := e.intent(w.Waiting.ID); in.State != domain.IntentRefused || !strings.Contains(in.Refusal, "origin is gone") || string(in.Params) != "" || in.Task != "wait" {
+		t.Fatalf("after %d failing tries = %+v, want it refused with the error, its request dropped and its task kept", maxLaunchFailures, in)
+	}
+}
+
+// The assistant's launches do not wait: what asked for one is not there to
+// check again when it would start.
+func TestAnAssistantLaunchDoesNotWait(t *testing.T) {
+	e := newWaitEnv(t)
+	raw, err := json.Marshal(protocol.RunLaunchParams{WorkspaceID: string(e.ws.ID), Harness: "claude", Task: "from the assistant", Wait: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, perr := e.srv.AssistantLocal(e.member.ID).Call(t.Context(), protocol.MethodRunLaunch, raw); perr == nil || perr.Code != protocol.CodeUnavailable {
+		t.Fatalf("an assistant launch with no room = %v, want the refusal", perr)
+	}
+	if list := e.listed(e.member.ID); len(list) != 0 {
+		t.Fatalf("waiting launches after an assistant launch = %+v, want none", list)
 	}
 }

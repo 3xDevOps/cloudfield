@@ -341,7 +341,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 			return nil, ErrLaunchesWaiting
 		}
 	}
-	release, err := s.reserveLaunch(ctx, reservedID, opts.Retry)
+	release, err := s.reserveLaunch(ctx, reservedID, opts.Retry, opts.Reclaim)
 	if err != nil {
 		return nil, err
 	}
