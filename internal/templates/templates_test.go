@@ -188,7 +188,7 @@ func TestZonedScheduleLaunchesOnceWhenClocksFallBack(t *testing.T) {
 	scanAt := func(svc *Service, at time.Time) {
 		t.Helper()
 		clock.set(at)
-		if err := svc.scan(ctx, true); err != nil {
+		if err = svc.scan(ctx, true); err != nil {
 			t.Fatalf("scan at %s: %v", at, err)
 		}
 	}
@@ -200,7 +200,7 @@ func TestZonedScheduleLaunchesOnceWhenClocksFallBack(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	clock.set(time.Date(2026, 11, 1, 5, 45, 0, 0, time.UTC))
-	if err := restarted.scan(ctx, false); err != nil {
+	if err = restarted.scan(ctx, false); err != nil {
 		t.Fatalf("seed after restart: %v", err)
 	}
 	scanAt(restarted, time.Date(2026, 11, 1, 6, 0, 10, 0, time.UTC))
