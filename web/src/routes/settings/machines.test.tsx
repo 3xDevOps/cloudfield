@@ -68,10 +68,10 @@ describe('Machines', () => {
   test('a machine short of memory says a launch is refused, why the last ones were, and what was counted', async () => {
     await show(full())
     expect(screen.getByText("Memory is under the launch line and the server's memory stall is at its limit.")).toBeDefined()
-    expect(screen.getByText('2.0 GiB available of 16.0 GiB. A launch needs at least 3.6 GiB available: more while other starts have yet to take theirs, and the wake of a VM saved to disk needs what it saved.')).toBeDefined()
+    expect(screen.getByText('2.0 GiB available of 16.0 GiB. A launch needs more than the launch line while other starts have yet to take theirs, and the wake of a VM saved to disk needs what it saved.')).toBeDefined()
     expect(screen.getByRole('meter', { name: 'Memory available' }).getAttribute('aria-valuetext')).toBe('2.0 GiB free of 16.0 GiB; the launch line is 3.6 GiB')
-    expect(screen.getByText(/12\.5% · at 10%, launches are refused · refusing launches now/)).toBeDefined()
-    expect(screen.getByText('200.0 GiB free of 500.0 GiB. A launch needs at least 29.0 GiB free.')).toBeDefined()
+    expect(screen.getByText(/12\.5% · at 10%, launches are refused/)).toBeDefined()
+    expect(screen.getByText('200.0 GiB free of 500.0 GiB.')).toBeDefined()
     expect(screen.getByText('Frozen by the memory brake').nextElementSibling?.textContent).toBe('1')
     expect(screen.getByText('Asleep on disk').nextElementSibling?.textContent).toBe('5')
     expect(screen.getByText('Asleep with nothing kept').nextElementSibling?.textContent).toBe('1')
@@ -93,7 +93,7 @@ describe('Machines', () => {
     expect([...cells('Wakes refused')].map((td) => td.textContent)).toEqual(['0', '4'])
     expect([...cells('tried by the server itself')].map((td) => td.textContent)).toEqual(['0', '1'])
     expect(screen.getByText('2 VMs of closed sessions still hold memory.')).toBeDefined()
-    expect(screen.getByText('All 7 counters')).toBeDefined()
+    fireEvent.click(screen.getByRole('button', { name: 'All 7 counters' }))
     expect(screen.getByRole('rowheader', { name: 'refusal launch-retry memory' })).toBeDefined()
   })
 
@@ -138,7 +138,7 @@ describe('Machines', () => {
     await show(full({ memory_available_bytes: 12 * gib, server_stall: 0, disks: [], disk_unchecked: true, disk_error: 'runtime: Cannot connect to the Docker daemon' }))
     expect(screen.getByText(/Not checked: the server was started with/)).toBeDefined()
     expect(screen.getByText('runtime: Cannot connect to the Docker daemon')).toBeDefined()
-    expect(screen.getByText('The container or VM runtime could not be measured.')).toBeDefined()
+    expect(screen.getByText('The container or VM runtime could not be asked.')).toBeDefined()
   })
 
   test('a failed read shows the error and reads again on Try again', async () => {
