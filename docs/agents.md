@@ -207,6 +207,16 @@ prints the retry with `--idempotency-key`; that retry returns the same session
 instead of starting another. `cloudfield session - < task.md` reads the task from
 stdin.
 
+When the server has no memory or disk for the session, the command waits:
+the server keeps the launch and starts it when there is room
+([A launch that waits for room](failure-handling.md#a-launch-that-waits-for-room)).
+It prints the server's refusal on stderr, again each time it changes, and
+then the same `session <session-id> running` line on stdout once the session
+exists, so a script that reads stdout or the exit status needs no change.
+Ctrl-C while it waits cancels the launch and exits 130: nothing starts later.
+`--no-wait` fails at once with the refusal instead, as the command did
+before, and so does a server that does not keep launches.
+
 `--linear-issue <url>` links the session to a Linear issue, for example
 `--linear-issue https://linear.app/acme/issue/ENG-123`. Without it, the first
 Linear issue link in the task is used. The link is fixed at launch. A

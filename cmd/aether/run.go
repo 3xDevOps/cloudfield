@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/cli"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
@@ -52,6 +54,7 @@ func runRun(args []string) error {
 	noFallback := fs.Bool("no-fallback", false, noFallbackHelp)
 	children := fs.String("children", "", "subsessions this session's agent may start: on or off for this session only (default: your setting, cloudfield subsessions)")
 	idempotencyKey := fs.String("idempotency-key", "", "the key a failed or interrupted launch printed: the retry returns that launch's session instead of starting another (default: a new key)")
+	noWait := fs.Bool("no-wait", false, "fail at once when the server has no memory or disk for the session, instead of waiting until it has")
 	linearIssue := fs.String("linear-issue", "", "link the session to a Linear issue, https://linear.app/<workspace>/issue/<TEAM>-<number> (default: the first Linear issue link in the task)")
 	var repos stringList
 	fs.Var(&repos, "repo", "also check out this workspace ID or name at /repos/<name> with its own session branch (repeatable)")
@@ -107,19 +110,16 @@ func runRun(args []string) error {
 		if err != nil {
 			return err
 		}
-		if len(repos) > 0 || *permission != "" {
-			var info protocol.ServerInfoResult
-			if err := c.Call(protocol.MethodServerInfo, struct{}{}, &info); err != nil {
-				return err
-			}
-			if len(repos) > 0 && !slices.Contains(info.Features, protocol.FeatureMultiRepo) {
-				return fmt.Errorf("--repo: server %s does not support sessions with several repositories; update the server with aether server update", info.ServerVersion)
-			}
-			if *permission != "" && !slices.Contains(info.Features, protocol.FeaturePermission) {
-				return fmt.Errorf("--permission: server %s runs every agent as root and has no permission tiers; update the server with aether server update", info.ServerVersion)
-			}
+		var info protocol.ServerInfoResult
+		if err := c.Call(protocol.MethodServerInfo, struct{}{}, &info); err != nil {
+			return err
 		}
-		var res protocol.RunLaunchResult
+		if len(repos) > 0 && !slices.Contains(info.Features, protocol.FeatureMultiRepo) {
+			return fmt.Errorf("--repo: server %s does not support sessions with several repositories; update the server with aether server update", info.ServerVersion)
+		}
+		if *permission != "" && !slices.Contains(info.Features, protocol.FeaturePermission) {
+			return fmt.Errorf("--permission: server %s runs every agent as root and has no permission tiers; update the server with aether server update", info.ServerVersion)
+		}
 		params := launchParams(wsID, task, *agent, *mode, *model, *effort, *account, *cachedBase)
 		params.FallbackAccountMemberIDs, params.NoFallback = fallbacks, *noFallback
 		params.Children = *children
@@ -133,7 +133,11 @@ func runRun(args []string) error {
 			}
 			params.ExtraWorkspaceIDs = append(params.ExtraWorkspaceIDs, id)
 		}
-		if err := callInterruptibly(c, protocol.MethodRunLaunch, params, &res); err != nil {
+		// A server that keeps a launch it has no room for is asked to,
+		// unless --no-wait.
+		params.Wait = !*noWait && slices.Contains(info.Features, protocol.FeatureLaunchWait)
+		res, err := launchWaiting(c, params, os.Stderr, waitingLaunchEvery)
+		if err != nil {
 			return launchError(err, params, fromStdin)
 		}
 		if res.Replayed {
@@ -142,6 +146,62 @@ func runRun(args []string) error {
 		fmt.Printf("session %s %s\n", res.Run.ID, res.Run.Status)
 		return nil
 	})
+}
+
+// waitingLaunchEvery is how often a launch the server keeps for want of
+// room is asked after.
+const waitingLaunchEvery = 5 * time.Second
+
+// errWaitCancelled ends a launch that was waiting for room when its command
+// was interrupted: the launch was cancelled and nothing started.
+var errWaitCancelled = errors.New("interrupted")
+
+// launchWaiting launches params. While the server keeps the launch because
+// it has no room, it says why on w, each time the server's refusal changes,
+// and asks again every interval until the session exists or the wait ends.
+// An interrupt cancels a waiting launch: nobody watches for a session that
+// would start hours later.
+func launchWaiting(c *protocol.Client, params protocol.RunLaunchParams, w io.Writer, interval time.Duration) (protocol.RunLaunchResult, error) {
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(interrupt)
+	waiting, said := "", ""
+	cancel := func() error {
+		var ended protocol.LaunchWaiting
+		if err := c.Call(protocol.MethodLaunchWaitingCancel, protocol.LaunchWaitingCancelParams{ID: waiting}, &ended); err != nil {
+			return fmt.Errorf("%w; cancelling the waiting launch %s failed, so it may still start: %w", errInterrupted, waiting, err)
+		}
+		return fmt.Errorf("%w; the launch %s was waiting for room and is cancelled: nothing started", errWaitCancelled, waiting)
+	}
+	for {
+		var res protocol.RunLaunchResult
+		done := make(chan error, 1)
+		go func() { done <- c.Call(protocol.MethodRunLaunch, params, &res) }()
+		select {
+		case err := <-done:
+			if err != nil {
+				return protocol.RunLaunchResult{}, err
+			}
+		case <-interrupt:
+			if waiting != "" {
+				return protocol.RunLaunchResult{}, cancel()
+			}
+			return protocol.RunLaunchResult{}, errInterrupted
+		}
+		if res.Waiting == nil {
+			return res, nil
+		}
+		waiting = res.Waiting.ID
+		if res.Waiting.Refusal != said {
+			said = res.Waiting.Refusal
+			_, _ = fmt.Fprintf(w, "waiting for room on the server, until %s (Ctrl-C cancels the launch; --no-wait fails at once): %s\n", res.Waiting.ExpiresAt, said)
+		}
+		select {
+		case <-time.After(interval):
+		case <-interrupt:
+			return protocol.RunLaunchResult{}, cancel()
+		}
+	}
 }
 
 var errInterrupted = errors.New("interrupted")
@@ -167,6 +227,8 @@ func callInterruptibly(c *protocol.Client, method string, params, result any) er
 func launchError(err error, params protocol.RunLaunchParams, fromStdin bool) error {
 	var rpcErr *protocol.Error
 	switch {
+	case errors.Is(err, errWaitCancelled):
+		return &exitStatusError{code: 130, err: err}
 	case errors.Is(err, errInterrupted):
 		return &exitStatusError{code: 130, err: fmt.Errorf("%w; a launch the server had already accepted keeps starting: aether sessions lists it, and aether kill <session-id> stops it once it is listed.\nto get its session id, or to launch it once if the server had not accepted it, run:\n  %s", errInterrupted, launchCommand(params, fromStdin))}
 	case errors.As(err, &rpcErr):
