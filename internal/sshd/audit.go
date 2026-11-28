@@ -12,6 +12,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/scheduler"
 	"github.com/3xDevOps/cloudfield/internal/store"
 )
 
@@ -105,6 +106,15 @@ func noteWorkspace(ctx context.Context, ws domain.WorkspaceID) {
 // Recording happens after the call took effect, so a store failure is
 // logged rather than turned into the call's error.
 func (s *Server) auditCall(ctx context.Context, member domain.MemberID, method string, params, result json.RawMessage, perr *protocol.Error, changed bool) {
+	// A try of a waiting launch that found no room changed nothing, and
+	// the request that asked for it was recorded.
+	if a := attemptOf(ctx); a != nil && perr != nil && scheduler.IsCapacityRefusal(a.refused) {
+		select {
+		case <-a.created:
+		default:
+			return
+		}
+	}
 	var via, connector, client string
 	switch id, ok := ctx.Value(connIdentityKey{}).(connIdentity); {
 	case ok && id.connector != "":

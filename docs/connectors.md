@@ -394,7 +394,21 @@ ends. The tool then repeats the call with the key to look up the session,
 which does not count as a write call. If the lookup answers within 5 seconds,
 the result has the id, `state: "starting"` and the key; poll `aether_get_session`. If it does not, the result has only `state: "starting"`
 and the key, plus the lookup's `error` when it failed; call the same tool again
-with the same arguments and key to get the id. Without a key, a session launch with
+with the same arguments and key to get the id. A launch the server has no
+memory or disk for is not refused on a server that keeps such launches
+(`server.info` lists `launch-wait`): the result has `state: "waiting"`, the
+key, and `waiting` with the server's refusal and when the wait ends, and no
+session exists yet
+([A launch that waits for room](failure-handling.md#a-launch-that-waits-for-room)).
+Call the same tool again with the same arguments and that key to learn
+whether it started; each such call counts as a write call. A call without a
+key and with the same arguments returns the same waiting launch for as long
+as it waits and this server process runs; after a server restart only the
+key does, and such a call launches a second one. The first call without a
+key after the wait is over returns what became of it and launches nothing:
+its session, whatever that session's state by then, or how it ended. A key
+whose launch ended without a session (`cancelled`, `expired` or `refused`)
+is refused with how it ended and never launches again. A template launch does not wait: it is refused as before. Without a key, a session launch with
 the same workspace, agent, task, mode, model, account, fallback policy and
 extra repositories within 60 seconds returns your earlier session, unless it
 failed, was interrupted or was abandoned, instead

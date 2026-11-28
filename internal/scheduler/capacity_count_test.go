@@ -53,7 +53,7 @@ func TestAMemoryRefusalIsCountedWithWhatIdleSessionsHeld(t *testing.T) {
 
 	// Too little for saving every idle VM to admit a start, so none is saved.
 	mr.setAvailable(100 << 20)
-	_, err := e.sched.reserveLaunch(t.Context(), "run-reserved", false)
+	_, err := e.sched.reserveLaunch(t.Context(), "run-reserved", false, nil)
 	if !errors.Is(err, ErrMemoryPressure) {
 		t.Fatalf("a launch with 100 MiB available = %v, want the memory refusal", err)
 	}
@@ -63,8 +63,10 @@ func TestAMemoryRefusalIsCountedWithWhatIdleSessionsHeld(t *testing.T) {
 	if got != want {
 		t.Fatalf("counted refusal = %+v\nwant %+v", got, want)
 	}
-	if _, err = e.sched.reserveLaunch(t.Context(), "run-reserved", true); !errors.Is(err, ErrMemoryPressure) {
-		t.Fatalf("the launch tried again = %v, want the memory refusal", err)
+	// A refusal for memory frees no disk, so it leaves the allowance to.
+	reclaimed := false
+	if _, err = e.sched.reserveLaunch(t.Context(), "run-reserved", true, func() { reclaimed = true }); !errors.Is(err, ErrMemoryPressure) || reclaimed {
+		t.Fatalf("the launch tried again = %v, reclaimed %v; want the memory refusal and no reclaim", err, reclaimed)
 	}
 	e.counted(t, domain.CapacityRefusal, opLaunchRetry, "memory")
 	e.counted(t, domain.CapacityRefusal, opLaunch, "memory")
@@ -114,5 +116,55 @@ func TestAFreezeIsCountedOncePerShortage(t *testing.T) {
 	e.brake(fr, floor-2)
 	if froze := e.counted(t, domain.CapacityFreeze, "", ""); froze.AvailableBytes != floor-1 || froze.FloorBytes != floor {
 		t.Fatalf("counted freeze = %+v, want one, with the memory that caused it", froze)
+	}
+}
+
+// The session VMs are counted by what they hold of the host, and the count
+// is kept where cloudfield-server status reads it.
+func TestSessionVMsAreCountedByWhatTheyHold(t *testing.T) {
+	t.Parallel()
+	e, fr := newFreezeEnv(t)
+	mr := fr.memoryRuntime
+	paused := e.launchVM(t, mr, "say pong", 1<<30)
+	saved := e.launchVM(t, mr, "say pong", 6<<30)
+	e.launchVM(t, mr, acpmock.PromptWait, 1<<30)
+	e.launchVM(t, mr, acpmock.PromptWait, 1<<30)
+	if got, want := e.sched.VMs(), (domain.VMCounts{Awake: 4}); got != want {
+		t.Fatalf("four running VMs counted as %+v", got)
+	}
+	// The server writes its count where cloudfield-server status reads it.
+	waitFor(t, "the VM count in the store", func() bool {
+		got, at, err := e.db.VMCounts(t.Context())
+		return err == nil && !at.IsZero() && got.Awake == 4
+	})
+	e.pauseIdle(t, paused)
+	e.pauseIdle(t, saved)
+	stopped := e.launchVM(t, mr, "say pong", 1<<30)
+	e.pauseIdle(t, stopped)
+	savedRun, stoppedRun := e.runOf(t, saved), e.runOf(t, stopped)
+	e.sched.mu.Lock()
+	e.sched.runs[savedRun].asleepResident, e.sched.runs[savedRun].asleepSaved = false, true
+	// Asleep with its saved memory reclaimed: nothing is kept.
+	e.sched.runs[stoppedRun].asleepResident, e.sched.runs[stoppedRun].asleepSaved = false, false
+	e.sched.mu.Unlock()
+	floor := memoryFloor(32 << 30)
+	e.brake(fr, 4*floor)
+	e.brake(fr, floor-1)
+	if got, want := e.sched.VMs(), (domain.VMCounts{Frozen: 2, Paused: 1, Saved: 1, Stopped: 1}); got != want {
+		t.Fatalf("VMs = %+v, want %+v", got, want)
+	}
+	// A closed session's VM still in memory is counted as that.
+	e.sched.mu.Lock()
+	e.sched.runs[stoppedRun].retained, e.sched.runs[stoppedRun].asleepResident = true, true
+	e.sched.mu.Unlock()
+	if got, want := e.sched.VMs(), (domain.VMCounts{Frozen: 2, Paused: 1, Saved: 1, Closed: 1}); got != want {
+		t.Fatalf("VMs with a closed session's VM in memory = %+v, want %+v", got, want)
+	}
+	e.sched.mu.Lock()
+	e.sched.runs[stoppedRun].retained, e.sched.runs[stoppedRun].asleepResident = false, false
+	e.sched.mu.Unlock()
+	m := e.sched.Machine(t.Context())
+	if m.MemoryAvailableBytes != floor-1 || m.MemoryFloorBytes != floor || m.MemoryTotalBytes != 32<<30 || m.StartMemoryBytes != startupMemoryBytes {
+		t.Fatalf("machine memory = %+v, want what admission reads", m)
 	}
 }

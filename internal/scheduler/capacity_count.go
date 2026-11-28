@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -40,6 +41,15 @@ type capacityCount struct {
 // deletes older ones.
 const capacityCountsKept = 90 * 24 * time.Hour
 
+// vmCountEvery is how often the session VMs are counted for
+// cloudfield-server status. A count is written when it differs from the
+// last and at least every vmCountKept, so the time on it says a server was
+// running then.
+const (
+	vmCountEvery = 5 * time.Second
+	vmCountKept  = time.Minute
+)
+
 // capacityCountBacklog is how many events may wait for the database. More
 // than that at once are dropped with a warning: counting never holds up
 // what it counts.
@@ -64,11 +74,28 @@ func (s *Scheduler) countCapacityEvents(ctx context.Context, counts store.Capaci
 	if err := counts.PruneCapacityCounts(ctx, time.Now().Add(-capacityCountsKept)); err != nil {
 		slog.Warn("scheduler: capacity: prune old counts", "error", err)
 	}
+	// recorded is the VM count in the store, for cloudfield-server status,
+	// and when it was written; nil until this server wrote one, whatever
+	// an earlier one left.
+	var recorded *domain.VMCounts
+	var recordedAt time.Time
+	vms := time.NewTicker(vmCountEvery)
+	defer vms.Stop()
 	for {
 		var c capacityCount
 		select {
 		case <-ctx.Done():
 			return
+		case now := <-vms.C:
+			if counted := s.VMs(); recorded == nil || counted != *recorded || now.Sub(recordedAt) >= vmCountKept {
+				if err := counts.RecordVMCounts(ctx, counted, now); err != nil {
+					slog.Warn("scheduler: capacity: record the session VM counts", "error", err)
+				}
+				// A failed write is tried again with the next one due, not
+				// every tick.
+				recorded, recordedAt = &counted, now
+			}
+			continue
 		case c = <-s.capacityCounts:
 		}
 		if ctx.Err() != nil {
@@ -135,4 +162,21 @@ func (s *Scheduler) countSave(c memoryCandidate, available, floor uint64) {
 		op = "idle"
 	}
 	s.countCapacity(domain.CapacityEvent{Kind: domain.CapacitySave, Op: op, Run: c.e.runID, AvailableBytes: available, FloorBytes: floor, VMBytes: c.memory}, false)
+}
+
+// passWaitingLaunches counts the launch of run against every launch that
+// waits for room: it got the room first.
+func (s *Scheduler) passWaitingLaunches(ctx context.Context, run domain.RunID) {
+	// Most launches pass nothing: a read, and no write to wait on.
+	if open, err := s.cfg.Store.OpenLaunchIntents(ctx); err == nil && open == 0 {
+		return
+	}
+	passed, err := s.cfg.Store.PassLaunchIntents(ctx)
+	if err != nil {
+		slog.Warn("scheduler: capacity: count the waiting launches a launch passed", "run", run, "error", err)
+		return
+	}
+	if passed > 0 {
+		s.countCapacity(domain.CapacityEvent{Kind: domain.CapacityPass, Op: opLaunch, Run: run, Text: fmt.Sprintf("passed %d waiting launches", passed)}, false)
+	}
 }

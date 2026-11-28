@@ -378,9 +378,16 @@ type fakeRuns struct {
 	// environmentReads lists the workspaces LoginPayer read.
 	environmentReads []domain.WorkspaceID
 	launchOptions    []domain.LaunchOptions
-	paused           map[domain.RunID]bool
-	retentions       map[domain.RunID]scheduler.RetentionInfo
-	retentionErr     error
+	// stalled, when set, holds a launch that admission let in before its
+	// run row is written, as a server killed there does, until stallEnd
+	// closes.
+	stalled  chan<- struct{}
+	stallEnd <-chan struct{}
+	// noRoom, when set, refuses every launch as admission does.
+	noRoom       error
+	paused       map[domain.RunID]bool
+	retentions   map[domain.RunID]scheduler.RetentionInfo
+	retentionErr error
 	// sharedLaunches is what CheckSharedLaunch reports, keyed by
 	// "member:account:harness"; absent means launchable. sharedRefusals is
 	// the refusal it reports with the same key.
@@ -545,10 +552,18 @@ func (f *fakeRuns) AgentSwitchable(_ context.Context, _, _ domain.MemberID, harn
 func (f *fakeRuns) LaunchWithOptions(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode, opts domain.LaunchOptions) (*domain.Run, error) {
 	f.mu.Lock()
 	f.launchOptions = append(f.launchOptions, opts)
-	started, release, admitInto, failAdmitted := f.launchStarted, f.launchRelease, f.admitInto, f.failAdmitted
+	started, release, admitInto, failAdmitted, noRoom, stalled, stallEnd := f.launchStarted, f.launchRelease, f.admitInto, f.failAdmitted, f.noRoom, f.stalled, f.stallEnd
 	f.mu.Unlock()
 	if err := f.record(fmt.Sprintf("launch:%s:%s:%s:%s:%s", workspace, member, task, harness, mode)); err != nil {
 		return nil, err
+	}
+	if noRoom != nil {
+		return nil, noRoom
+	}
+	if stalled != nil {
+		stalled <- struct{}{}
+		<-stallEnd
+		return nil, errors.New("the server was killed")
 	}
 	run := &domain.Run{
 		ID: "run_new", WorkspaceID: workspace, MemberID: member, AccountMemberID: account,
@@ -558,8 +573,15 @@ func (f *fakeRuns) LaunchWithOptions(ctx context.Context, workspace domain.Works
 	if opts.RequestedAccount != account {
 		run.RequestedAccountMemberID = opts.RequestedAccount
 	}
+	if opts.Base != nil {
+		run.BaseCommit, run.BaseSource = opts.Base.Commit, opts.Base.Source
+	}
 	if admitInto != nil {
-		if err := admitInto.CreateRun(ctx, run); err != nil {
+		create := admitInto.CreateRun
+		if opts.Intent {
+			run.ID, create = opts.ReservedRunID, admitInto.CreateRunForIntent
+		}
+		if err := create(ctx, run); err != nil {
 			return nil, err
 		}
 		if opts.Created != nil {
@@ -734,6 +756,14 @@ func (f *fakeRuns) Resume(_ context.Context, run domain.RunID, actor domain.Memb
 
 func (f *fakeRuns) Liveness(domain.RunID) (domain.RunLiveness, bool) {
 	return domain.RunLiveness{}, false
+}
+
+func (f *fakeRuns) Machine(context.Context) scheduler.MachineStatus { return scheduler.MachineStatus{} }
+
+func (f *fakeRuns) VMs() domain.VMCounts { return domain.VMCounts{} }
+
+func (f *fakeRuns) CaptureLaunchBase(context.Context, domain.WorkspaceID, string) (domain.LaunchBase, error) {
+	return domain.LaunchBase{Commit: "0123456789abcdef0123456789abcdef01234567", Source: "local", CheckedAt: time.Now().UTC()}, nil
 }
 
 func (f *fakeRuns) Paused(run domain.RunID) bool {

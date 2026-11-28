@@ -1080,3 +1080,79 @@ func TestConnectorMarkReviewedNeedsReadyRun(t *testing.T) {
 		t.Fatalf("review later = %+v", got)
 	}
 }
+
+// On a server that keeps a launch it has no room for, the launch tool asks
+// it to, says the launch waits with the server's refusal, and repeats to
+// the same waiting launch under its key.
+func TestConnectorLaunchWaitsForRoom(t *testing.T) {
+	f := newFake(t)
+	f.answers[protocol.MethodRunList] = returns(protocol.RunListResult{})
+	waiting := &protocol.LaunchWaiting{ID: "run-w", State: "waiting", Refusal: "scheduler: insufficient host memory headroom: 1 available bytes", ExpiresAt: "2026-11-29T00:00:00Z"}
+	f.answers[protocol.MethodRunLaunch] = returns(protocol.RunLaunchResult{Waiting: waiting})
+	cs := connectorSession(t, f, ScopeWrite)
+	args := map[string]any{"workspace_id": "ws-1", "harness": "claude", "task": "wait for room", "idempotency_key": "k-w"}
+	run(t, cs, "aether_launch_session", args)
+	if got := f.acted(); strings.Contains(got.params, `"wait"`) {
+		t.Fatalf("run.launch to a server without the feature = %s, want no wait", got.params)
+	}
+
+	f.calls = nil
+	f.answers[protocol.MethodServerInfo] = returns(protocol.ServerInfoResult{DashboardURL: "https://aether.example", Features: []string{protocol.FeatureLaunchWait}})
+	text, out := run(t, cs, "aether_launch_session", args)
+	if got := f.acted(); !strings.Contains(got.params, `"wait":true`) || !strings.Contains(got.params, `"idempotency_key":"k-w"`) {
+		t.Fatalf("run.launch = %s, want it to ask to wait under the key", got.params)
+	}
+	if out["state"] != "waiting" || out["idempotency_key"] != "k-w" || out["run_id"] != nil ||
+		!strings.Contains(text, waiting.Refusal) || !strings.Contains(text, "idempotency_key k-w") || !strings.Contains(text, "nothing started") {
+		t.Fatalf("a launch with no room = %q %v; want it waiting, with the refusal and the key to repeat", text, out)
+	}
+
+	// Without a key, a repeat is the same waiting launch, then its session,
+	// and not a second launch.
+	delete(args, "idempotency_key")
+	waiting.ExpiresAt = time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+	f.calls = nil
+	_, out = run(t, cs, "aether_launch_session", args)
+	key, _ := out["idempotency_key"].(string)
+	if out["state"] != "waiting" || key == "" {
+		t.Fatalf("a keyless launch with no room = %v, want it waiting under a derived key", out)
+	}
+	f.calls = nil
+	_, out = run(t, cs, "aether_launch_session", args)
+	if got := f.acted(); out["state"] != "waiting" || !strings.Contains(got.params, key) {
+		t.Fatalf("a keyless repeat of a waiting launch sent %s and got %v, want the first launch's key %s", got.params, out, key)
+	}
+	f.answers[protocol.MethodRunLaunch] = returns(protocol.RunLaunchResult{Run: testRun, Replayed: true})
+	f.calls = nil
+	_, out = run(t, cs, "aether_launch_session", args)
+	if got := f.acted(); out["run_id"] != testRun.ID || out["duplicate"] != true || !strings.Contains(got.params, key) {
+		t.Fatalf("a keyless repeat once it started sent %s and got %v, want the session under the key %s", got.params, out, key)
+	}
+
+	// A key whose launch ended is not offered as a retry.
+	f.errs[protocol.MethodRunLaunch] = &protocol.Error{Code: protocol.CodeUnavailable, Message: `run.launch: the launch under idempotency_key "k-w" waited for room and ended expired: no room; use a new key to launch again`}
+	args["idempotency_key"] = "k-w"
+	text, _, failed := try(t, cs, "aether_launch_session", args)
+	if !failed || !strings.Contains(text, "use a new key") || strings.Contains(text, "retry with idempotency_key") {
+		t.Fatalf("a key whose launch ended = %q, want the server's refusal and no retry with the key", text)
+	}
+
+	// A keyless launch that waited and ended says so once; the call after
+	// that launches again.
+	delete(f.errs, protocol.MethodRunLaunch)
+	delete(args, "idempotency_key")
+	args["task"] = "another task"
+	f.answers[protocol.MethodRunLaunch] = returns(protocol.RunLaunchResult{Waiting: waiting})
+	_, out = run(t, cs, "aether_launch_session", args)
+	key, _ = out["idempotency_key"].(string)
+	f.errs[protocol.MethodRunLaunch] = &protocol.Error{Code: protocol.CodeConflict, Message: `run.launch: the launch under idempotency_key "` + key + `" waited for room and ended cancelled: cancelled by its owner; use a new key to launch again`}
+	if text, _, failed = try(t, cs, "aether_launch_session", args); !failed || !strings.Contains(text, "ended cancelled") || !strings.Contains(text, "launches anew") {
+		t.Fatalf("a keyless repeat of a cancelled launch = %q, want how it ended and that the next call launches", text)
+	}
+	delete(f.errs, protocol.MethodRunLaunch)
+	f.calls = nil
+	run(t, cs, "aether_launch_session", args)
+	if got := f.acted(); strings.Contains(got.params, key) {
+		t.Fatalf("the call after an ended launch sent %s, want a new key, not %s", got.params, key)
+	}
+}

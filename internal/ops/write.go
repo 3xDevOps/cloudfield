@@ -97,7 +97,7 @@ const closeRule = " A stop or close with warnings is refused with them; show the
 var writeOps = []Op{
 	opOf("aether_launch_session", "Launch session", ScopeWrite, false, nextWorkspaces,
 		"Use this when starting an agent on a task or saved template, one call per task; then poll aether_get_session."+
-			idempotencyRule+"without one, a repeat within 60s, or of a template while it starts, returns the first session.", launchRun).
+			idempotencyRule+"without one, a repeat within 60s, of a template while it starts, or of a launch waiting for room, returns the first. state waiting has no session yet: repeat the call.", launchRun).
 		enum("mode", "tui", "headless", "acp").enum("children", "on", "off").
 		enum("permission", string(domain.PermissionRoot), string(domain.PermissionDefault), string(domain.PermissionIsolated)).enum("saved_defaults", savedApply, savedIgnore).hints(false, true).hide(Connector, "reason").
 		waiting().offer(TierConfirmed).calling(protocol.MethodServerInfo, protocol.MethodAccountList, protocol.MethodLaunchDefaultsGet, protocol.MethodAgentList, protocol.MethodRunList,
@@ -156,15 +156,34 @@ func lockLaunches(member string) func() {
 
 // inflight maps a member's keyless launch still in flight, by method and
 // params, to the idempotency key derived for it; an identical keyless call
-// replays that key and gets the same run.
-var inflight sync.Map
+// replays that key and gets the same run. kept does the same for a launch
+// the server keeps waiting for room, until a call finds it no longer waits
+// or its wait is over.
+var inflight, kept sync.Map
+
+// errKept is what done is told, as a keptUntil, when the server keeps the
+// launch waiting.
+var errKept = errors.New("the launch waits for room")
+
+type keptUntil struct{ at time.Time }
+
+func (*keptUntil) Error() string { return errKept.Error() }
+func (*keptUntil) Unwrap() error { return errKept }
+
+// waitEnded is whether err is the server's answer for a key whose launch
+// waited for room and ended without a session.
+func waitEnded(err error) bool {
+	var perr *protocol.Error
+	return errors.As(err, &perr) && strings.Contains(perr.Message, "waited for room and ended")
+}
 
 // keyless gives a launch with no idempotency key one: an identical
 // launch's still in flight (dup is true), else a new one, unless guard,
 // run under the member's lock, finds a recent identical launch (found is
 // true). done ends the in-flight entry when the launch call returns with
 // err, or duplicateWindow later when err leaves unknown whether the launch
-// happened, so a keyless retry meanwhile replays the key.
+// happened, so a keyless retry meanwhile replays the key. Told errKept
+// with the time the wait ends, done keeps the key until then.
 func keyless(member, method string, params any, guard func() (bool, error)) (key string, dup, found bool, done func(error), err error) {
 	defer lockLaunches(member)()
 	b, err := json.Marshal(params)
@@ -175,6 +194,13 @@ func keyless(member, method string, params any, guard func() (bool, error)) (key
 	if k, ok := inflight.Load(fingerprint); ok {
 		return k.(string), true, false, func(error) {}, nil
 	}
+	if k, ok := kept.Load(fingerprint); ok {
+		return k.(string), true, false, func(err error) {
+			if !errors.Is(err, errKept) && (waitEnded(err) || !uncertain(err)) {
+				kept.CompareAndDelete(fingerprint, k)
+			}
+		}, nil
+	}
 	if found, err = guard(); err != nil || found {
 		return "", false, found, nil, err
 	}
@@ -182,6 +208,16 @@ func keyless(member, method string, params any, guard func() (bool, error)) (key
 	inflight.Store(fingerprint, key)
 	return key, false, false, func(err error) {
 		forget := func() { inflight.CompareAndDelete(fingerprint, key) }
+		var wait *keptUntil
+		if errors.As(err, &wait) {
+			// Stored before the in-flight entry goes, so a call between the
+			// two finds one of them.
+			kept.Store(fingerprint, key)
+			// The server ends the wait at its next look after that time.
+			time.AfterFunc(time.Until(wait.at)+time.Minute, func() { kept.CompareAndDelete(fingerprint, key) })
+			forget()
+			return
+		}
 		if uncertain(err) {
 			time.AfterFunc(duplicateWindow, forget)
 			return
@@ -205,11 +241,11 @@ const replayWait = 5 * time.Second
 // that replay failed or is not answered in time either. done runs when the
 // launch call returns. A surface with no budget waits for the launch, since
 // its member may still be deciding whether to approve it.
-func launch[R any](ctx context.Context, c calls, method string, params any, done func(error)) (res R, finished bool, err error) {
+func launch[R any](ctx context.Context, c calls, method string, params any, done func(R, error)) (res R, finished bool, err error) {
 	act := c.act
 	if c.surface.budget() == 0 {
 		err = act(ctx, method, params, &res)
-		done(err)
+		done(res, err)
 		return res, true, err
 	}
 	detached := context.WithoutCancel(ctx)
@@ -217,7 +253,7 @@ func launch[R any](ctx context.Context, c calls, method string, params any, done
 	var launched R
 	go func() {
 		err := act(detached, method, params, &launched)
-		done(err)
+		done(launched, err)
 		first <- err
 	}()
 	select {
@@ -251,6 +287,19 @@ func starting(tool, key string, replayErr error) (string, any, error) {
 		out["error"] = replayErr.Error()
 	}
 	return text, out, nil
+}
+
+// waitingForRoom is the result of a launch the server has no memory or disk
+// for and keeps until it has: no session exists yet, and the same call with
+// the key says whether it started.
+func waitingForRoom(tool, key string, w *protocol.LaunchWaiting) (string, any, error) {
+	next := "call " + tool + " again with the same arguments and idempotency_key " + key
+	// The refusal can carry text the server did not write, such as git's.
+	refusal := strings.Join(strings.Fields(w.Refusal), " ")
+	text := fmt.Sprintf("The server has no room for this launch yet, so nothing started. Its refusal: %s. The launch is waiting and starts by itself when there is room; with none by %s it ends. To see whether it started, %s; a call with another key launches a second one. Its owner can cancel it in the dashboard.",
+		refusal, w.ExpiresAt, next)
+	return text, map[string]any{"state": "waiting", "idempotency_key": key, "write": writePending, "next": next,
+		"waiting": map[string]any{"id": w.ID, "state": w.State, "refusal": w.Refusal, "attempts": w.Attempts, "passed": w.Passed, "created_at": w.CreatedAt, "expires_at": w.ExpiresAt}}, nil
 }
 
 // recentLaunch is the member's run in the workspace, created within
@@ -323,6 +372,8 @@ func launchRun(ctx context.Context, c calls, in connectorLaunchInput) (string, a
 		AccountMemberID: in.AccountMemberID, FallbackAccountMemberIDs: in.FallbackAccountMemberIDs, NoFallback: in.NoFallback,
 		ExtraWorkspaceIDs: in.ExtraWorkspaceIDs, Children: in.Children, Permission: in.Permission, IdempotencyKey: in.IdempotencyKey,
 		LinearIssueURL: in.LinearIssueURL}
+	// A server that keeps a launch it has no room for is asked to.
+	params.Wait = slices.Contains(info.Features, protocol.FeatureLaunchWait)
 	dup, done := false, func(error) {}
 	if params.IdempotencyKey == "" {
 		var prior protocol.Run
@@ -343,9 +394,27 @@ func launchRun(ctx context.Context, c calls, in connectorLaunchInput) (string, a
 				prior.Harness, prior.CreatedAt, prior.ID), out, nil
 		}
 	}
-	res, finished, err := launch[protocol.RunLaunchResult](ctx, c, protocol.MethodRunLaunch, withReason(params, in.Reason, c.surface, fill), done)
+	res, finished, err := launch(ctx, c, protocol.MethodRunLaunch, withReason(params, in.Reason, c.surface, fill), func(res protocol.RunLaunchResult, err error) {
+		if err == nil && res.Waiting != nil {
+			// An unreadable time is the zero time: the key is not kept.
+			at, _ := time.Parse(time.RFC3339, res.Waiting.ExpiresAt)
+			err = &keptUntil{at: at}
+		}
+		done(err)
+	})
+	var ended *protocol.Error
+	if waitEnded(err) && errors.As(err, &ended) {
+		// The key never launches again, so it is not a retry to offer.
+		if in.IdempotencyKey == "" {
+			return "", nil, &protocol.Error{Code: ended.Code, Message: ended.Message + "; this call had no key, so the same call again launches anew"}
+		}
+		return "", nil, err
+	}
 	if err != nil && finished {
 		return "", nil, retryable(savedConflict(err, in.SavedDefaults != savedIgnore, in.IdempotencyKey != ""), params.IdempotencyKey)
+	}
+	if res.Waiting != nil {
+		return waitingForRoom("aether_launch_session", params.IdempotencyKey, res.Waiting)
 	}
 	if res.Run.ID == "" {
 		return starting("aether_launch_session", params.IdempotencyKey, err)

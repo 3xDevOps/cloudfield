@@ -1,0 +1,208 @@
+package store
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/3xDevOps/cloudfield/internal/domain"
+)
+
+func waitingIntent(t *testing.T, db *DB, w *domain.Workspace, m *domain.Member, key string) *domain.LaunchIntent {
+	t.Helper()
+	in, existing, err := db.CreateLaunchIntent(context.Background(), &domain.LaunchIntent{
+		MemberID: m.ID, WorkspaceID: w.ID, IdempotencyKey: key, Method: "run.launch", Params: []byte(`{"task":"wait"}`), Harness: "claude", Task: "wait",
+		Base: domain.LaunchBase{Commit: "0123456789abcdef0123456789abcdef01234567", Branch: "main", Source: "origin", CheckedAt: time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)},
+		Via:  "chatgpt", Refusal: "no room",
+	}, 8, 100)
+	if err != nil || existing {
+		t.Fatalf("CreateLaunchIntent = %+v, existing %v, %v", in, existing, err)
+	}
+	return in
+}
+
+func intentRun(in *domain.LaunchIntent) *domain.Run {
+	return &domain.Run{ID: in.ID, WorkspaceID: in.WorkspaceID, MemberID: in.MemberID, Task: "wait", Harness: "claude", Mode: domain.LaunchTUI, Status: domain.RunQueued}
+}
+
+func TestALaunchIntentKeepsItsRequestAndIsOneToItsKey(t *testing.T) {
+	db := openTestDB(t)
+	ctx := t.Context()
+	w, m := mustCreateWorkspace(t, db), mustCreateMember(t, db)
+	in := waitingIntent(t, db, w, m, "k-1")
+	got, err := db.GetLaunchIntent(ctx, in.ID)
+	if err != nil || got.State != domain.IntentWaiting || got.Base != in.Base || string(got.Params) != `{"task":"wait"}` || got.Via != "chatgpt" || got.Refusal != "no room" || got.IdempotencyKey != "k-1" {
+		t.Fatalf("stored intent = %+v, %v", got, err)
+	}
+	again, existing, err := db.CreateLaunchIntent(ctx, &domain.LaunchIntent{MemberID: m.ID, WorkspaceID: w.ID, IdempotencyKey: "k-1", Method: "run.launch", Params: []byte(`{}`)}, 8, 100)
+	if err != nil || !existing || again.ID != in.ID {
+		t.Fatalf("the same key while it waits = %+v, existing %v, %v; want the same intent", again, existing, err)
+	}
+	// Two with no key are two launches.
+	if a, b := waitingIntent(t, db, w, m, ""), waitingIntent(t, db, w, m, ""); a.ID == b.ID || a.IdempotencyKey != "" {
+		t.Fatalf("two keyless intents = %+v and %+v, want two with no key", a, b)
+	}
+	if _, _, err = db.CreateLaunchIntent(ctx, &domain.LaunchIntent{MemberID: m.ID, WorkspaceID: w.ID, Method: "run.launch", Params: []byte(`{}`)}, 3, 100); !errors.Is(err, ErrTooManyWaiting) {
+		t.Fatalf("a fourth open intent with a cap of three = %v, want ErrTooManyWaiting", err)
+	}
+	if _, _, err = db.CreateLaunchIntent(ctx, &domain.LaunchIntent{MemberID: m.ID, WorkspaceID: w.ID, Method: "run.launch", Params: []byte(`{}`)}, 8, 3); !errors.Is(err, ErrTooManyWaitingToday) {
+		t.Fatalf("a fourth intent in a day with a daily cap of three = %v, want ErrTooManyWaitingToday", err)
+	}
+	by, err := db.LaunchIntentByKey(ctx, m.ID, "k-1")
+	if err != nil || by.ID != in.ID {
+		t.Fatalf("LaunchIntentByKey = %+v, %v", by, err)
+	}
+	list, err := db.LaunchIntents(ctx, "", time.Time{})
+	if err != nil || len(list) != 3 || list[0].ID != in.ID {
+		t.Fatalf("waiting intents = %+v, %v; want the three, the oldest first", list, err)
+	}
+}
+
+// The session of an intent and the intent's start are one write: a session
+// exists exactly when its intent is started, and never for one a cancel
+// reached first.
+func TestAnIntentsSessionAndItsStartAreOneWrite(t *testing.T) {
+	db := openTestDB(t)
+	ctx := t.Context()
+	w, m := mustCreateWorkspace(t, db), mustCreateMember(t, db)
+	in := waitingIntent(t, db, w, m, "k-1")
+	if err := db.CreateRunForIntent(ctx, intentRun(in)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a session for an intent no attempt claimed = %v, want ErrConflict", err)
+	}
+	now := time.Now()
+	if err := db.ClaimLaunchIntent(ctx, in.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ClaimLaunchIntent(ctx, in.ID, now); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a second claim = %v, want ErrConflict: one attempt at a time", err)
+	}
+	if err := db.CreateRunForIntent(ctx, intentRun(in)); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := db.GetLaunchIntent(ctx, in.ID)
+	if run, err := db.GetRun(ctx, in.ID); err != nil || run.MemberID != m.ID || got.State != domain.IntentStarted || got.Attempts != 1 {
+		t.Fatalf("after the start: session %+v, %v, intent %+v", run, err, got)
+	}
+	if err := db.CreateRunForIntent(ctx, intentRun(in)); err == nil {
+		t.Fatal("a second session for a started intent was created")
+	}
+	if err := db.EndLaunchIntent(ctx, in.ID, domain.IntentCancelled, "late", now); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a cancel after the start = %v, want ErrConflict", err)
+	}
+
+	cancelled := waitingIntent(t, db, w, m, "k-2")
+	if err := db.ClaimLaunchIntent(ctx, cancelled.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.EndLaunchIntent(ctx, cancelled.ID, domain.IntentCancelled, "cancelled by its member", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateRunForIntent(ctx, intentRun(cancelled)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a session for an intent cancelled during its attempt = %v, want ErrConflict", err)
+	}
+	if _, err := db.GetRun(ctx, cancelled.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("its session = %v, want none: the insert was undone", err)
+	}
+}
+
+// A server that stopped between an attempt's claim and its end left the
+// intent starting. The next server returns it to waiting, or marks it
+// started when its session exists.
+func TestIntentsLeftStartingAreSettledAfterARestart(t *testing.T) {
+	path := templateDBPath(t)
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	w, m := mustCreateWorkspace(t, db), mustCreateMember(t, db)
+	noSession, withSession, waiting := waitingIntent(t, db, w, m, "k-1"), waitingIntent(t, db, w, m, "k-2"), waitingIntent(t, db, w, m, "k-3")
+	for _, in := range []*domain.LaunchIntent{noSession, withSession} {
+		if err = db.ClaimLaunchIntent(ctx, in.ID, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The session row written, the intent's own update lost: what a crash
+	// could only leave if the two were not one transaction.
+	if err = db.CreateRunWithID(ctx, intentRun(withSession)); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err = db.RecoverLaunchIntents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[domain.RunID]domain.LaunchIntentState{
+		noSession.ID: domain.IntentWaiting, withSession.ID: domain.IntentStarted, waiting.ID: domain.IntentWaiting,
+	} {
+		got, getErr := db.GetLaunchIntent(ctx, id)
+		if getErr != nil || got.State != want {
+			t.Fatalf("intent %s after the restart = %+v, %v; want %s", id, got, getErr, want)
+		}
+	}
+	if got, _ := db.GetLaunchIntent(ctx, noSession.ID); got.Refusal != "no room" || got.Attempts != 1 {
+		t.Fatalf("the intent returned to waiting = %+v, want its refusal and attempt kept", got)
+	}
+	// It can be claimed again, and started once.
+	if err = db.ClaimLaunchIntent(ctx, noSession.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.CreateRunForIntent(ctx, intentRun(noSession)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWaitingIntentsCountTheLaunchesThatPassedThem(t *testing.T) {
+	db := openTestDB(t)
+	ctx := t.Context()
+	w, m := mustCreateWorkspace(t, db), mustCreateMember(t, db)
+	first, claimed := waitingIntent(t, db, w, m, "k-1"), waitingIntent(t, db, w, m, "k-2")
+	if err := db.ClaimLaunchIntent(ctx, claimed.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if n, err := db.PassLaunchIntents(ctx); err != nil || n != 1 {
+			t.Fatalf("PassLaunchIntents = %d, %v; want the one waiting", n, err)
+		}
+	}
+	if got, _ := db.GetLaunchIntent(ctx, first.ID); got.Passed != 2 {
+		t.Fatalf("passed = %d, want 2", got.Passed)
+	}
+	if err := db.ReleaseLaunchIntent(ctx, claimed.ID, "still no room", false); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := db.GetLaunchIntent(ctx, claimed.ID); got.State != domain.IntentWaiting || got.Refusal != "still no room" || got.Passed != 0 {
+		t.Fatalf("released intent = %+v", got)
+	}
+	// An ended intent keeps what it was, not its request; old ones go.
+	now := time.Now()
+	if err := db.EndLaunchIntent(ctx, first.ID, domain.IntentExpired, "no room", now.Add(-8*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.EndLaunchIntent(ctx, claimed.ID, domain.IntentCancelled, "cancelled", now); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := db.GetLaunchIntent(ctx, claimed.ID); string(got.Params) != "" || got.Harness != "claude" || got.Task != "wait" {
+		t.Fatalf("ended intent = %+v, want its request dropped and its agent and task kept", got)
+	}
+	if list, err := db.LaunchIntents(ctx, m.ID, now.Add(-time.Hour)); err != nil || len(list) != 1 || list[0].ID != claimed.ID {
+		t.Fatalf("intents open or ended in the last hour = %+v, %v; want the one just ended", list, err)
+	}
+	if err := db.PruneLaunchIntents(ctx, now.Add(-7*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.GetLaunchIntent(ctx, first.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an intent that ended eight days ago = %v, want it deleted", err)
+	}
+	if n, err := db.OpenLaunchIntents(ctx); err != nil || n != 0 {
+		t.Fatalf("open intents = %d, %v; want none", n, err)
+	}
+}

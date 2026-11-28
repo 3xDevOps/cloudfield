@@ -734,11 +734,69 @@ mirror is failing.
 
 ## What the server did for want of memory or disk
 
+`cloudfield-server status`, run on the server, prints the machine as the
+server measures it before it starts or wakes a session, and what it did when
+it was short:
+
+```sh
+sudo cloudfield-server status
+```
+
+```
+memory   7.3 GiB available of 30.0 GiB; the server keeps 3.0 GiB, and a launch needs at least 0.5 GiB above that
+         (more while other starts have yet to take theirs; the wake of a VM saved to disk needs what it saved)
+stall    the running aether-server unit's cgroup over 60s, which refuses launches: 0.0%, limit 10%
+stall    the host over 10s, which saves session VMs once it lasts 30s: 0.1%, limit 60%
+disk     Cloudfield data filesystem: 122.6 GiB free of 500.0 GiB; the server keeps 20.0 GiB, and a launch needs at least 1.0 GiB above that
+         (the running server also checks the filesystems of its container or VM runtime, which this command does not measure)
+VMs      3 awake, 0 frozen by the memory brake, 2 asleep in memory, 4 asleep on disk, 0 asleep with nothing kept; 1 of closed sessions still in memory
+         (counted by the server 12s ago, at 2026-11-27T23:00:00Z; a running server that can write counts at least every minute)
+last refused launch: 2026-11-27T22:10:03Z, session <run id>
+  scheduler: insufficient host memory headroom: ...
+last refused wake: none in 14 days
+
+counted, in whole hours (UTC)        24 hours    14 days
+refusal launch memory                       2          5
+...
+```
+
+What it measures itself, and so prints while the server cannot answer a
+request: memory, the two stalls and the data filesystem, with the options
+in the config file. A server started before those options changed still
+runs with its own, and the last line of the output says so. The server's
+own stall is read from the cgroup of the running `aether-server` unit and
+is left out when that unit is not running.
+
+What it reads from the database, which it opens for reading only and never
+creates, migrates or changes (SQLite may leave `aether.db-wal` and
+`aether.db-shm` beside it): the session VM counts, the last refusals and the
+counters. What it cannot read it says, `VMs      not read: ...` and
+`history  not read, ...` with the error, after its own measurements. The VM
+counts are the running server's, written when they change and at least
+every minute: an older count means no server has written one since, because
+it is stopped or cannot write. `awake` includes a session a member paused;
+`asleep with nothing kept` is a VM stopped with no saved memory, or one
+still being saved; the last figure is the VMs of closed sessions that can
+still hold memory, until the guard stops them. A wake the server tried by itself is marked on the
+last refused wake. The refusal is admission's text. Under the counters it
+prints the share of the memory in use at memory and stall refusals that
+session VMs idle for over an hour, or closed, held, and the mean and longest wait of the
+waits that ended in a start. The two windows cover whole hours, so "24
+hours" is the current hour and the 24 before it.
+
+`server.capacity` ([local gateway](local-gateway.md)) returns the running
+server's own view to any member: its memory and stalls, every filesystem it
+checks, and its live VM counts. With `--min-free-disk` negative it lists no
+disk and sets `disk_unchecked`; `disk_error` still says when the runtime
+cannot be asked, which refuses every launch and wake. The session a refusal names, and the text of
+a measurement that failed, which can name a path of the host, go to a super
+admin only.
+
 The server counts each time it was short of memory or disk and what it did
 about it, and logs each one:
 
 ```sh
-sudo journalctl -u aether-server | grep -E '(scheduler|subsessions): capacity:'
+sudo journalctl -u aether-server | grep -E '(scheduler|subsessions|launch): capacity:'
 ```
 
 ```
@@ -749,15 +807,16 @@ INFO subsessions: capacity: wait-end op=subsession cause=started run=<run id> wa
 ```
 
 The counts are kept in the database, in table `capacity_counts`, one row
-per hour (UTC) and counter, so they outlast a restart. A server start
-deletes rows older than 90 days. A counter is a `kind`, an `op` and a
-`cause`:
+per hour (UTC) and counter, so they outlast a restart; table `capacity_vms`
+holds the latest VM counts. A server start deletes counter rows older than
+90 days. A counter is a `kind`, an `op` and a `cause`:
 
 | `kind` | Counted when | `op` | `cause` |
 | --- | --- | --- | --- |
-| `refusal` | Admission refused a start for memory or disk | `launch`, `launch-retry` (the server trying a waiting subsession again), `wake`, `wake-auto` (a wake nobody asked for: the memory guard waking a VM it saved while it worked, or the sweep waking a session idle for seven days to close it), `boot` (a stopped VM booted to commit its work), `start` (any other container or VM: a member's environment terminal, an agent sign-in, the assistant's container, a browser, an agent update, a move to another account) | `memory`, `stall`, `disk`, `unknown` (a measurement failed or timed out behind other admissions) |
-| `wait` | A subsession the server had no room for went back to the queue, once for each | `subsession` | |
-| `wait-end` | A subsession that waited stopped waiting | `subsession` | `started`, `refused`, `cancelled` |
+| `refusal` | Admission refused a start for memory or disk | `launch`, `launch-retry` (the server trying a waiting launch or subsession again), `wake`, `wake-auto` (a wake nobody asked for: the memory guard waking a VM it saved while it worked, or the sweep waking a session idle for seven days to close it), `boot` (a stopped VM booted to commit its work), `start` (any other container or VM: a member's environment terminal, an agent sign-in, the assistant's container, a browser, an agent update, a move to another account) | `memory`, `stall`, `disk`, `unknown` (a measurement failed or timed out behind other admissions) |
+| `wait` | A launch or a subsession the server had no room for began to wait, once for each | `launch`, `subsession` | |
+| `wait-end` | One that waited stopped waiting | `launch`, `subsession` | `started`, `refused`, `cancelled`, `expired` (a launch only) |
+| `pass` | A launch was admitted while launches waited for room | `launch` | |
 | `freeze` | The memory brake froze at least one session VM, once each time it engages | | |
 | `save` | The memory guard, or an admission short of memory, saved a session VM to disk | `idle`, `paused` (it was paused in memory), `working`, `closed` (a closed session's VM, stopped and not saved) | |
 
@@ -776,9 +835,9 @@ Each row holds the `count` and the sum of each event's figures, in bytes:
   last five minutes. A sleeping VM counts from when it fell asleep. On a
   server whose sessions are containers it is 0.
 - `vm_bytes`: what a saved VM held.
-- `waited_seconds` and `max_waited_seconds`: the total and the longest time
-  from a subsession's first refusal for room, when its parent was told it
-  waits, to the end of its wait. A subsession held behind a waiting sibling
+- `waited_seconds` and `max_waited_seconds`: the total and the longest
+  wait: for a launch from when it was asked for, for a subsession from its
+  first refusal for room, when its parent was told it waits. A subsession held behind a waiting sibling
   that then starts at its first attempt is not counted.
 - `last_at`, `last_run` and `last_text`: the counter's latest event, with
   the refusal as its caller got it.
@@ -802,6 +861,72 @@ to the database from a queue of 256. One that finds the queue full is
 logged (`not counted, ...`) and not counted, and a server that stops can
 leave its last events uncounted. A subsession's `wait` and `wait-end` are written by the subsession
 service itself, after its state changed and outside the launch lock.
+
+## A launch that waits for room
+
+A launch the server has no memory or disk for is refused with the reason,
+such as `scheduler: insufficient host memory headroom: ...`. A client that
+sends `wait` with `run.launch` has it kept instead: the launch waits and the
+server starts it when there is room. A wake of a sleeping session never
+waits: it stays asleep with the refusal shown. Nor does a launch the
+built-in assistant makes: what asked for it, a connector or a device behind
+the assistant's turn, could not be checked again when it started.
+
+- **What is kept.** The request as its member sent it, the workspace's base commit captured
+  when it began to wait, and a session ID reserved for it. Extra
+  repositories are captured when it starts.
+  It is not a session: nothing can message, wake or report to that ID, and
+  it holds no slot, until it has started.
+- **When it is tried.** The oldest waiting launch is tried every 30 seconds,
+  and within 5 seconds of a session ending, falling asleep or being
+  deleted,
+  so room that appears is offered to waiting launches first. When one's session exists,
+  the next is tried in the same pass, without waiting for the first to
+  finish provisioning. A try refused for disk may free some as a launch
+  somebody asks for does, once in ten minutes
+  ([Recover from disk pressure](#recover-from-disk-pressure)); the others
+  leave what closed and sleeping sessions keep alone.
+- **What a try checks.** Everything a fresh launch checks, at that moment
+  and as its member: membership and role, access to the workspace, the
+  account and whether it is still shared, the agent's login, the budget.
+  What admitted the request must still admit it: a launch asked for from an
+  edge device is tried only while that device is admitted, and one asked
+  for through a connector as that connector, with the grant and scopes it
+  has then. A launch that fails a check ends `refused` with that error. A
+  try that fails on something that may pass, such as a database read or a
+  repository that cannot be reached, leaves it waiting; the fifth such try
+  in a row ends it `refused` with that error.
+- **Order.** Oldest first. Every launch needs the same room, so the oldest
+  never holds up one that would fit. A launch that asks to wait while others
+  wait goes behind them without a try of its own, and is tried within 5
+  seconds. A launch that does not ask
+  to wait, a subsession and a wake are admitted as before and can take room
+  a waiting launch was about to get; each such launch or subsession, not a
+  wake, is counted against every waiting one (`passed`).
+- **How it ends.** It becomes its session, in one database transaction with
+  the session's row; or its member cancels it; or it finds no room for 24
+  hours and ends `expired` with the last refusal; or a check refuses it; or
+  a super admin cancels it. An ending its member did not choose is pushed
+  to their devices and stays in `launch.waiting.list` for a day. A launch
+  that ended keeps its agent and the first 200 bytes of its task, not its
+  request, and answers its idempotency key for 7 days.
+- **Limits.** One member may have 8 launches waiting, and 200 that waited
+  in the last 24 hours; `run.launch` has no size limit of its own, and a
+  request over 64 KiB is not kept. A launch past a limit is refused as it
+  was before launches could wait, with `-32004` and the server's refusal,
+  followed by which limit it met and the figure: for example `this launch
+  was not kept to wait: you already have 8 launches waiting for room, the
+  most one member may have`.
+- **What removes it.** Deleting its workspace or its member deletes their
+  waiting launches with them.
+- **A restart.** A waiting launch is in the database and waits on. One the
+  server was trying when it stopped goes back to waiting, unless its session
+  exists.
+
+They are counted with the capacity counters below: `wait` and `wait-end`
+with `op` `launch` (causes `started`, `cancelled`, `expired`, `refused`, and
+how long it waited since it was asked for), and `pass` for each launch
+admitted while others waited.
 
 ## Where a launch or a wake spends its time
 

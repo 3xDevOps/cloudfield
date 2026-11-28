@@ -242,6 +242,7 @@ type Store interface {
 	RunLimitStore
 	CloseCheckStore
 	CapacityStore
+	LaunchIntentStore
 
 	Close() error
 }
