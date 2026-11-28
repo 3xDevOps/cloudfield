@@ -128,6 +128,20 @@ func TestALaunchWithNoRoomWaitsAndStartsOnce(t *testing.T) {
 	if err != nil || in.State != domain.IntentStarted || run.MemberID != e.member.ID || run.Task != "wait" || run.BaseCommit != in.Base.Commit {
 		t.Fatalf("once there is room: intent %+v, session %+v, %v; want it started as that session from the kept base", in, run, err)
 	}
+	if receipt, _, err := e.db.LaunchReceipt(t.Context(), e.member.ID, "k-1"); err != nil || receipt != in.ID {
+		t.Fatalf("the key's receipt after the start = %q, %v; want the session", receipt, err)
+	}
+	counts, err := e.db.CapacityCounts(t.Context(), time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	counted := map[string]int64{}
+	for _, c := range counts {
+		counted[c.Kind+" "+c.Op+" "+c.Cause] += c.Count
+	}
+	if counted["wait launch "] != 1 || counted["wait-end launch started"] != 1 || len(counted) != 2 {
+		t.Fatalf("counted = %v, want one wait and one wait that ended in a start", counted)
+	}
 	opts := e.runs.launchOptions[len(e.runs.launchOptions)-1]
 	if !opts.Intent || opts.ReservedRunID != in.ID || !opts.Retry || opts.Queue || opts.Base == nil {
 		t.Fatalf("the start's options = %+v, want the intent's ID, its base, and a retry", opts)

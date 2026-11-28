@@ -36,7 +36,7 @@ type LaunchIntentStore interface {
 	// started, with why. ErrConflict when it is not open.
 	EndLaunchIntent(ctx context.Context, id domain.RunID, to domain.LaunchIntentState, reason string, at time.Time) error
 	// CreateRunForIntent creates the intent's session and marks the intent
-	// started in one transaction, completing its launch receipt.
+	// started in one transaction.
 	// ErrConflict, with nothing written, when the intent is not starting.
 	CreateRunForIntent(ctx context.Context, r *domain.Run) error
 	// RecoverLaunchIntents settles the intents a stopped server left
@@ -201,11 +201,6 @@ func (d *DB) CreateRunForIntent(ctx context.Context, r *domain.Run) error {
 		}
 		if n, err := res.RowsAffected(); err != nil || n != 1 {
 			return fmt.Errorf("%w: launch %s is no longer starting", ErrConflict, r.ID)
-		}
-		// The receipt answers a retry of the request with this session.
-		if _, err := tx.ExecContext(ctx, `UPDATE run_launch_receipts SET run_id = ?1 WHERE run_id = '' AND (member_id, idempotency_key) IN
-			(SELECT member_id, idempotency_key FROM launch_intents WHERE id = ?1)`, r.ID); err != nil {
-			return fmt.Errorf("complete the launch receipt: %w", err)
 		}
 		return nil
 	})
