@@ -4,15 +4,18 @@ import (
 	"bytes"
 	"crypto/rand"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/3xDevOps/cloudfield/internal/cli"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/shellquote"
 	"golang.org/x/term"
 )
 
@@ -21,25 +24,66 @@ const loginExitMark = "aether-login-exit"
 var loginExitLine = regexp.MustCompile(`^` + loginExitMark + ` ([0-9]+)$`)
 
 func agentLogin(args []string) error {
-	if len(args) != 1 || args[0] == "" || args[0][0] == '-' {
-		return errors.New("usage: cloudfield agent login <name>")
+	const usage = "usage: cloudfield agent login <name> [--as <login> | --attach <login-id>]"
+	fs := newFlagSet("agent login")
+	as := fs.String("as", "", "add another login of the agent under this name instead of signing in its default login (Claude Code only; cloudfield agent logins lists them)")
+	attach := fs.String("attach", "", "return to the sign-in of a login --as started and did not finish, by the login id it printed")
+	name, err := parseLeadingArg(fs, args)
+	if err != nil {
+		return fmt.Errorf("%w\n%s", err, usage)
+	}
+	if name == "" || name[0] == '-' || slices.Contains(args, "--") {
+		return errors.New(usage)
+	}
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+	adding, attaching := given["as"], given["attach"]
+	switch {
+	case adding && attaching:
+		return errors.New("--as starts a sign-in and --attach returns to one; give one of them")
+	case adding && *as == "":
+		return errors.New("--as needs a name: cloudfield agent login " + shellquote.Quote(name) + " --as <name>")
+	case attaching && *attach == "":
+		return errors.New("--attach needs the login id cloudfield agent login " + shellquote.Quote(name) + " --as printed")
+	case (adding || attaching) && name != addedLoginsAgent:
+		return fmt.Errorf("only Claude Code keeps added logins, so %s has none; cloudfield agent login %s signs in its one login", name, shellquote.Quote(name))
+	}
+	added := ""
+	switch {
+	case adding:
+		added = "--as"
+	case attaching:
+		added = "--attach"
 	}
 	var agent protocol.AgentInfo
 	found := false
 	if err := withControl(func(c *protocol.Client) error {
 		var err error
-		agent, found, err = lookupAgent(c, args[0])
+		agent, found, err = loginAgent(c, name, added)
 		return err
 	}); err != nil {
 		return err
 	}
 	switch {
 	case !found:
-		return fmt.Errorf("no agent %q; aether agent list shows yours", args[0])
+		return fmt.Errorf("no agent %q; aether agent list shows yours", name)
 	case agent.LoginCommand == "":
 		return fmt.Errorf("agent %s has no sign-in command Cloudfield knows; run its own login in aether terminal", agent.Name)
 	case !agent.Installed:
 		return fmt.Errorf("agent %s is not installed in your environment; run aether agent add %s first", agent.Name, agent.Name)
+	}
+	if adding || attaching {
+		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			command := signInCommand(agent.Name, "--as", *as)
+			if attaching {
+				command = attachCommand(agent.Name, *attach)
+			}
+			return fmt.Errorf("%s signs in with %s, which needs typed input, so it needs a terminal. The human runs this in their own terminal:\n  %s", agent.Name, agent.LoginCommand, command)
+		}
+		if attaching {
+			return attachLogin(os.Stdout, agent, *attach)
+		}
+		return addLogin(os.Stdout, agent, *as)
 	}
 	if term.IsTerminal(int(os.Stdin.Fd())) {
 		return typeInTerminal(agent.LoginCommand)
@@ -50,6 +94,24 @@ func agentLogin(args []string) error {
 			"An API key stored as a workspace secret works instead: docs/harnesses.md#use-an-api-key", agent.Name, agent.LoginCommand, agent.Name)
 	}
 	return deviceLogin(os.Stdout, agent)
+}
+
+// loginAgent looks up the agent to sign in. The sign-in of an added login,
+// asked for by the flag added, needs a server that keeps added logins: an
+// older one ignores the login in the terminal request and opens the
+// member's own terminal, where a code typed would sign in the default
+// login.
+func loginAgent(c *protocol.Client, name, added string) (protocol.AgentInfo, bool, error) {
+	if added != "" {
+		var info protocol.ServerInfoResult
+		if err := c.Call(protocol.MethodServerInfo, struct{}{}, &info); err != nil {
+			return protocol.AgentInfo{}, false, err
+		}
+		if err := requireLogins(info, added); err != nil {
+			return protocol.AgentInfo{}, false, err
+		}
+	}
+	return lookupAgent(c, name)
 }
 
 // deviceLogin runs the sign-in in a new tab each time: a tab found by name

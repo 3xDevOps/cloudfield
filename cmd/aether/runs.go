@@ -86,6 +86,11 @@ type runView struct {
 	OldestUnackedAt    *string                  `json:"oldest_unacked_at,omitempty"`
 	WaitConditions     []protocol.WaitCondition `json:"wait_conditions,omitempty"`
 	ControllerMemberID string                   `json:"controller_member_id,omitempty"`
+	// AccountLogin is the added login the session spends; empty on the
+	// default login, and AccountLoginName empty once the login is removed.
+	AccountLogin       string `json:"account_login,omitempty"`
+	AccountLoginName   string `json:"account_login_name,omitempty"`
+	AccountLoginPerUse bool   `json:"account_login_per_use,omitempty"`
 }
 
 // pendingInput.Options are those aether answer accepts; a standard run's
@@ -110,6 +115,7 @@ func viewOf(r protocol.Run, workspace string, items []protocol.AttentionItem, re
 		ParentRunID: r.ParentRunID, RootRunID: r.RootRunID, ChildPurpose: r.ChildPurpose, Detached: r.Detached, Children: r.Children,
 		UnackedMessages: r.UnackedMessages, OldestUnackedAt: r.OldestUnackedAt,
 		WaitConditions: r.WaitConditions, ControllerMemberID: r.ControllerMemberID,
+		AccountLogin: r.AccountLogin, AccountLoginName: r.AccountLoginName, AccountLoginPerUse: r.AccountLoginPerUse,
 	}
 	offered := map[string][]protocol.AttentionOption{}
 	for _, it := range items {
@@ -274,6 +280,16 @@ func printRunView(w io.Writer, v runView, items []protocol.AttentionItem, contro
 	for _, wc := range v.WaitConditions {
 		_, _ = fmt.Fprintf(tw, "until\t%s %s %s\n", wc.ID, wc.Spec, cmp.Or(wc.Outcome, wc.State))
 	}
+	if v.AccountLogin != "" {
+		login := v.AccountLogin
+		if v.AccountLoginName != "" {
+			login = v.AccountLoginName + " (" + v.AccountLogin + ")"
+		}
+		if v.AccountLoginPerUse {
+			login += ", billed per use"
+		}
+		_, _ = fmt.Fprintf(tw, "login\t%s\n", login)
+	}
 	if v.Report != nil {
 		_, _ = fmt.Fprintf(tw, "report\t%s: %s\n", v.Report.Outcome, printable(v.Report.Summary))
 	}
@@ -379,6 +395,12 @@ func renderRuns(w, stderr io.Writer, runs []protocol.Run, memberName func(string
 		title = printable(strings.ReplaceAll(title, "\n", " "))
 		task := printable(strings.ReplaceAll(r.Task, "\n", " "))
 		account := memberName(r.AccountMemberID)
+		if r.AccountLogin != "" {
+			account += ", login " + cmp.Or(r.AccountLoginName, r.AccountLogin)
+		}
+		if r.AccountLoginPerUse {
+			account += ", billed per use"
+		}
 		if r.RequestedAccountMemberID != "" {
 			account += " (fallback)"
 		}
@@ -473,7 +495,7 @@ func runRuns(args []string) error {
 	fs := newFlagSet("sessions")
 	onlyNeedsYou := fs.Bool("needs-you", false, "list only sessions that need a member (state needs-you or disconnected, or an unseen failure; never paused, never a finished session awaiting review), then on stderr what each needs from you with the command that answers it, or that it waits on another member")
 	archived := fs.Bool("archived", false, "list only archived sessions")
-	asJSON := fs.Bool("json", false, "print a JSON array, or with a session id one JSON object: id, workspace_id, workspace, status, state, reason, pending_inputs, branch, report, agent, mode, parent_run_id, unacked_messages, wait_conditions, controller_member_id")
+	asJSON := fs.Bool("json", false, "print a JSON array, or with a session id one JSON object: id, workspace_id, workspace, status, state, reason, pending_inputs, branch, report, agent, mode, parent_run_id, unacked_messages, wait_conditions, controller_member_id, and on an added login account_login, account_login_name, account_login_per_use")
 	runID := ""
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		runID, args = args[0], args[1:]

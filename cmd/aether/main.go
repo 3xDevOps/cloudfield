@@ -184,6 +184,9 @@ func writeHelp(w io.Writer, c command, path string, flags *flag.FlagSet) error {
 	if examples := linesFor(c.example, path); len(examples) > 0 {
 		b.WriteString("\nexample:\n  " + strings.Join(examples, "\n  ") + "\n")
 	}
+	if guide := c.guides[path]; guide != "" {
+		b.WriteString("\nGuide: " + guide + "\n")
+	}
 	_, err := io.WriteString(w, b.String())
 	return err
 }

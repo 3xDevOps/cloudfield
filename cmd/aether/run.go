@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -53,6 +54,7 @@ func runRun(args []string) error {
 	permission := fs.String("permission", "", "root, default or isolated: root lets sudo run without asking, default asks you before each sudo, isolated keeps every change outside the checkout to the session (default: default)")
 	workspace := fs.String("workspace", "", "workspace ID or name (default: the only workspace)")
 	account := fs.String("account", "", "member ID whose shared agent account to use")
+	login := fs.String("login", "", "one of your own logins of the agent to launch on, by name or id; default is the login in your home, and cloudfield agent logins lists the others (default: your first login the order and its switches allow)")
 	template := fs.String("template", "", "launch a saved task template instead of a prompt")
 	cachedBase := fs.String("cached-base", "", "retry a launch from an exact accepted base commit")
 	fallbackOrder := fs.String("fallback", "", fallbackHelp)
@@ -74,12 +76,31 @@ func runRun(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	loginGiven := false
+	fs.Visit(func(f *flag.Flag) { loginGiven = loginGiven || f.Name == "login" })
+	if loginGiven && *login == "" {
+		return errors.New("--login needs a name: cloudfield agent logins lists yours")
+	}
+	rest := fs.Args()
+	if task == "" && len(rest) > 0 {
+		rest = rest[1:]
+	}
+	if i := slices.IndexFunc(rest, func(arg string) bool {
+		name, _, _ := strings.Cut(arg, "=")
+		return name == "--login" || name == "-login"
+	}); i >= 0 {
+		stop := fs.Arg(0)
+		if parsed := len(args) - fs.NArg(); parsed > 0 && args[parsed-1] == "--" {
+			stop = "--"
+		}
+		return fmt.Errorf("%s comes after %q, where cloudfield session reads no more flags, so it would be ignored; give it before %q", rest[i], stop, stop)
+	}
 	if task == "" && fs.NArg() == 1 {
 		task = fs.Arg(0)
 	}
 	if *template != "" {
-		if task != "" || *agent != "" || *model != "" || *effort != "" || *permission != "" || *account != "" || *cachedBase != "" || *fallbackOrder != "" || *noFallback || len(repos) > 0 || *idempotencyKey != "" || *children != "" || *linearIssue != "" {
-			return fmt.Errorf("--template launches a saved definition: drop the task prompt, --agent, --model, --effort, --permission, --account, --cached-base, --fallback, --no-fallback, --repo, --children, --linear-issue, and --idempotency-key")
+		if task != "" || *agent != "" || *model != "" || *effort != "" || *permission != "" || *account != "" || *login != "" || *cachedBase != "" || *fallbackOrder != "" || *noFallback || len(repos) > 0 || *idempotencyKey != "" || *children != "" || *linearIssue != "" {
+			return fmt.Errorf("--template launches a saved definition: drop the task prompt, --agent, --model, --effort, --permission, --account, --login, --cached-base, --fallback, --no-fallback, --repo, --children, --linear-issue, and --idempotency-key")
 		}
 		return launchTemplate(*workspace, *template, params)
 	}
@@ -98,7 +119,7 @@ func runRun(args []string) error {
 		return fmt.Errorf("invalid --children %q: want on or off", *children)
 	}
 	if *agent == "" || fs.NArg() > 1 || (task == "" && *mode == "headless") {
-		return fmt.Errorf("usage: cloudfield session [\"task\"|-] --agent <name> [--mode standard|enhanced|background] [--model <model>] [--effort <level>] [--permission root|default|isolated] [--workspace] [--account <member-id>] [--fallback <member-id>,... | --no-fallback] [--cached-base <full-sha>] [--repo <workspace> ...] [--children on|off] [--linear-issue <url>] [--idempotency-key <key>]\n   (a task is required with --mode background; - reads it from stdin)\n   or: cloudfield session --template <name> [--param k=v] [--workspace]\n   or: cloudfield session switch <session-id> --mode standard|enhanced\n   or: cloudfield session set <session-id> [--model <model>] [--effort <level>]")
+		return fmt.Errorf("usage: cloudfield session [\"task\"|-] --agent <name> [--mode standard|enhanced|background] [--model <model>] [--effort <level>] [--permission root|default|isolated] [--workspace] [--account <member-id>] [--login <name>] [--fallback <member-id>,... | --no-fallback] [--cached-base <full-sha>] [--repo <workspace> ...] [--children on|off] [--linear-issue <url>] [--idempotency-key <key>]\n   (a task is required with --mode background; - reads it from stdin)\n   or: cloudfield session --template <name> [--param k=v] [--workspace]\n   or: cloudfield session switch <session-id> --mode standard|enhanced\n   or: cloudfield session set <session-id> [--model <model>] [--effort <level>]")
 	}
 	fromStdin := task == "-"
 	task, err = stdinText(task, "task", os.Stdin)
@@ -114,8 +135,8 @@ func runRun(args []string) error {
 		if err != nil {
 			return err
 		}
-		if len(repos) > 0 || *permission != "" {
-			var info protocol.ServerInfoResult
+		var info protocol.ServerInfoResult
+		if len(repos) > 0 || *permission != "" || *login != "" {
 			if err := c.Call(protocol.MethodServerInfo, struct{}{}, &info); err != nil {
 				return err
 			}
@@ -125,10 +146,22 @@ func runRun(args []string) error {
 			if *permission != "" && !slices.Contains(info.Features, protocol.FeaturePermission) {
 				return fmt.Errorf("--permission: server %s runs every agent as root and has no permission tiers; update the server with aether server update", info.ServerVersion)
 			}
+			if *login != "" {
+				if err := requireLogins(info, "--login"); err != nil {
+					return err
+				}
+			}
 		}
 		var res protocol.RunLaunchResult
 		params := launchParams(wsID, task, *agent, *mode, *model, *effort, *account, *cachedBase)
 		params.FallbackAccountMemberIDs, params.NoFallback = fallbacks, *noFallback
+		if *login != "" {
+			id, err := launchLogin(c, info.Member.ID, *agent, *account, *login)
+			if err != nil {
+				return err
+			}
+			params.Login = id
+		}
 		params.Children = *children
 		params.Permission = *permission
 		params.LinearIssueURL = *linearIssue
@@ -147,6 +180,7 @@ func runRun(args []string) error {
 			_, _ = fmt.Fprintf(os.Stderr, "idempotency key %s already launched session %s; nothing new was launched\n", params.IdempotencyKey, res.Run.ID)
 		}
 		fmt.Printf("session %s %s\n", res.Run.ID, res.Run.Status)
+		printLanded(c, res, *login)
 		return nil
 	})
 }
@@ -156,11 +190,16 @@ var errInterrupted = errors.New("interrupted")
 // The server finishes a call the user interrupts, except a launch it had
 // not yet admitted, so callInterruptibly does not wait for it.
 func callInterruptibly(c *protocol.Client, method string, params, result any) error {
+	return interruptibly(func() error { return c.Call(method, params, result) })
+}
+
+// interruptibly returns errInterrupted on Ctrl-C without waiting for fn.
+func interruptibly(fn func() error) error {
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(interrupt)
 	done := make(chan error, 1)
-	go func() { done <- c.Call(method, params, result) }()
+	go func() { done <- fn() }()
 	select {
 	case err := <-done:
 		return err
@@ -202,6 +241,9 @@ func launchCommand(params protocol.RunLaunchParams, fromStdin bool) string {
 	args = append(args, "--workspace", shellquote.Quote(params.WorkspaceID))
 	if params.AccountMemberID != "" {
 		args = append(args, "--account", shellquote.Quote(params.AccountMemberID))
+	}
+	if params.Login != "" {
+		args = append(args, "--login", shellquote.Quote(params.Login))
 	}
 	if len(params.FallbackAccountMemberIDs) > 0 {
 		args = append(args, "--fallback", shellquote.Quote(strings.Join(params.FallbackAccountMemberIDs, ",")))

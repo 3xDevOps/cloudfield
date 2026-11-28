@@ -341,3 +341,59 @@ func TestASubsessionOutcomeReadsAsItsParents(t *testing.T) {
 		t.Error("a subsession's failure needs someone")
 	}
 }
+
+func TestRenderRunsNamesTheLoginASessionIsOn(t *testing.T) {
+	runs := []protocol.Run{
+		{ID: "r1", Status: "running", Activity: "working", Harness: "claude", MemberID: "m1", AccountMemberID: "m1", AccountLogin: "lgn-test1", AccountLoginName: "work", Title: "On work", Task: "one"},
+		{ID: "r2", Status: "running", Activity: "working", Harness: "claude", MemberID: "m1", AccountMemberID: "m1", AccountLogin: "lgn-test2", Title: "Removed", Task: "two"},
+		{ID: "r3", Status: "running", Activity: "working", Harness: "claude", MemberID: "m1", AccountMemberID: "m1", Title: "Default", Task: "three"},
+	}
+	var buf bytes.Buffer
+	if err := renderRuns(&buf, io.Discard, runs, func(id string) string { return id }, map[string]string{}, nil, false, false); err != nil {
+		t.Fatal(err)
+	}
+	want := "ID  STATUS   AGENT   MODE  MEMBER  ACCOUNT              PARENT  MAIL  OVERLAP  TITLE    TASK\n" +
+		"r1  Working  claude        m1      m1, login work                              On work  one\n" +
+		"r2  Working  claude        m1      m1, login lgn-test2                         Removed  two\n" +
+		"r3  Working  claude        m1      m1                                          Default  three\n"
+	if buf.String() != want {
+		t.Errorf("renderRuns =\n%s\nwant\n%s", buf.String(), want)
+	}
+}
+
+func TestRunViewCarriesTheLoginASessionIsOn(t *testing.T) {
+	for _, tc := range []struct {
+		run  protocol.Run
+		json map[string]any
+		line string
+	}{
+		{protocol.Run{ID: "r1", Status: "running", AccountMemberID: "m1", AccountLogin: "lgn-test1", AccountLoginName: "console", AccountLoginPerUse: true},
+			map[string]any{"account_login": "lgn-test1", "account_login_name": "console", "account_login_per_use": true},
+			"login      console (lgn-test1), billed per use\n"},
+		{protocol.Run{ID: "r2", Status: "running", AccountMemberID: "m1", AccountLogin: "lgn-test2"},
+			map[string]any{"account_login": "lgn-test2"},
+			"login      lgn-test2\n"},
+	} {
+		v := viewOf(tc.run, "demo", nil, nil)
+		var buf bytes.Buffer
+		if err := writeJSON(&buf, v); err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		for k, want := range tc.json {
+			if got[k] != want {
+				t.Errorf("sessions %s --json %s = %v, want %v", tc.run.ID, k, got[k], want)
+			}
+		}
+		buf.Reset()
+		if err := printRunView(&buf, v, nil, ""); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(buf.String(), tc.line) {
+			t.Errorf("sessions %s =\n%s\nwant the line %q", tc.run.ID, buf.String(), tc.line)
+		}
+	}
+}
