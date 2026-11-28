@@ -764,10 +764,18 @@ func TestALaunchTriedAgainUnaskedReclaimsNoDisk(t *testing.T) {
 		calls++
 		return disk.Usage{TotalBytes: 100 << 30, FreeBytes: 1}, nil
 	}
-	if _, err := e.sched.reserveRetry(t.Context()); !errors.Is(err, ErrDiskFull) {
+	if _, err := e.sched.reserveLaunch(t.Context(), "", true, nil); !errors.Is(err, ErrDiskFull) {
 		t.Fatalf("a retry under disk pressure = %v, want the refusal", err)
 	}
 	if calls != 1 {
 		t.Fatalf("a retry measured the disk %d times, want once and no reclaim pass", calls)
+	}
+	// One that may reclaim says so when it does, and measures again.
+	calls, reclaims := 0, 0
+	if _, err := e.sched.reserveLaunch(t.Context(), "", true, func() { reclaims++ }); !errors.Is(err, ErrDiskFull) {
+		t.Fatalf("a retry that may reclaim, with nothing to reclaim = %v, want the refusal", err)
+	}
+	if reclaims != 1 || calls < 2 {
+		t.Fatalf("a retry that may reclaim reclaimed %d times and measured the disk %d times, want one reclaim and a fresh measurement", reclaims, calls)
 	}
 }

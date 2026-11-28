@@ -68,11 +68,14 @@ type Config struct {
 	Store       store.Store
 	// RunLimits are the server's flags with the automatic values filled in,
 	// what a run gets when neither an admin nor the launch sets a limit.
-	RunLimits       domain.RunLimits
-	Bus             events.Bus
-	Git             GitTransport
-	PTY             PTYAttacher
-	Runs            RunController
+	RunLimits domain.RunLimits
+	Bus       events.Bus
+	Git       GitTransport
+	PTY       PTYAttacher
+	Runs      RunController
+	// Recovered closes once the scheduler recovered the sessions a restart
+	// left, so no waiting launch starts before that.
+	Recovered       <-chan struct{}
 	DeleteWorkspace func(context.Context, domain.WorkspaceID, domain.MemberID) error
 	// Control owns the per-run controller lease shared by SSH and local
 	// gateway attaches. Nil preserves deployments without controller
@@ -217,8 +220,17 @@ type Server struct {
 	// cannot acquire a replacement lock and recreate removed resources.
 	workspaceLocksMu sync.Mutex
 	workspaceLocks   map[domain.WorkspaceID]*sync.RWMutex
-	launchKeysMu     sync.Mutex
-	launchKeys       map[launchKey]*launchKeyLock
+	// launchReclaimed is when a try of a waiting launch last went to free
+	// disk, in Unix nanoseconds.
+	launchReclaimed atomic.Int64
+	// launchPruned is when ended waiting launches were last deleted.
+	launchPruned atomic.Int64
+	// launchPass keeps passes over the waiting launches from overlapping.
+	launchPass sync.Mutex
+	// launchRoom carries RoomAppeared to dispatchLaunchIntents.
+	launchRoom   chan struct{}
+	launchKeysMu sync.Mutex
+	launchKeys   map[launchKey]*launchKeyLock
 
 	// environmentMu makes workspace.environment.set's read, merge and write
 	// of the workspace row and its secret file one step, also for
@@ -321,6 +333,7 @@ func New(cfg Config) (*Server, error) {
 		controlAttaches:  make(map[string]map[string]controlAttach),
 		runSSHConns:      make(map[domain.RunID]map[domain.MemberID]int),
 		baseCtx:          context.Background(),
+		launchRoom:       make(chan struct{}, 1),
 	}
 	sc := &ssh.ServerConfig{PublicKeyCallback: s.authenticate}
 	if cfg.WhoIs != nil {
@@ -489,6 +502,11 @@ func (s *Server) Serve(ctx context.Context) error {
 	go func() {
 		defer s.wg.Done()
 		s.replayHandoffOutbox(serveCtx, outbox, rooms, evidenceCapture)
+	}()
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.dispatchLaunchIntents(serveCtx)
 	}()
 	s.mu.Unlock()
 

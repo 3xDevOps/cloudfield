@@ -5,11 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"math"
 	"os"
-	"path/filepath"
 	goruntime "runtime"
 	"slices"
 	"sync"
@@ -18,7 +16,6 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/disk"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
-	"github.com/3xDevOps/cloudfield/internal/sysstats"
 )
 
 // Capacity refusals only affect new provisioning, never evict existing work.
@@ -27,12 +24,18 @@ var (
 	ErrMemoryPressure     = errors.New("scheduler: insufficient host memory headroom")
 	ErrBrowserCPUCapacity = errors.New("scheduler: insufficient browser CPU capacity")
 	ErrCapacityUnknown    = errors.New("scheduler: host capacity unavailable")
+	// ErrLaunchesWaiting sends a launch that asked to wait behind the
+	// launches already waiting for room, without an admission of its own.
+	ErrLaunchesWaiting = errors.New("scheduler: launches asked for earlier are waiting for room, and this one waits behind them")
 )
 
 // CapacityRefused reports whether err is a refusal for want of disk or
 // memory, or a failed measurement of them: a later attempt can succeed.
-func (s *Scheduler) CapacityRefused(err error) bool {
-	return errors.Is(err, ErrDiskFull) || errors.Is(err, ErrMemoryPressure) || errors.Is(err, ErrCapacityUnknown)
+func (s *Scheduler) CapacityRefused(err error) bool { return IsCapacityRefusal(err) }
+
+// IsCapacityRefusal is CapacityRefused for a caller without the scheduler.
+func IsCapacityRefusal(err error) bool {
+	return errors.Is(err, ErrDiskFull) || errors.Is(err, ErrMemoryPressure) || errors.Is(err, ErrCapacityUnknown) || errors.Is(err, ErrLaunchesWaiting)
 }
 
 const (
@@ -109,8 +112,12 @@ func memoryFloor(total uint64) uint64 {
 // show as used yet.
 type memoryClaim struct {
 	bytes uint64
-	// retry is a launch tried again unasked: it reclaims no disk.
-	retry bool
+	// op and run name the admission in the capacity counters.
+	op  string
+	run domain.RunID
+	// reclaim, when set, lets a launch-retry free disk, and is called
+	// when it goes to.
+	reclaim func()
 	// wake starts a container whose disks exist, so it is not held to the
 	// disk reserve: refusing it would keep a saved VM's memory on disk.
 	wake bool
@@ -135,30 +142,43 @@ func (e *memoryShortage) Error() string {
 
 func (e *memoryShortage) Unwrap() error { return ErrMemoryPressure }
 
-// reserveCapacity admits a start that brings up a new container or VM.
+// reserveCapacity admits a start that brings up a new container or VM and
+// is not a session launch.
 func (s *Scheduler) reserveCapacity(ctx context.Context) (func(), error) {
-	return s.reserve(ctx, &memoryClaim{bytes: startupMemoryBytes})
+	return s.reserve(ctx, &memoryClaim{bytes: startupMemoryBytes, op: opStart})
 }
 
-// reserveRetry admits a launch tried again unasked after a capacity
-// refusal. Disk reclaim removes what closed and sleeping sessions keep, so
-// only an attempt somebody asked for runs it.
-func (s *Scheduler) reserveRetry(ctx context.Context) (func(), error) {
-	return s.reserve(ctx, &memoryClaim{bytes: startupMemoryBytes, retry: true})
+// reserveLaunch admits the launch of a session, which has the ID run when
+// one was reserved for it. With retry the server tries it again unasked
+// after a capacity refusal: disk reclaim removes what closed and sleeping
+// sessions keep, so only an attempt somebody asked for runs it.
+func (s *Scheduler) reserveLaunch(ctx context.Context, run domain.RunID, retry bool, reclaim func()) (func(), error) {
+	op := opLaunch
+	if retry {
+		op = opLaunchRetry
+	}
+	return s.reserve(ctx, &memoryClaim{bytes: startupMemoryBytes, op: op, run: run, reclaim: reclaim})
 }
 
 // reserveWake admits the wake of a sleeping container: a saved VM must fit
 // the memory its restore loads back, and the disk needs startupDiskBytes
 // free but not the reserve.
-func (s *Scheduler) reserveWake(ctx context.Context, cid runtime.ID) (func(), error) {
-	return s.reserve(ctx, s.wakeClaim(cid))
+func (s *Scheduler) reserveWake(ctx context.Context, run domain.RunID, cid runtime.ID) (func(), error) {
+	claim := s.wakeClaim(cid)
+	claim.op, claim.run = opWake, run
+	if ctx.Value(autoWake{}) != nil {
+		claim.op = opWakeAuto
+	}
+	return s.reserve(ctx, claim)
 }
 
 // reserveBoot admits the boot of a stopped VM to commit its work on memory
 // alone, as a wake: disk reclaim runs that boot to free checkouts, so it
 // neither waits on disk nor saves idle VMs.
-func (s *Scheduler) reserveBoot(ctx context.Context, cid runtime.ID) (func(), error) {
+func (s *Scheduler) reserveBoot(ctx context.Context, run domain.RunID, cid runtime.ID) (release func(), err error) {
 	claim := s.wakeClaim(cid)
+	claim.op, claim.run = opBoot, run
+	defer func() { s.countRefusal(ctx, claim, err) }()
 	probeCtx, cancel := context.WithTimeout(ctx, capacityProbeTimeout)
 	defer cancel()
 	select {
@@ -206,14 +226,18 @@ func (s *Scheduler) wakeClaim(cid runtime.ID) *memoryClaim {
 // yet to take, not the sum of container memory ceilings. A completed
 // reservation is released under the same gate so the next probe cannot reuse
 // a pre-completion snapshot.
-func (s *Scheduler) reserve(ctx context.Context, claim *memoryClaim) (func(), error) {
-	release, err := s.tryReserveCapacity(ctx, claim)
+func (s *Scheduler) reserve(ctx context.Context, claim *memoryClaim) (release func(), err error) {
+	defer func() { s.countRefusal(ctx, claim, err) }()
+	release, err = s.tryReserveCapacity(ctx, claim)
 	// One reclaim or save pass, then fresh measurements. Never loop or
 	// reinterpret unavailable capacity.
 	var short *memoryShortage
 	switch {
 	case ctx.Err() != nil:
-	case errors.Is(err, ErrDiskFull) && !claim.retry:
+	case errors.Is(err, ErrDiskFull) && (claim.op != opLaunchRetry || claim.reclaim != nil):
+		if claim.reclaim != nil {
+			claim.reclaim()
+		}
 		s.reclaimDisk(ctx, "")
 		return s.tryReserveCapacity(ctx, claim)
 	case errors.As(err, &short) && s.saveIdleVMs(ctx, short.need+short.claimed):
@@ -368,12 +392,8 @@ func (s *Scheduler) tryReserveCapacity(ctx context.Context, claim *memoryClaim) 
 		// memory limit reclaims in its own cgroup and does not slow the server.
 		// A host without cgroup v2 pressure accounting is not refused, nor is
 		// a server in the root cgroup, whose file would be host-wide.
-		var pressure *float64
-		cgroup, err := cgroupPath(procRoot, os.Getpid())
-		if err == nil && cgroup != "/" {
-			pressure, err = sysstats.CgroupMemoryPressure(filepath.Join(cgroupRoot, cgroup))
-		}
-		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		pressure, err := serverMemoryPressure(os.Getpid())
+		if err != nil {
 			return nil, fmt.Errorf("%w: server memory pressure: %w", ErrCapacityUnknown, err)
 		}
 		if pressure == nil {

@@ -2701,6 +2701,78 @@ ALTER TABLE run_account_segments ADD COLUMN account_login TEXT NOT NULL DEFAULT 
 ALTER TABLE run_children ADD COLUMN account_login TEXT NOT NULL DEFAULT '';
 ALTER TABLE runs ADD COLUMN account_login_per_use INTEGER NOT NULL DEFAULT 0;
 `,
+	// v118: what the server did for want of memory or disk, counted per
+	// hour and counter (store/capacity.go).
+	`
+CREATE TABLE capacity_counts (
+	hour               INTEGER NOT NULL,
+	kind               TEXT NOT NULL,
+	op                 TEXT NOT NULL,
+	cause              TEXT NOT NULL,
+	count              INTEGER NOT NULL,
+	available_bytes    INTEGER NOT NULL,
+	floor_bytes        INTEGER NOT NULL,
+	used_bytes         INTEGER NOT NULL,
+	idle_hour_bytes    INTEGER NOT NULL,
+	vm_bytes           INTEGER NOT NULL,
+	waited_seconds     INTEGER NOT NULL,
+	max_waited_seconds INTEGER NOT NULL,
+	last_at            INTEGER NOT NULL,
+	last_run           TEXT NOT NULL,
+	last_text          TEXT NOT NULL,
+	PRIMARY KEY (hour, kind, op, cause)
+) WITHOUT ROWID;
+`,
+	// v119: the server's latest count of its session VMs, one row.
+	`
+CREATE TABLE capacity_vms (
+	id     INTEGER PRIMARY KEY CHECK (id = 1),
+	at     INTEGER NOT NULL,
+	awake  INTEGER NOT NULL,
+	frozen INTEGER NOT NULL,
+	paused  INTEGER NOT NULL,
+	saved   INTEGER NOT NULL,
+	stopped INTEGER NOT NULL,
+	closed  INTEGER NOT NULL
+);
+`,
+	// v120: the launches that wait for room (store/launch_intents.go). id
+	// is the session ID reserved for one and has no foreign key: no
+	// session row exists until it is started. An open intent is unique to
+	// its member and key, when its request had one.
+	`
+CREATE TABLE launch_intents (
+	id              TEXT PRIMARY KEY,
+	member_id       TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+	workspace_id    TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+	idempotency_key TEXT NOT NULL,
+	method          TEXT NOT NULL,
+	params          TEXT NOT NULL,
+	harness         TEXT NOT NULL,
+	task            TEXT NOT NULL,
+	base_commit     TEXT NOT NULL,
+	base_branch     TEXT NOT NULL,
+	base_source     TEXT NOT NULL,
+	base_checked_at INTEGER NOT NULL,
+	via             TEXT NOT NULL,
+	connector       TEXT NOT NULL,
+	device          TEXT NOT NULL,
+	state           TEXT NOT NULL CHECK (state IN ('waiting', 'starting', 'started', 'cancelled', 'expired', 'refused')),
+	refusal         TEXT NOT NULL,
+	attempts        INTEGER NOT NULL,
+	failures        INTEGER NOT NULL,
+	passed          INTEGER NOT NULL,
+	created_at      INTEGER NOT NULL,
+	attempted_at    INTEGER NOT NULL,
+	ended_at        INTEGER
+);
+CREATE UNIQUE INDEX launch_intents_open_key ON launch_intents (member_id, idempotency_key)
+	WHERE state IN ('waiting', 'starting') AND idempotency_key <> '';
+CREATE INDEX launch_intents_key ON launch_intents (member_id, idempotency_key);
+CREATE INDEX launch_intents_state ON launch_intents (state, created_at);
+CREATE INDEX launch_intents_ended ON launch_intents (ended_at);
+CREATE INDEX launch_intents_made ON launch_intents (member_id, created_at);
+`,
 }
 
 // existingDatabaseMigrations run after their version's migration, in the

@@ -207,6 +207,30 @@ prints the retry with `--idempotency-key`; that retry returns the same session
 instead of starting another. `cloudfield session - < task.md` reads the task from
 stdin.
 
+When the server has no memory or disk for the session, the command waits:
+the server keeps the launch and starts it when there is room
+([A launch that waits for room](failure-handling.md#a-launch-that-waits-for-room)).
+It prints the server's refusal on stderr, again when the kind of refusal
+changes, and then the same `session <session-id> running` line on stdout
+once the session runs. The output and exit status of a launch that succeeds
+are unchanged; a script that relied on a full server failing at once now
+blocks for up to a day, and passes `--no-wait` to keep the old behaviour.
+
+Ctrl-C or SIGTERM once it has printed that it waits cancels the launch on
+the server and exits 130: nothing starts later. Before that line the
+interrupt ends the command at once, as it always did, because the server
+may be provisioning the session. When the server does not confirm the
+cancel within 10 seconds, or the connection is lost while waiting, the
+launch may still be kept. In each of these cases the command says so and
+prints the command that follows the same launch, where Ctrl-C cancels it
+while it waits. A session that started after the wait and ended `failed`,
+`interrupted` or `abandoned` before it ran exits 1 with its reason. A command killed with SIGKILL cancels
+nothing; the launch stays waiting and starts when there is room.
+
+`--no-wait` fails at once with the refusal instead, as the command did
+before, and so do a server that does not keep launches and
+`cloudfield session --template`.
+
 `--linear-issue <url>` links the session to a Linear issue, for example
 `--linear-issue https://linear.app/acme/issue/ENG-123`. Without it, the first
 Linear issue link in the task is used. The link is fixed at launch. A

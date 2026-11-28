@@ -547,6 +547,7 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 		Git:               lazyGit{s.git},
 		PTY:               s.pty,
 		Runs:              s.sched,
+		Recovered:         s.sched.RecoveryReady(),
 		Control:           s.control,
 		Homes:             homes,
 		Logins:            logins,
@@ -806,6 +807,11 @@ func (s *Server) Run(ctx context.Context) error {
 			s.edge.Run(runCtx)
 		}()
 	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.offerRoom(runCtx)
+	}()
 	if s.web != nil {
 		// Nor does the dashboard, and SSH does not wait on its
 		// certificate fetch.
@@ -925,4 +931,31 @@ func (s *Server) Close() error {
 		s.closeErr = errors.Join(errs...)
 	})
 	return s.closeErr
+}
+
+// offerRoom tells the SSH server, which starts the launches that wait for
+// room, whenever a session ends, goes to sleep or is deleted: each can free
+// memory or disk. A start gives back what it had claimed only after its
+// status says running, so the clock finds that room.
+func (s *Server) offerRoom(ctx context.Context) {
+	sub, err := s.bus.Subscribe(ctx, events.SubscribeOptions{Filter: events.Filter{Types: []events.Type{events.TypeRunStatus, events.TypeRunSleep, events.TypeRunDeleted}}})
+	if err != nil {
+		slog.Warn("server: subscribe to session status; waiting launches are tried on the clock only", "error", err)
+		return
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case e, ok := <-sub.Events():
+			if !ok {
+				slog.Warn("server: the session status subscription ended; waiting launches are tried on the clock only")
+				return
+			}
+			if status, isStatus := e.Payload.(events.RunStatusPayload); isStatus && !status.To.Terminal() {
+				continue
+			}
+			s.ssh.RoomAppeared()
+		}
+	}
 }
