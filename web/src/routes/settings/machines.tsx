@@ -106,13 +106,14 @@ function Machine({ result: r, readAt, failed, reading, refresh }: { result: Serv
         >
           <p className="flex flex-wrap items-center gap-2 text-ui">
             {refused === null
-              ? <><Badge tone="done">Fits</Badge>A launch would start: memory and every disk are above the launch line, and the server's memory stall is under its limit.</>
+              ? <><Badge tone="done">Fits</Badge>Room for a launch: memory and every disk are above the launch line, and the server's memory stall is under its limit.</>
               : <><Badge tone="failed">Refused</Badge>{refused}</>}
           </p>
           {failed}
         </SettingRow>
         <MemoryRow r={r} />
         <StallRow r={r} />
+        {r.disk_unchecked && <SettingRow label="Disk" help="Not checked: the server was started with --min-free-disk negative, so no launch is refused for disk." />}
         {r.disk_error && (
           <SettingRow label="Disk" help="Not measured, so a launch is refused:">
             <p className={cn(verbatim, 'max-h-48 text-state-failed')}>{r.disk_error}</p>
@@ -165,7 +166,7 @@ function Room({ label, free, total, keep, need }: { label: string; free: number;
       </div>
       <p className="flex items-center gap-1 text-ui-xs text-muted tabular-nums">
         <span aria-hidden className="h-3 w-0.5 shrink-0 rounded-full bg-text" />
-        Launch line {gib(line)}: {gib(keep)} kept free plus {gib(need)} for the launch
+        Launch line {gib(line)}: {gib(keep)} kept free plus at least {gib(need)} for the launch
       </p>
     </div>
   )
@@ -185,7 +186,7 @@ function MemoryRow({ r }: { r: ServerCapacity }) {
   return (
     <SettingRow
       label="Memory"
-      help={`${gib(available)} available of ${gib(r.memory_total_bytes)}. A launch needs ${gib(floor + r.start_memory_bytes)} available.${available < floor ? ` Under the ${gib(floor)} the server keeps free, it freezes session VMs and saves them to disk.` : ''}`}
+      help={`${gib(available)} available of ${gib(r.memory_total_bytes)}. A launch needs at least ${gib(floor + r.start_memory_bytes)} available: more while other starts have yet to take theirs, and the wake of a VM saved to disk needs what it saved.${available < floor ? ` Under the ${gib(floor)} the server keeps free, it freezes session VMs and saves them to disk.` : ''}`}
       control={<Badge tone={fits ? 'done' : 'failed'}>{fits ? 'Launch fits' : 'Launch refused'}</Badge>}
     >
       <Room label="Memory available" free={available} total={r.memory_total_bytes} keep={floor} need={r.start_memory_bytes} />
@@ -211,7 +212,7 @@ function StallRow({ r }: { r: ServerCapacity }) {
     <SettingRow label="Memory stall" help="The share of time tasks waited for memory. At its limit the server acts.">
       <ul className="flex flex-col gap-1 text-ui-sm">
         {line('Server, last 60 s:', r.server_stall, r.server_stall_limit, 'launches refused', 'refusing launches now', "the server's own cgroup reports no memory pressure")}
-        {line('Host, last 10 s:', r.host_stall, r.host_stall_limit, 'session VMs saved', 'VMs are saved if it stays there', 'the kernel reports no memory pressure')}
+        {line('Host, last 10 s:', r.host_stall, r.host_stall_limit, 'session VMs saved once it lasts 30 s', 'VMs are saved if it lasts 30 s', 'the kernel reports no memory pressure')}
       </ul>
       {r.stall_error && <p className={cn(verbatim, 'max-h-48 text-state-failed')}>{r.stall_error}</p>}
     </SettingRow>
@@ -223,7 +224,7 @@ function DiskRow({ disk: d, need }: { disk: ServerCapacityDisk; need: number }) 
   return (
     <SettingRow
       label={`Disk: ${d.name}`}
-      help={`${gib(d.free_bytes)} free of ${gib(d.total_bytes)}. A launch needs ${gib(d.reserve_bytes + need)} free.`}
+      help={`${gib(d.free_bytes)} free of ${gib(d.total_bytes)}. A launch needs at least ${gib(d.reserve_bytes + need)} free.`}
       control={<Badge tone={fits ? 'done' : 'failed'}>{fits ? 'Launch fits' : 'Launch refused'}</Badge>}
     >
       <Room label={`${d.name} free`} free={d.free_bytes} total={d.total_bytes} keep={d.reserve_bytes} need={need} />
@@ -237,10 +238,11 @@ function VMsRow({ vms }: { vms: ServerCapacity['vms'] }) {
     [vms.frozen, 'Frozen by the memory brake'],
     [vms.paused, 'Asleep in memory'],
     [vms.saved, 'Asleep on disk'],
+    [vms.stopped, 'Asleep with nothing kept'],
   ]
   return (
-    <SettingRow label="Session VMs" help="The VMs of open sessions. Under the memory it keeps free, the server freezes awake VMs (the memory brake) and saves VMs to disk.">
-      <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+    <SettingRow label="Session VMs" help="The VMs of open sessions. Awake includes one a member paused. Under the memory it keeps free, the server freezes awake VMs (the memory brake) and saves VMs to disk. Nothing kept means stopped, or still being saved.">
+      <dl className="grid grid-cols-2 gap-2 sm:grid-cols-5">
         {cells.map(([count, what]) => (
           <div key={what} className="flex min-w-0 flex-col rounded-control border border-seam px-3 py-2">
             <dt className="order-last text-ui-sm text-muted">{what}</dt>
@@ -251,6 +253,8 @@ function VMsRow({ vms }: { vms: ServerCapacity['vms'] }) {
     </SettingRow>
   )
 }
+
+const opWords: Record<string, string> = { 'launch-retry': 'A waiting subsession tried again', 'wake-auto': 'A wake the server tried by itself' }
 
 function RefusalRow({ what, refusal }: { what: 'launch' | 'wake'; refusal?: ServerCapacityRefusal }) {
   const text = useRef<HTMLParagraphElement>(null)
@@ -267,7 +271,7 @@ function RefusalRow({ what, refusal }: { what: 'launch' | 'wake'; refusal?: Serv
           <RelativeTime at={refusal.at} className="text-text" />
           <span className="tabular-nums">{Number.isNaN(when.getTime()) ? refusal.at : when.toLocaleString()}</span>
           {refusal.cause && <Badge>{refusal.cause}</Badge>}
-          {refusal.op !== what && <Badge>{refusal.op}</Badge>}
+          {opWords[refusal.op] && <Badge>{opWords[refusal.op]}</Badge>}
         </span>
       )}
       control={<CopyButton text={refusal.text} label={`Copy why the last ${what} was refused`} source={text} />}
@@ -291,7 +295,7 @@ const counted = (counts: ServerCapacityCount[], match: (c: ServerCapacityCount) 
   counts.filter(match).reduce((n, c) => n + c.count, 0)
 
 const launchRefusal = (c: ServerCapacityCount) => c.kind === 'refusal' && (c.op === 'launch' || c.op === 'launch-retry')
-const wakeRefusal = (c: ServerCapacityCount) => c.kind === 'refusal' && c.op === 'wake'
+const refusalOf = (op: string) => (c: ServerCapacityCount) => c.kind === 'refusal' && c.op === op
 const memoryRefusal = (c: ServerCapacityCount) => c.kind === 'refusal' && (c.cause === 'memory' || c.cause === 'stall')
 
 function waits(counts: ServerCapacityCount[], which: 'mean' | 'longest'): string {
@@ -319,7 +323,7 @@ const counterName = (c: ServerCapacityCount) => [c.kind, c.op, c.cause].filter(B
 function Counts({ day, fortnight }: { day: ServerCapacityCount[]; fortnight: ServerCapacityCount[] }) {
   if (fortnight.length === 0) {
     return (
-      <SettingsSection title="Counted">
+      <SettingsSection title="Counted, in whole hours (UTC)">
         <SettingRow label="Nothing counted in 14 days" help="No launch or wake was refused, nothing waited for room, and no session VM was frozen or saved for memory." />
       </SettingsSection>
     )
@@ -329,12 +333,13 @@ function Counts({ day, fortnight }: { day: ServerCapacityCount[]; fortnight: Ser
     ['Subsessions that waited for room', null, (counts) => String(counted(counts, (c) => c.kind === 'wait'))],
     ['Mean wait before a start', 'Waits that ended in a start.', (counts) => waits(counts, 'mean')],
     ['Longest wait before a start', null, (counts) => waits(counts, 'longest')],
-    ['Share of used memory held by sessions idle over an hour', 'At memory and stall refusals.', idleShare],
-    ['Wakes refused', null, (counts) => String(counted(counts, wakeRefusal))],
+    ['Share of used memory held by sessions idle over an hour or closed', 'At memory and stall refusals.', idleShare],
+    ['Wakes refused', null, (counts) => String(counted(counts, refusalOf('wake')))],
+    ['Wakes the server tried by itself, refused', null, (counts) => String(counted(counts, refusalOf('wake-auto')))],
   ]
   const byName = new Map(day.map((c) => [counterName(c), c]))
   return (
-    <SettingsSection title="Counted">
+    <SettingsSection title="Counted, in whole hours (UTC)">
       <div className="min-w-0 overflow-x-auto">
         <table className="w-full text-ui">
           <caption className="sr-only">Refusals and waits over the last 24 hours and 14 days</caption>

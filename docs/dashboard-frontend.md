@@ -7461,21 +7461,24 @@ Categories:
   on, with figures in GiB as the server's own text prints them. **Can a
   session launch now?** says when the figures were read and whether a launch would start or be refused, and why: what could
   not be measured, memory or a disk under its launch line (what the server
-  keeps free plus what a launch needs), or the server's memory stall at its
-  limit. **Memory** and each **Disk** show free against total as a meter
+  keeps free plus the least a launch needs), or the server's memory stall
+  at its limit. **Memory** and each **Disk** show free against total as a meter
   marked at the launch line, and a `Launch fits` or `Launch refused` badge.
   **Memory stall** shows the server's figure over 60 seconds against the
   limit that refuses launches and the host's over 10 seconds against the
   limit that saves session VMs, or `Not measured` with the reason.
-  `memory_error`, `stall_error` and `disk_error` show verbatim. **Session
-  VMs** counts awake, frozen by the memory brake, asleep in memory and
-  asleep on disk. **Last refusals** gives the last launch and wake refused in
-  14 days: when, the cause, the server's text verbatim with a copy button,
-  and, for a super admin, the session as a link. **Counted** answers, for 24
-  hours and 14 days: launches refused (a waiting subsession's retries
+  With the disk check off (`disk_unchecked`) **Disk** says so instead of
+  listing none. `memory_error`, `stall_error` and `disk_error` show
+  verbatim. **Session VMs** counts awake, frozen by the memory brake,
+  asleep in memory, asleep on disk and asleep with nothing kept. **Last refusals** gives the last launch and wake refused in
+  14 days: when, the cause, `A wake the server tried by itself` for
+  `wake-auto`, the server's text verbatim with a copy button,
+  and, for a super admin, the session as a link. **Counted** answers, in whole UTC
+  hours over 24 hours and 14 days: launches refused (a waiting subsession's retries
   included), subsessions that waited for room, the mean and the longest wait
   that ended in a start, the share of the memory in use at memory and stall
-  refusals that sessions idle over an hour held, and wakes refused; **All N
+  refusals that sessions idle over an hour or closed held, wakes
+  refused, and wakes the server tried by itself that were refused; **All N
   counters** opens the raw counters. Nothing counted reads `Nothing counted
   in 14 days`. The page reads `server.capacity` again every 5 seconds while
   it is open, the tab is visible and the connection is live, and has

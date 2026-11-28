@@ -20,9 +20,9 @@ function full(over: Partial<ServerCapacity> = {}): ServerCapacity {
     host_stall_limit: 20,
     disks: [{ name: 'Cloudfield data filesystem', total_bytes: 500 * gib, free_bytes: 200 * gib, reserve_bytes: 25 * gib }],
     start_disk_bytes: 4 * gib,
-    vms: { awake: 3, frozen: 1, paused: 2, saved: 5 },
+    vms: { awake: 3, frozen: 1, paused: 2, saved: 5, stopped: 1 },
     last_launch_refusal: { at: '2026-11-27T10:00:00Z', op: 'launch', cause: 'memory', text: refusalText, run_id: 'run_1' },
-    last_wake_refusal: { at: '2026-11-27T09:00:00Z', op: 'wake', cause: 'stall', text: 'scheduler: the server stalled on memory for 12.5% of the last 60s', run_id: 'run_9' },
+    last_wake_refusal: { at: '2026-11-27T09:00:00Z', op: 'wake-auto', cause: 'stall', text: 'scheduler: the server stalled on memory for 12.5% of the last 60s', run_id: 'run_9' },
     day: [
       { kind: 'refusal', op: 'launch', cause: 'memory', count: 2, used_bytes: 10 * gib, idle_hour_bytes: 5 * gib, last_at: '2026-11-27T10:00:00Z' },
       { kind: 'wait-end', op: 'subsession', cause: 'started', count: 2, waited_seconds: 180, max_waited_seconds: 120, last_at: '2026-11-27T10:05:00Z' },
@@ -67,12 +67,14 @@ describe('Machines', () => {
   test('a machine short of memory says a launch is refused, why the last ones were, and what was counted', async () => {
     await show(full())
     expect(screen.getByText("A launch would be refused: memory is under the launch line and the server's memory stall is at its limit.")).toBeDefined()
-    expect(screen.getByText('2.0 GiB available of 16.0 GiB. A launch needs 3.6 GiB available.')).toBeDefined()
+    expect(screen.getByText('2.0 GiB available of 16.0 GiB. A launch needs at least 3.6 GiB available: more while other starts have yet to take theirs, and the wake of a VM saved to disk needs what it saved.')).toBeDefined()
     expect(screen.getByRole('meter', { name: 'Memory available' }).getAttribute('aria-valuetext')).toBe('2.0 GiB free of 16.0 GiB; the launch line is 3.6 GiB')
     expect(screen.getByText(/12\.5% · launches refused at 10% · refusing launches now/)).toBeDefined()
-    expect(screen.getByText('200.0 GiB free of 500.0 GiB. A launch needs 29.0 GiB free.')).toBeDefined()
+    expect(screen.getByText('200.0 GiB free of 500.0 GiB. A launch needs at least 29.0 GiB free.')).toBeDefined()
     expect(screen.getByText('Frozen by the memory brake').nextElementSibling?.textContent).toBe('1')
     expect(screen.getByText('Asleep on disk').nextElementSibling?.textContent).toBe('5')
+    expect(screen.getByText('Asleep with nothing kept').nextElementSibling?.textContent).toBe('1')
+    expect(screen.getByText('A wake the server tried by itself')).toBeDefined()
 
     expect(screen.getByText(refusalText)).toBeDefined()
     expect(screen.getByRole('button', { name: 'Copy why the last launch was refused' })).toBeDefined()
@@ -107,7 +109,7 @@ describe('Machines', () => {
 
   test('a healthy machine with nothing counted says a launch fits and nothing happened', async () => {
     await show(full({ memory_available_bytes: 12 * gib, server_stall: 0, host_stall: 0, last_launch_refusal: undefined, last_wake_refusal: undefined, day: [], fortnight: [] }))
-    expect(screen.getByText(/A launch would start/)).toBeDefined()
+    expect(screen.getByText(/Room for a launch/)).toBeDefined()
     expect(screen.getAllByText('None in 14 days.')).toHaveLength(2)
     expect(screen.getByText('Nothing counted in 14 days')).toBeDefined()
     expect(screen.queryByRole('table')).toBeNull()
@@ -121,6 +123,11 @@ describe('Machines', () => {
     expect(screen.getByText(refusalText)).toBeDefined()
     expect(screen.queryByRole('button', { name: 'Fix the login page' })).toBeNull()
     expect(screen.queryByText('Session')).toBeNull()
+  })
+
+  test('says when the disk check is off instead of listing no disk', async () => {
+    await show(full({ disks: [], disk_unchecked: true }))
+    expect(screen.getByText('Not checked: the server was started with --min-free-disk negative, so no launch is refused for disk.')).toBeDefined()
   })
 
   test('a failed read shows the error and reads again on Try again', async () => {

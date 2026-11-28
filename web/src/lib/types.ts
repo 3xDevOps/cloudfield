@@ -2155,7 +2155,7 @@ export interface ServerCapacity {
   memory_total_bytes: number
   memory_available_bytes: number
   /** Under it a launch is refused and session VMs are frozen and saved; a
-   * launch needs `start_memory_bytes` above it. */
+   * launch needs at least `start_memory_bytes` above it. */
   memory_floor_bytes: number
   start_memory_bytes: number
   memory_error?: string
@@ -2169,7 +2169,10 @@ export interface ServerCapacity {
   disks: ServerCapacityDisk[]
   start_disk_bytes: number
   disk_error?: string
-  vms: { awake: number; frozen: number; paused: number; saved: number }
+  /** The disk check is off: `disks` is empty and no launch is refused for disk. */
+  disk_unchecked?: boolean
+  /** `awake` includes one a member paused; `stopped` is asleep with nothing kept: stopped, or still being saved. */
+  vms: { awake: number; frozen: number; paused: number; saved: number; stopped: number }
   last_launch_refusal?: ServerCapacityRefusal
   last_wake_refusal?: ServerCapacityRefusal
   day: ServerCapacityCount[]
@@ -2192,7 +2195,7 @@ export interface ServerCapacityRefusal {
   run_id?: string
 }
 
-/** One counter; the byte and second fields are sums over its `count` events. */
+/** One counter, summed over whole UTC hours; the byte and second fields are sums over its `count` events. */
 export interface ServerCapacityCount {
   kind: 'refusal' | 'wait' | 'wait-end' | 'freeze' | 'save'
   op?: string
