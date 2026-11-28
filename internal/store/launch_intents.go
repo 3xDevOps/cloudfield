@@ -10,15 +10,21 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/domain"
 )
 
-// ErrTooManyWaiting refuses a launch intent over its member's cap.
-var ErrTooManyWaiting = errors.New("store: too many launches already wait")
+// ErrTooManyWaiting refuses a launch intent while its member has the most
+// open ones allowed, and ErrTooManyWaitingToday one past the most a member
+// may make in a day.
+var (
+	ErrTooManyWaiting      = errors.New("store: too many launches already wait")
+	ErrTooManyWaitingToday = errors.New("store: too many launches waited in the last day")
+)
 
 // LaunchIntentStore keeps the launches that wait for room.
 type LaunchIntentStore interface {
 	// CreateLaunchIntent records in as waiting under a new session ID.
 	// A member's open intent under the same key is returned instead, with
-	// existing true. With maxOpen open intents of the member already, or
-	// maxDaily of any state made in the last day, it is ErrTooManyWaiting.
+	// existing true. With maxOpen open intents of the member already it is
+	// ErrTooManyWaiting, and with maxDaily of any state made in the last
+	// day ErrTooManyWaitingToday.
 	CreateLaunchIntent(ctx context.Context, in *domain.LaunchIntent, maxOpen, maxDaily int) (intent *domain.LaunchIntent, existing bool, err error)
 	GetLaunchIntent(ctx context.Context, id domain.RunID) (*domain.LaunchIntent, error)
 	// LaunchIntentByKey returns the member's latest intent under key.
@@ -110,7 +116,7 @@ func (d *DB) CreateLaunchIntent(ctx context.Context, in *domain.LaunchIntent, ma
 		return nil, false, fmt.Errorf("store: create launch intent: %w", err)
 	}
 	if recent >= maxDaily {
-		return nil, false, ErrTooManyWaiting
+		return nil, false, ErrTooManyWaitingToday
 	}
 	out := *in
 	out.ID, out.CreatedAt, out.AttemptedAt, out.State = domain.RunID(id), ts, ts, domain.IntentWaiting

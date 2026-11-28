@@ -872,8 +872,7 @@ waits: it stays asleep with the refusal shown. Nor does a launch the
 built-in assistant makes: what asked for it, a connector or a device behind
 the assistant's turn, could not be checked again when it started.
 
-- **What is kept.** The request as its member sent it (64 KiB at most; a
-  larger one is refused as before), the workspace's base commit captured
+- **What is kept.** The request as its member sent it, the workspace's base commit captured
   when it began to wait, and a session ID reserved for it. Extra
   repositories are captured when it starts.
   It is not a session: nothing can message, wake or report to that ID, and
@@ -911,9 +910,13 @@ the assistant's turn, could not be checked again when it started.
   to their devices and stays in `launch.waiting.list` for a day. A launch
   that ended keeps its agent and the first 200 bytes of its task, not its
   request, and answers its idempotency key for 7 days.
-- **Limits.** One member may have 8 launches waiting and make 200 in a day,
-  and a request over 64 KiB is not kept. A launch past a limit is refused
-  with `-32004`, the refusal and why it was not kept to wait.
+- **Limits.** One member may have 8 launches waiting, and 200 that waited
+  in the last 24 hours; `run.launch` has no size limit of its own, and a
+  request over 64 KiB is not kept. A launch past a limit is refused as it
+  was before launches could wait, with `-32004` and the server's refusal,
+  followed by which limit it met and the figure: for example `this launch
+  was not kept to wait: you already have 8 launches waiting for room, the
+  most one member may have`.
 - **What removes it.** Deleting its workspace or its member deletes their
   waiting launches with them.
 - **A restart.** A waiting launch is in the database and waits on. One the
