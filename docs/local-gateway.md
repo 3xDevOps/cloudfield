@@ -603,6 +603,29 @@ account means listing the candidates failed); `error` is a fixed reason, such
 as `the account's agent could not be checked`, and the server log has the
 detail. A replay does not repeat them.
 
+`run.launch` takes an optional `wait`. Without it a launch the server has
+no memory or disk for is refused with `-32004` and the refusal text, as
+before. With `"wait": true` the server keeps it: the result has no `run`
+and a `waiting` object, `{id, workspace_id, harness, task, state, refusal,
+attempts, passed, idempotency_key, created_at, expires_at, ended_at}`, and
+the server starts it when there is room
+([A launch that waits for room](failure-handling.md#a-launch-that-waits-for-room)).
+`id` is the session ID reserved for it; no session has that ID until
+`state` is `started`. The same request with the same `idempotency_key`
+returns the same `waiting` object while it waits and its session, with
+`replayed`, once it started; after it ended `cancelled` it answers `-32003`,
+and after `expired` or `refused` `-32004`, each with why, and never launches
+again. `wait` is not part of what the key fingerprints. A server that does
+not know `wait` refuses it as an unknown param, so send it only when
+`server.info` lists `launch.waiting.list`.
+
+`launch.waiting.list` (no params, or `{"id":"<id>"}` for one of any age)
+returns `{"waiting":[...]}`: the caller's launches that wait, and those that
+ended `expired` or `refused` in the last 24 hours. `launch.waiting.cancel`
+`{"id":"<id>"}` ends one `cancelled` and returns it; one that has started
+answers `-32002` and names the session to stop. Both act on the caller's own
+launches; a super admin may name anyone's by `id`.
+
 `run.launch` and `template.launch` refuse a param they do
 not know with `-32602` `unknown param "<name>"; this server does not support
 it`, so a client never launches without an option it asked for. Other

@@ -774,7 +774,7 @@ The server counts each time it was short of memory or disk and what it did
 about it, and logs each one:
 
 ```sh
-sudo journalctl -u aether-server | grep -E '(scheduler|subsessions): capacity:'
+sudo journalctl -u aether-server | grep -E '(scheduler|subsessions|launch): capacity:'
 ```
 
 ```
@@ -792,8 +792,9 @@ holds the latest VM counts. A server start deletes counter rows older than
 | `kind` | Counted when | `op` | `cause` |
 | --- | --- | --- | --- |
 | `refusal` | Admission refused a start for memory or disk | `launch`, `launch-retry` (the server trying a waiting subsession again), `wake`, `wake-auto` (a wake nobody asked for: the memory guard waking a VM it saved while it worked, or the sweep waking a session idle for seven days to close it), `boot` (a stopped VM booted to commit its work), `start` (any other container or VM: a member's environment terminal, an agent sign-in, the assistant's container, a browser, an agent update, a move to another account) | `memory`, `stall`, `disk`, `unknown` (a measurement failed or timed out behind other admissions) |
-| `wait` | A subsession the server had no room for went back to the queue, once for each | `subsession` | |
-| `wait-end` | A subsession that waited stopped waiting | `subsession` | `started`, `refused`, `cancelled` |
+| `wait` | A launch or a subsession the server had no room for began to wait, once for each | `launch`, `subsession` | |
+| `wait-end` | One that waited stopped waiting | `launch`, `subsession` | `started`, `refused`, `cancelled`, `expired` (a launch only) |
+| `pass` | A launch was admitted while launches waited for room | `launch` | |
 | `freeze` | The memory brake froze at least one session VM, once each time it engages | | |
 | `save` | The memory guard, or an admission short of memory, saved a session VM to disk | `idle`, `paused` (it was paused in memory), `working`, `closed` (a closed session's VM, stopped and not saved) | |
 
@@ -812,9 +813,9 @@ Each row holds the `count` and the sum of each event's figures, in bytes:
   last five minutes. A sleeping VM counts from when it fell asleep. On a
   server whose sessions are containers it is 0.
 - `vm_bytes`: what a saved VM held.
-- `waited_seconds` and `max_waited_seconds`: the total and the longest time
-  from a subsession's first refusal for room, when its parent was told it
-  waits, to the end of its wait. A subsession held behind a waiting sibling
+- `waited_seconds` and `max_waited_seconds`: the total and the longest
+  wait: for a launch from when it was asked for, for a subsession from its
+  first refusal for room, when its parent was told it waits. A subsession held behind a waiting sibling
   that then starts at its first attempt is not counted.
 - `last_at`, `last_run` and `last_text`: the counter's latest event, with
   the refusal as its caller got it.
@@ -838,6 +839,49 @@ to the database from a queue of 256. One that finds the queue full is
 logged (`not counted, ...`) and not counted, and a server that stops can
 leave its last events uncounted. A subsession's `wait` and `wait-end` are written by the subsession
 service itself, after its state changed and outside the launch lock.
+
+## A launch that waits for room
+
+A launch the server has no memory or disk for is refused with the reason,
+such as `scheduler: insufficient host memory headroom: ...`. A client that
+sends `wait` with `run.launch` has it kept instead: the launch waits and the
+server starts it when there is room. A wake of a sleeping session never
+waits: it stays asleep with the refusal shown.
+
+- **What is kept.** The request as its member sent it, the workspace's base
+  commit captured when it began to wait, and a session ID reserved for it.
+  It is not a session: nothing can message, wake or report to that ID, and
+  it holds no slot, until it has started.
+- **When it is tried.** The oldest waiting launch is tried every 30 seconds,
+  and within 5 seconds of a session ending or falling asleep, so room that
+  appears is offered to waiting launches first. When one starts, the next is
+  tried in the same pass. A try the server makes by itself frees no disk
+  ([Recover from disk pressure](#recover-from-disk-pressure)).
+- **What a try checks.** Everything a fresh launch checks, at that moment
+  and as its member: membership and role, access to the workspace, the
+  account and whether it is still shared, the agent's login, the budget.
+  A launch that fails one ends `refused` with that error.
+- **Order.** Oldest first. Every launch needs the same room, so the oldest
+  never holds up one that would fit. A launch that asks to wait while others
+  wait goes behind them without a try of its own. A launch that does not ask
+  to wait, a subsession and a wake are admitted as before and can take room
+  a waiting launch was about to get; each such launch is counted against
+  every waiting one (`passed`).
+- **How it ends.** It becomes its session, in one database transaction with
+  the session's row; or its member cancels it; or it finds no room for 24
+  hours and ends `expired` with the last refusal; or a check refuses it. An
+  ending that is not a start is pushed to its member's devices and stays in
+  `launch.waiting.list` for a day.
+- **Limits.** One member may have 8 launches waiting; one more is refused as
+  a launch always was.
+- **A restart.** A waiting launch is in the database and waits on. One the
+  server was trying when it stopped goes back to waiting, unless its session
+  exists.
+
+They are counted with the capacity counters below: `wait` and `wait-end`
+with `op` `launch` (causes `started`, `cancelled`, `expired`, `refused`, and
+how long it waited since it was asked for), and `pass` for each launch
+admitted while others waited.
 
 ## Where a launch or a wake spends its time
 
