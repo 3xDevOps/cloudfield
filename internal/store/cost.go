@@ -187,7 +187,7 @@ func (d *DB) ListWorkspaceCosts(ctx context.Context, workspace domain.WorkspaceI
 	rows, err := tx.QueryContext(ctx, `
 		SELECT c.run_id, c.segment, c.workspace_id, c.member_id, c.input_tokens, c.output_tokens, c.cost_usd, c.metered, c.recorded_at,
 		       COALESCE(r.account_member_id, r.member_id)
-		FROM run_costs c JOIN runs r ON r.id = c.run_id
+		FROM run_costs c JOIN visible_runs r ON r.id = c.run_id
 		WHERE c.workspace_id = ? ORDER BY c.recorded_at, c.run_id, c.segment`, workspace)
 	if err != nil {
 		return nil, nil, fmt.Errorf("store: list workspace costs: %w", err)

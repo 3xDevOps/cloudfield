@@ -70,7 +70,7 @@ func (d *DB) CloseDependents(ctx context.Context, run domain.RunID, recent time.
 	if out.Children, err = d.runIDs(ctx, `WITH RECURSIVE tree(run_id, created_at) AS (
 			SELECT ?1, 0
 			UNION
-			SELECT rc.run_id, rc.created_at FROM run_children rc JOIN tree t ON rc.parent_run_id = t.run_id LEFT JOIN runs r ON r.id = rc.run_id
+			SELECT rc.run_id, rc.created_at FROM run_children rc JOIN tree t ON rc.parent_run_id = t.run_id LEFT JOIN visible_runs r ON r.id = rc.run_id
 			WHERE rc.detached = 0 AND (rc.state IN ('queued', 'launching')
 				OR (rc.state = 'started' AND r.status NOT IN ('merged', 'abandoned', 'failed', 'interrupted') AND NOT (r.status = 'completed' AND r.review = 'accepted'))))
 		SELECT run_id FROM tree WHERE run_id <> ?1 ORDER BY created_at, run_id`, run); err != nil {
@@ -80,7 +80,7 @@ func (d *DB) CloseDependents(ctx context.Context, run domain.RunID, recent time.
 }
 
 func (d *DB) RunWaiters(ctx context.Context, run domain.RunID) ([]domain.RunID, error) {
-	ids, err := d.runIDs(ctx, `SELECT DISTINCT w.owner_run_id FROM watches w JOIN runs r ON r.id = w.owner_run_id
+	ids, err := d.runIDs(ctx, `SELECT DISTINCT w.owner_run_id FROM watches w JOIN visible_runs r ON r.id = w.owner_run_id
 		WHERE w.wait_target_run = ?1 AND w.wait_state = 'pending' AND w.owner_run_id <> ?1 AND r.status NOT IN (`+terminalStatuses+`)
 		ORDER BY w.owner_run_id`, run)
 	if err != nil {
@@ -92,7 +92,7 @@ func (d *DB) RunWaiters(ctx context.Context, run domain.RunID) ([]domain.RunID, 
 func (d *DB) RunLastChange(ctx context.Context, run domain.RunID) (time.Time, error) {
 	var at int64
 	err := d.db.QueryRowContext(ctx, `SELECT COALESCE((SELECT MAX(at) FROM run_state_transitions WHERE run_id = ?1), created_at)
-		FROM runs WHERE id = ?1`, run).Scan(&at)
+		FROM visible_runs WHERE id = ?1`, run).Scan(&at)
 	if errors.Is(err, sql.ErrNoRows) {
 		return time.Time{}, ErrNotFound
 	}

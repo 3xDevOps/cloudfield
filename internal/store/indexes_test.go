@@ -28,7 +28,8 @@ func TestHotReadsUseTheirIndexes(t *testing.T) {
 		return strings.Join(steps, "; ")
 	}
 	for query, want := range map[string][]string{
-		runSnapshotQuery(`runs.id = ?`): {
+		runSnapshotQuery("visible_runs", `runs.id = ?`): {
+			"SEARCH runs USING INDEX sqlite_autoindex_runs_1 (id=?)",
 			"SEARCH question USING INDEX idx_room_messages_run_kind (run_id=? AND kind=?)",
 			"SEARCH reply USING COVERING INDEX idx_room_messages_run_kind (run_id=? AND kind=? AND correlation_id=?)",
 		},

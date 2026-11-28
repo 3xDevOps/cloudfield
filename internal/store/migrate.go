@@ -2701,6 +2701,15 @@ ALTER TABLE run_account_segments ADD COLUMN account_login TEXT NOT NULL DEFAULT 
 ALTER TABLE run_children ADD COLUMN account_login TEXT NOT NULL DEFAULT '';
 ALTER TABLE runs ADD COLUMN account_login_per_use INTEGER NOT NULL DEFAULT 0;
 `,
+	// v118: a spare session, made ahead of a launch and hidden from every
+	// member until a launch claims it. Reads of runs go through
+	// visible_runs, which names rowid because a view has none. A migration
+	// that rebuilds runs drops the view first and creates it again after:
+	// renaming a table checks every view.
+	`
+ALTER TABLE runs ADD COLUMN spare INTEGER NOT NULL DEFAULT 0;
+CREATE VIEW visible_runs AS SELECT rowid, * FROM runs WHERE spare = 0;
+`,
 }
 
 // existingDatabaseMigrations run after their version's migration, in the

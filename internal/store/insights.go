@@ -221,7 +221,7 @@ func (d *DB) RecordRunPullRequest(ctx context.Context, pr *RunPullRequest) error
 	}
 	res, err := d.db.ExecContext(ctx,
 		`INSERT INTO run_pull_requests (run_id, workspace_id, repo_workspace_id, repo, number, url, state, created_at, merged_at, checked_at)
-		 SELECT id, workspace_id, ?, ?, ?, ?, ?, ?, ?, ? FROM runs WHERE id = ?
+		 SELECT id, workspace_id, ?, ?, ?, ?, ?, ?, ?, ? FROM visible_runs WHERE id = ?
 		 ON CONFLICT (run_id, repo, number) DO UPDATE SET
 		     url = excluded.url, state = CASE WHEN state = 'merged' THEN state ELSE excluded.state END,
 		     merged_at = COALESCE(excluded.merged_at, merged_at), checked_at = excluded.checked_at`,
@@ -372,7 +372,7 @@ func insightsCounts(ctx context.Context, tx *sql.Tx, q InsightsQuery, args []any
 	rows, err := tx.QueryContext(ctx, `WITH
 		b(i, lo, hi) AS (SELECT key, json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(:buckets)),
 		s AS MATERIALIZED (
-			SELECT r.created_at, r.finished_at, r.status, r.reason FROM runs r
+			SELECT r.created_at, r.finished_at, r.status, r.reason FROM visible_runs r
 			WHERE `+q.ownerScope()+`
 			  AND ((r.created_at >= :lo AND r.created_at < :hi) OR (r.finished_at >= :lo AND r.finished_at < :hi)))
 		SELECT b.i,
@@ -413,7 +413,7 @@ func insightsHeatmap(ctx context.Context, tx *sql.Tx, q InsightsQuery, args []an
 	rows, err := tx.QueryContext(ctx, `WITH
 		d(i, lo, hi) AS (SELECT key, json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(:days)),
 		a AS MATERIALIZED (
-			SELECT COALESCE(r.started_at, r.created_at) AS s, COALESCE(r.finished_at, :now) AS e FROM runs r
+			SELECT COALESCE(r.started_at, r.created_at) AS s, COALESCE(r.finished_at, :now) AS e FROM visible_runs r
 			WHERE `+q.ownerScope()+`
 			  AND COALESCE(r.started_at, r.created_at) < :day_hi AND (r.finished_at IS NULL OR r.finished_at >= :day_lo))
 		SELECT d.i, COUNT(*) FROM d JOIN a ON a.s < d.hi AND a.e >= d.lo GROUP BY d.i`, args...)
@@ -437,7 +437,7 @@ func insightsHeatmap(ctx context.Context, tx *sql.Tx, q InsightsQuery, args []an
 func insightsByWorkspace(ctx context.Context, tx *sql.Tx, q InsightsQuery, args []any, out *Insights) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT r.workspace_id, w.name, `+insightsTallyCols+`
-		FROM runs r JOIN workspaces w ON w.id = r.workspace_id
+		FROM visible_runs r JOIN workspaces w ON w.id = r.workspace_id
 		WHERE `+q.ownerScope()+` AND `+insightsInRange+`
 		GROUP BY r.workspace_id ORDER BY 3 DESC, w.name, r.workspace_id`, args...)
 	if err != nil {
@@ -456,7 +456,7 @@ func insightsByWorkspace(ctx context.Context, tx *sql.Tx, q InsightsQuery, args 
 func insightsByAgent(ctx context.Context, tx *sql.Tx, q InsightsQuery, args []any, out *Insights) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT r.harness, r.model, `+insightsTallyCols+`
-		FROM runs r
+		FROM visible_runs r
 		WHERE `+q.ownerScope()+` AND `+insightsInRange+`
 		GROUP BY r.harness, r.model ORDER BY 3 DESC, r.harness, r.model`, args...)
 	if err != nil {
@@ -482,7 +482,7 @@ func insightsFinishedRuns(ctx context.Context, tx *sql.Tx, q InsightsQuery, args
 			COALESCE(SUM(c.cost_usd) FILTER (WHERE c.metered = 1), 0),
 			COALESCE(SUM(c.input_tokens) FILTER (WHERE c.metered = 1), 0),
 			COALESCE(SUM(c.output_tokens) FILTER (WHERE c.metered = 1), 0)
-		FROM runs r LEFT JOIN run_costs c ON c.run_id = r.id
+		FROM visible_runs r LEFT JOIN run_costs c ON c.run_id = r.id
 		WHERE `+q.ownerScope()+` AND `+insightsFinishedIn+`
 		GROUP BY r.id`, args...)
 	if err != nil {
@@ -560,7 +560,7 @@ const (
 func insightsStateTimes(ctx context.Context, tx *sql.Tx, q InsightsQuery, args []any, out *Insights) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT t.run_id, t.from_status, t.to_status, t.activity, t.at
-		FROM runs r JOIN run_state_transitions t ON t.run_id = r.id
+		FROM visible_runs r JOIN run_state_transitions t ON t.run_id = r.id
 		WHERE `+q.ownerScope()+` AND `+insightsFinishedIn+`
 		ORDER BY t.run_id, t.at, t.rowid`, args...)
 	if err != nil {
@@ -671,7 +671,7 @@ func insightsRecent(ctx context.Context, tx *sql.Tx, q InsightsQuery, args []any
 	rows, err := tx.QueryContext(ctx, `
 		SELECT r.id, r.title, r.task, r.workspace_id, r.status, r.reason, r.harness, r.model,
 			r.created_at, r.started_at, r.finished_at, COALESCE(p.url, ''), COALESCE(p.state, '')
-		FROM runs r
+		FROM visible_runs r
 		LEFT JOIN run_pull_requests p ON p.rowid = (
 			SELECT p.rowid FROM run_pull_requests p WHERE p.run_id = r.id AND `+q.prScope()+` ORDER BY p.created_at DESC, p.rowid DESC LIMIT 1)
 		WHERE `+where+` AND `+insightsFinishedIn+`
@@ -708,7 +708,7 @@ func insightsPullRequests(ctx context.Context, tx *sql.Tx, q InsightsQuery, args
 	err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(DISTINCT p.repo || '#' || p.number) FILTER (WHERE p.created_at >= :from AND p.created_at < :to),
 			COUNT(DISTINCT p.repo || '#' || p.number) FILTER (WHERE p.state = 'merged' AND p.merged_at >= :from AND p.merged_at < :to)
-		FROM run_pull_requests p JOIN runs r ON r.id = p.run_id
+		FROM run_pull_requests p JOIN visible_runs r ON r.id = p.run_id
 		WHERE `+q.ownerScope()+` AND `+q.prScope(), args...,
 	).Scan(&out.PullRequests.Opened, &out.PullRequests.Merged)
 	if err != nil {
@@ -723,7 +723,7 @@ func insightsSuccess(ctx context.Context, tx *sql.Tx, q InsightsQuery, args []an
 	err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*), COUNT(*) FILTER (WHERE r.status = 'merged' OR r.review = 'accepted' OR EXISTS (
 			SELECT 1 FROM run_pull_requests p WHERE p.run_id = r.id AND p.state = 'merged' AND `+q.prScope()+`))
-		FROM runs r WHERE `+q.ownerScope()+` AND `+insightsFinishedIn, args...,
+		FROM visible_runs r WHERE `+q.ownerScope()+` AND `+insightsFinishedIn, args...,
 	).Scan(&out.Success.RunsFinished, &out.Success.RunsSucceeded)
 	if err != nil {
 		return fmt.Errorf("store: insights: session success: %w", err)
@@ -741,7 +741,7 @@ func insightsMemberOutcomes(ctx context.Context, tx *sql.Tx, q InsightsQuery, ar
 	if q.Workspaces != nil {
 		members += ` AND (id IN (SELECT owner_member_id FROM workspaces WHERE id IN ` + insightsReachable + `)
 			OR id IN (SELECT member_id FROM workspace_grants WHERE workspace_id IN ` + insightsReachable + `)
-			OR id IN (SELECT r.member_id FROM runs r WHERE r.workspace_id IN ` + insightsReachable + `))`
+			OR id IN (SELECT r.member_id FROM visible_runs r WHERE r.workspace_id IN ` + insightsReachable + `))`
 	}
 	rows, err := tx.QueryContext(ctx, members+" ORDER BY created_at, id", args...)
 	if err != nil {
@@ -769,7 +769,7 @@ func insightsMemberOutcomes(ctx context.Context, tx *sql.Tx, q InsightsQuery, ar
 				COUNT(*) FILTER (WHERE r.status IN ('completed', 'merged')),
 				COUNT(*) FILTER (WHERE r.status = 'failed'),
 				COUNT(*) FILTER (WHERE r.status IN ('abandoned', 'interrupted'))
-			FROM runs r JOIN b ON r.finished_at >= b.lo AND r.finished_at < b.hi
+			FROM visible_runs r JOIN b ON r.finished_at >= b.lo AND r.finished_at < b.hi
 			WHERE ` + q.ownerScope() + ` AND r.status IN ` + insightsTerminal + `
 			GROUP BY r.member_id, b.i`,
 			func(m *InsightsMemberOutcomes) []InsightsOutcome { return m.Runs }},
@@ -805,7 +805,7 @@ func scanMemberOutcomes(ctx context.Context, tx *sql.Tx, query string, args []an
 // and when this server started
 // recording transitions and PRs.
 func insightsLive(ctx context.Context, tx *sql.Tx, q InsightsQuery, args []any, out *Insights) error {
-	rows, err := tx.QueryContext(ctx, runSnapshotQuery(`runs.id IN (SELECT r.id FROM runs r WHERE `+q.ownerScope()+`
+	rows, err := tx.QueryContext(ctx, runSnapshotQuery("visible_runs", `runs.id IN (SELECT r.id FROM visible_runs r WHERE `+q.ownerScope()+`
 		AND r.status IN ('running', 'needs-attention'))`), args...)
 	if err != nil {
 		return fmt.Errorf("store: insights: needs you: %w", err)

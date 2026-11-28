@@ -409,7 +409,7 @@ func refuseLiveWork(ctx context.Context, tx *sql.Tx, a, b domain.MemberID) error
 			live = append(live, "'"+string(s)+"'")
 		}
 	}
-	runs, err := queryStrings(ctx, tx, `SELECT id FROM runs WHERE status IN (`+strings.Join(live, ", ")+`)
+	runs, err := queryStrings(ctx, tx, `SELECT id FROM visible_runs WHERE status IN (`+strings.Join(live, ", ")+`)
 		AND (member_id IN (?1, ?2) OR account_member_id IN (?1, ?2) OR home_member_id IN (?1, ?2)
 		     OR requested_account_member_id IN (?1, ?2)) ORDER BY id`, a, b)
 	if err != nil {
@@ -511,7 +511,7 @@ func mergeSnapshot(ctx context.Context, tx *sql.Tx, id domain.MemberID) (*MergeS
 		dev.ApprovalCode, dev.LastSeenAt = "", nil
 	}
 	if err = tx.QueryRowContext(ctx, `SELECT
-		(SELECT COUNT(*) FROM runs WHERE member_id = ?1), (SELECT COUNT(*) FROM schedules WHERE member_id = ?1)`, id).
+		(SELECT COUNT(*) FROM visible_runs WHERE member_id = ?1), (SELECT COUNT(*) FROM schedules WHERE member_id = ?1)`, id).
 		Scan(&snap.Runs, &snap.Schedules); err != nil {
 		return nil, fmt.Errorf("store: plan merge: counts: %w", err)
 	}
@@ -902,7 +902,7 @@ func (d *DB) FinishedRunsOf(ctx context.Context, a, b domain.MemberID) ([]*domai
 			finished = append(finished, "'"+string(s)+"'")
 		}
 	}
-	return d.listRuns(ctx, fmt.Sprintf("finished sessions of %s and %s", a, b), runSnapshotQuery(`runs.status IN (`+strings.Join(finished, ", ")+`)
+	return d.listRuns(ctx, fmt.Sprintf("finished sessions of %s and %s", a, b), runSnapshotQuery(d.runTable(), `runs.status IN (`+strings.Join(finished, ", ")+`)
 		AND (runs.member_id IN (?, ?) OR runs.account_member_id IN (?, ?) OR runs.home_member_id IN (?, ?))`)+
 		` ORDER BY runs.created_at, runs.rowid`, a, b, a, b, a, b)
 }
