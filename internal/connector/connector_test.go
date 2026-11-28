@@ -28,6 +28,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	edgeagent "github.com/3xDevOps/cloudfield/internal/edge/agent"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/events"
 	"github.com/3xDevOps/cloudfield/internal/harness"
@@ -957,15 +958,68 @@ type (
 )
 
 // edgeAt is an edge at origin speaking version, as far as connectors go.
+// relays, when set, are its relay origins instead of origin alone, and
+// notices are the verified notices it sent.
 type edgeAt struct {
 	sshd.EdgeOwner
 	origin  string
 	version atomic.Int64
+	mu      sync.Mutex
+	relays  []string
+	notices edgeagent.StoredNotices
+	err     error
+	// unclaimed is an edge that reports the server not claimed.
+	unclaimed atomic.Bool
+	// dropAfter, when set, is how many more EdgeVersion reads see the
+	// edge before it drops to version 0.
+	dropAfter atomic.Int64
+	// reads counts Notices calls.
+	reads atomic.Int64
 }
 
-func (e *edgeAt) Origin() string         { return e.origin }
-func (e *edgeAt) EdgeVersion() int       { return int(e.version.Load()) }
-func (e *edgeAt) RelayOrigins() []string { return []string{e.origin} }
+func (e *edgeAt) ConnectorOrigins() []string {
+	if e.version.Load() < int64(edgeproto.VersionRelayOrigin) || e.unclaimed.Load() {
+		return nil
+	}
+	return e.RelayOrigins()
+}
+
+func (e *edgeAt) Origin() string { return e.origin }
+
+func (e *edgeAt) EdgeVersion() int {
+	if e.dropAfter.Load() > 0 && e.dropAfter.Add(-1) == 0 {
+		defer e.version.Store(0)
+	}
+	return int(e.version.Load())
+}
+
+func (e *edgeAt) RelayOrigins() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.relays != nil {
+		return slices.Clone(e.relays)
+	}
+	return []string{e.origin}
+}
+
+func (e *edgeAt) Notices() (edgeagent.StoredNotices, error) {
+	e.reads.Add(1)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.notices, e.err
+}
+
+func (e *edgeAt) setErr(err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.err = err
+}
+
+func (e *edgeAt) set(relays []string, notices edgeagent.StoredNotices) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.relays, e.notices = relays, notices
+}
 
 // fakeRuns records launches, with the connector client each came via, and
 // answers the reads a run snapshot makes.

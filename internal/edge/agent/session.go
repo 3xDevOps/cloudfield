@@ -53,6 +53,9 @@ type session struct {
 	// origins are the relay origins requests relayed on the session may
 	// come in on: the one the server dialed, then those Ready announced.
 	origins []string
+	// announced are the relay origins Ready listed, as it listed them:
+	// nil when it sent no list, empty when none it listed is usable.
+	announced []string
 	// since is when the session enrolled.
 	since time.Time
 	// beats holds the latest answered ping recordBeats has not written.
@@ -337,7 +340,7 @@ func (a *Agent) session(ctx context.Context) (time.Duration, error) {
 			origins = append(origins, o)
 		}
 	}
-	s := &session{c: c, edgeKey: ready.EdgeKey, protocol: protocol, origins: origins, since: start, beats: make(chan time.Time, 1),
+	s := &session{c: c, edgeKey: ready.EdgeKey, protocol: protocol, origins: origins, announced: ready.RelayOrigins, since: start, beats: make(chan time.Time, 1),
 		transfers: map[string]chan edgeproto.OwnerTransferResult{}}
 	if err = a.setEdgeState(ready.State); err != nil {
 		return time.Since(start), err
@@ -499,6 +502,24 @@ func (a *Agent) RelayOrigins() []string {
 		return []string{a.origin}
 	}
 	return slices.Clone(a.live.origins)
+}
+
+// ConnectorOrigins are the relay origins the edge announced on the live
+// control connection, none when every one it listed is unusable here, or
+// the one the server dialed when it sent no list, read with its version
+// and the edge's state in one snapshot: none unless the connection is up
+// at edgeproto.VersionRelayOrigin or later and the edge reports the
+// server claimed, since the relay refuses every other connection to it.
+func (a *Agent) ConnectorOrigins() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	switch {
+	case a.live == nil || a.live.protocol < edgeproto.VersionRelayOrigin || a.edgeState != edgeproto.StateClaimed:
+		return nil
+	case a.live.announced != nil:
+		return slices.Clone(a.live.announced)
+	}
+	return []string{a.origin}
 }
 
 // Notices are the verified notices of the server's latest enrollment at
