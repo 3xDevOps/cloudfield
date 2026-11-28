@@ -247,6 +247,27 @@ describe('saved launch draft', () => {
     expect(api.runLaunch).not.toHaveBeenCalled()
     await waitFor(() => expect(useStore.getState().route).toMatchObject({ name: 'run', params: { runId: 'run-w' } }))
     expect(useStore.getState().runs['run-w']).toBeUndefined()
+    expect(useStore.getState().waitingLaunches['run-w']?.state).toBe('waiting')
+  })
+
+  it('sends a launch whose answer was lost again under the same key, and a refused one under a new key', async () => {
+    useStore.setState({ info: { ...serverInfo, features: ['launch-wait'] } })
+    const keys = () => vi.mocked(api.runLaunchOrWait).mock.calls.map(([params]) => params.idempotency_key)
+    vi.mocked(api.runLaunchOrWait)
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockRejectedValueOnce(Object.assign(new Error('run.launch: workspace is being deleted'), { code: -32009 }))
+      .mockRejectedValueOnce(Object.assign(new Error('run.launch: workspace is being deleted'), { code: -32009 }))
+    render(<PaletteDialogs />)
+    await waitFor(() => expect(launchButton().disabled).toBe(false))
+    for (const calls of [1, 2, 3]) {
+      fireEvent.click(launchButton())
+      await waitFor(() => expect(api.runLaunchOrWait).toHaveBeenCalledTimes(calls))
+      await waitFor(() => expect(launchButton().disabled).toBe(false))
+    }
+    const [lost, again, anew] = keys()
+    expect(lost).toBeTruthy()
+    expect(again).toBe(lost)
+    expect(anew).not.toBe(lost)
   })
 
   it('keeps the task and refusal when a collapsed launch fails', async () => {

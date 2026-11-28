@@ -527,6 +527,8 @@ export interface RunLaunchParams {
   children?: 'on' | 'off'
   /** Overrides the server's run limits for this run. */
   limits?: RunLimits
+  /** The same launch sent again under the same key is that launch, not a second. */
+  idempotency_key?: string
 }
 
 export const api = {

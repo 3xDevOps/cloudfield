@@ -5,6 +5,7 @@ import { focusView } from '@/components/shell/center-view'
 import { SplitNewRun } from '@/components/shell/new-run-button'
 import { SidebarFooter, UpdateNotice } from '@/components/shell/sidebar-footer'
 import { runRowSelector, SidebarRuns } from '@/components/shell/sidebar-runs'
+import { WaitingLaunches } from '@/components/waiting-launch'
 import { WorkspaceSwitcher } from '@/components/shell/workspace-switcher'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
@@ -239,6 +240,7 @@ function SidebarContent({ onHide }: { onHide: () => void }) {
           <AssistantButton variant="secondary" />
         </div>
       )}
+      <WaitingLaunches narrow />
       <SidebarRuns />
       {lower.length > 0 && (
         <div className="shrink-0 border-t border-seam px-2 py-2">

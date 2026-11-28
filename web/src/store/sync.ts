@@ -5,7 +5,6 @@ import { watchPush } from '@/lib/push'
 import { backoff, connectEvents, onWake } from '@/lib/stream'
 import { allowSnapshot, clearSnapshot, paintSnapshot, refuseSnapshot, saveSnapshot } from '@/lib/snapshot-cache'
 import { redirectRoute } from '@/lib/url-state'
-import { launchWaitFeature } from '@/lib/types'
 import type {
   CoordMessageAckedPayload,
   CoordMessagePayload,
@@ -38,6 +37,8 @@ import { applyAssistantNotice, noteServerTime } from '@/store/assistant-notice'
 import { batchNotifications } from '@/store/batch'
 import { diffSnapshot } from '@/store/diff'
 import { coalesce } from '@/store/coalesce'
+import { tileList } from '@/store/tiles'
+import { launchOpen, loadWaitingLaunches } from '@/store/waiting-launches'
 import { isProvisional } from '@/store/collaboration'
 import { loadDevices } from '@/store/devices'
 import { applyWatchChanged } from '@/store/watch-notice'
@@ -282,12 +283,22 @@ export async function hydrate(
     // Only the nav entry and the header link follow it, so a slow Linear must not hold hydration.
     void loadLinear(store, client).catch(ignore)
     if (signal?.aborted) return false
+    // A tab or a link may name a launch waiting for room, which is no session
+    // yet: read before the tabs of unknown sessions are closed.
+    const shown = store.getState()
+    const unknown = [...tileList(shown.tiles.root).flatMap((tile) => tile.tabs.map((tab) => tab.runId)), shown.route.params.runId]
+      .filter((id) => id && !shown.runs[id])
+    // A failed read leaves a link where it points: its page shows the error and asks again.
+    const launchesRead = await loadWaitingLaunches(store, client, [...new Set(unknown)], signal).then(() => true, () => false)
+    if (signal?.aborted) return false
     s.setHydrated(true)
     store.setState({ staleSince: null })
-    s.pruneTiles()
+    // Without that read a waiting launch's tab cannot be told from a deleted session's.
+    if (launchesRead) s.pruneTiles()
     const current = store.getState()
     const linked = current.route.params.runId
-    const unknownLink = first && current.route === s.route && !!linked && !current.runs[linked]
+    const unknownLink = first && current.route === s.route && !!linked && !current.runs[linked] &&
+      launchesRead && !current.waitingLaunches[linked]
     if (
       first &&
       (s.route.name === 'board' || s.route.name === 'needs-you' || unknownLink) &&
@@ -302,14 +313,7 @@ export async function hydrate(
     ) {
       redirectRoute(store, { name: 'onboarding', params: {} })
     }
-    else if (unknownLink) {
-      // A link to a launch waiting for room names a session that does not
-      // exist yet: its page says so, and the board would lose it.
-      const waits = info.features?.includes(launchWaitFeature) === true &&
-        (await client.launchWaitingList(linked).then((list) => list.length > 0, () => false))
-      if (signal?.aborted) return false
-      if (!waits && store.getState().route === s.route) redirectRoute(store, { name: 'board', params: {} })
-    }
+    else if (unknownLink) redirectRoute(store, { name: 'board', params: {} })
     s.setUnreachable(null)
     allowSnapshot(store)
     saveSnapshot(store)
@@ -881,6 +885,7 @@ async function probeGateway(
  * time in sequence order. A reconnect with no cursor re-fetches.
  */
 const mergePollMs = 5000
+const waitingLaunchPollMs = 5000
 const saveDebounceMs = 10_000
 
 export function connect(store: RootStore, client: Api = api): () => void {
@@ -1054,6 +1059,13 @@ export function connect(store: RootStore, client: Api = api): () => void {
     void load()
   })
 
+  // A waiting launch publishes no event either: while one is open it is asked after.
+  const launchTimer = setInterval(() => {
+    if (Object.values(store.getState().waitingLaunches).some(launchOpen)) {
+      coalesce(store, 'waiting-launches', () => loadWaitingLaunches(store, client, undefined, signal).catch(ignore))
+    }
+  }, waitingLaunchPollMs)
+
   // Proposing and cancelling a merge publish no event, so while a code or proposal is open it is polled.
   const mergeTimer = setInterval(() => {
     const s = store.getState()
@@ -1108,6 +1120,7 @@ export function connect(store: RootStore, client: Api = api): () => void {
     window.removeEventListener('pagehide', saveNow)
     if (saveTimer) clearTimeout(saveTimer)
     clearInterval(mergeTimer)
+    clearInterval(launchTimer)
     stopSelection()
     stopOutcomeSeen()
     stopPush()

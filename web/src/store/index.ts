@@ -9,6 +9,7 @@ import { createAssistantSlice, clampAssistantWidth, onPhone, openedForACard, typ
 import { createBoardSlice, type BoardSlice } from '@/store/board'
 import { createCostSlice, type CostSlice } from '@/store/cost'
 import { createDevicesSlice, type DevicesSlice } from '@/store/devices'
+import { createWaitingLaunchesSlice, type WaitingLaunchesSlice } from '@/store/waiting-launches'
 import { createDiffSlice, type DiffSlice } from '@/store/diff'
 import { createEdgeSlice, type EdgeSlice } from '@/store/edge'
 import { createFilesSlice, type FilesSlice } from '@/store/files'
@@ -71,6 +72,7 @@ export type RootState = ServerSlice &
   RunsSlice &
   MembersSlice &
   DevicesSlice &
+  WaitingLaunchesSlice &
   WatchesSlice &
   EdgeSlice &
   TerminalSlice &
@@ -155,6 +157,7 @@ export function createRootStore() {
         ...createRunsSlice(...a),
         ...createMembersSlice(...a),
         ...createDevicesSlice(...a),
+        ...createWaitingLaunchesSlice(...a),
         ...createWatchesSlice(...a),
         ...createEdgeSlice(...a),
         ...createEnvTerminalSlice(...a),

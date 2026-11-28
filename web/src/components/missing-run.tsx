@@ -100,5 +100,5 @@ export function MissingRun({ tiled, runId }: { tiled?: boolean; runId?: string }
       </div>
     </section>
   )
-  return waits && runId ? <WaitingLaunch runId={runId} fallback={notFound} /> : notFound
+  return waits && runId ? <WaitingLaunch key={runId} runId={runId} fallback={notFound} /> : notFound
 }

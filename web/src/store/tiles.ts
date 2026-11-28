@@ -300,16 +300,17 @@ export function routeTiles(layout: TileLayout, params: Record<string, string>, c
 /**
  * Writes each loaded session's resolved view onto its tabs and closes a later
  * tab that repeats an earlier one. `prune` also closes the tabs of sessions
- * the store does not hold, so it is only for a store that knows every session.
+ * the store does not hold, so it is only for a store that knows every session;
+ * `keep` holds the IDs that are not sessions yet, launches waiting for room.
  */
-export function settleTiles(layout: TileLayout, ctx: ViewContext, prune = false): TileLayout {
+export function settleTiles(layout: TileLayout, ctx: ViewContext, prune = false, keep: Record<string, unknown> = {}): TileLayout {
   const seen = new Set<string>()
   const gone = new Set<string>()
   const root = mapTiles(layout.root, (tile) => {
     const tabs = tile.tabs.map((tab) => {
       const run = ctx.runs[tab.runId]
       if (!run) {
-        if (prune) gone.add(tab.id)
+        if (prune && !keep[tab.runId]) gone.add(tab.id)
         return tab
       }
       const view = resolveView(tab, run, ctx.cap, ctx.memory)
@@ -397,5 +398,5 @@ export const createTilesSlice: SliceCreator<TilesSlice> = (set) => ({
   tilesCramped: false,
   tileDrag: null,
   savedTiles: {},
-  pruneTiles: () => set((s) => tilesAfter(s, (layout, ctx) => settleTiles(layout, ctx, true))),
+  pruneTiles: () => set((s) => tilesAfter(s, (layout, ctx) => settleTiles(layout, ctx, true, s.waitingLaunches))),
 })

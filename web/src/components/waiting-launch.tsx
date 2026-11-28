@@ -1,20 +1,20 @@
-import { type ReactNode, useCallback, useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { ArrowLeft, Hourglass } from '@/components/icons'
+import { ArrowLeft, CircleX, Hourglass } from '@/components/icons'
 import { Button } from '@/components/ui/button'
-import { api } from '@/lib/api'
-import { errorSentence, timeAgo } from '@/lib/format'
-import { type LaunchWaiting, launchWaitFeature } from '@/lib/types'
+import { api, ApiError } from '@/lib/api'
+import { useIsMobile } from '@/lib/breakpoints'
+import { errorSentence, formatDuration, timeAgo } from '@/lib/format'
+import type { LaunchWaiting } from '@/lib/types'
 import { useStore } from '@/store'
+import { keepsLaunches, launchOpen, loadWaitingLaunches } from '@/store/waiting-launches'
 
-const pollMs = 5000
+const retryMs = 5000
 
 /** Whether the server keeps launches it has no room for. */
 export function useLaunchWait(): boolean {
-  return useStore((s) => !!s.info?.features?.includes(launchWaitFeature))
+  return useStore(keepsLaunches)
 }
-
-const open = (w: LaunchWaiting) => w.state === 'waiting' || w.state === 'starting'
 
 const heading: Record<LaunchWaiting['state'], string> = {
   waiting: 'Waiting for room on the server',
@@ -25,130 +25,198 @@ const heading: Record<LaunchWaiting['state'], string> = {
   refused: 'Launch refused',
 }
 
-function useCancel(after: () => void) {
-  const [cancelling, setCancelling] = useState('')
+/** Cancels by ID; the server's answer is the launch as it ended, or as it is when it could not be cancelled. */
+function useCancel() {
+  const [cancelling, setCancelling] = useState<ReadonlySet<string>>(new Set())
+  const busy = (id: string, on: boolean) =>
+    setCancelling((ids) => {
+      const next = new Set(ids)
+      if (on) next.add(id)
+      else next.delete(id)
+      return next
+    })
   const cancel = (id: string) => {
-    setCancelling(id)
+    busy(id, true)
     api.launchWaitingCancel(id)
-      .then(after, (err: unknown) => toast.error(`Could not cancel the launch: ${errorSentence(err)}`))
-      .finally(() => setCancelling(''))
+      .then(
+        (launch) => useStore.getState().upsertWaitingLaunch(launch),
+        (err: unknown) => toast.error(`Could not cancel the launch: ${errorSentence(err)}`),
+      )
+      .finally(() => busy(id, false))
   }
   return { cancelling, cancel }
 }
 
 /**
  * The page of a session ID that is a launch waiting for room, not a session
- * yet. It asks every few seconds; the session's own page replaces it once the
- * session exists. An ID that is no waiting launch renders `fallback`.
+ * yet. The store asks after an open launch every few seconds, and the
+ * session's own page replaces this one once the session exists. An ID the
+ * server says is no launch renders `fallback`.
  */
 export function WaitingLaunch({ runId, fallback }: { runId: string; fallback: ReactNode }) {
   const navigate = useStore((s) => s.navigate)
-  const [launch, setLaunch] = useState<LaunchWaiting | null>(null)
-  const [missing, setMissing] = useState(false)
-  const read = useCallback(
-    (signal?: AbortSignal) =>
-      api.launchWaitingList(runId, signal).then(
-        (list) => setLaunch(list[0] ?? null),
-        () => {
-          if (!signal?.aborted) setMissing(true)
-        },
-      ),
-    [runId],
-  )
+  // A phone opens a session over its tab bar, where the list is "Sessions".
+  const mobile = useIsMobile()
+  const launch = useStore((s) => s.waitingLaunches[runId])
+  const [none, setNone] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const known = launch !== undefined
   useEffect(() => {
+    if (known || none) return
     const abort = new AbortController()
-    void read(abort.signal)
-    const timer = setInterval(() => void read(abort.signal), pollMs)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const ask = () =>
+      api.launchWaitingList(runId, abort.signal).then(
+        ([found]) => {
+          if (abort.signal.aborted) return
+          if (found) useStore.getState().upsertWaitingLaunch(found)
+          else setNone(true)
+        },
+        (err: unknown) => {
+          if (abort.signal.aborted) return
+          if (err instanceof ApiError && err.status === 404) return setNone(true)
+          // Not an answer about the launch: say so and ask again.
+          setError(errorSentence(err))
+          timer = setTimeout(() => void ask(), retryMs)
+        },
+      )
+    void ask()
     return () => {
       abort.abort()
-      clearInterval(timer)
+      clearTimeout(timer)
     }
-  }, [read])
-  const { cancelling, cancel } = useCancel(() => void read())
+  }, [runId, known, none])
+  const { cancelling, cancel } = useCancel()
 
-  if (missing) return fallback
-  if (!launch) return null
-  const ended = !open(launch) && launch.state !== 'started'
+  if (none) return fallback
+  const back = (
+    <Button variant="secondary" size="sm" onClick={() => navigate(mobile ? 'sessions' : 'board')}>
+      <ArrowLeft className="size-3.5" aria-hidden />
+      {mobile ? 'Back to sessions' : 'Back to board'}
+    </Button>
+  )
+  if (!launch) {
+    // A phone shows this page over its tab bar, so even an unanswered read needs the way out.
+    return (
+      <section aria-label="Session unavailable" className="h-full min-w-0 w-full px-3 py-3 sm:px-4 sm:py-4">
+        {error !== null && (
+          <p role="alert" className="mb-2 max-w-3xl break-words whitespace-pre-wrap text-ui leading-5 text-muted">
+            Could not ask the server whether {runId} is a launch waiting for room: {error} Asking again.
+          </p>
+        )}
+        {(error !== null || mobile) && back}
+      </section>
+    )
+  }
+  const open = launchOpen(launch)
+  const over = !open && launch.state !== 'started'
+  const Icon = over ? CircleX : Hourglass
   return (
     <section aria-label={heading[launch.state]} className="flex h-full min-w-0 w-full items-start px-3 py-3 sm:px-4 sm:py-4">
-      <div className={`min-w-0 w-full max-w-3xl border-l-2 px-3 py-2.5 sm:px-4 ${ended ? 'border-state-failed bg-state-failed/10' : 'border-state-paused bg-state-paused/10'}`}>
+      <div className={`min-w-0 w-full max-w-3xl border-l-2 px-3 py-2.5 sm:px-4 ${over ? 'border-state-failed bg-state-failed/10' : 'border-state-paused bg-state-paused/10'}`}>
         <div className="flex min-w-0 items-start gap-2.5">
-          <Hourglass className={`mt-0.5 size-4 shrink-0 ${ended ? 'text-state-failed' : 'text-state-paused'}`} aria-hidden />
+          <Icon className={`mt-0.5 size-4 shrink-0 ${over ? 'text-state-failed' : 'text-state-paused'}`} aria-hidden />
           <div className="min-w-0">
             <h1 className="text-title leading-5">{heading[launch.state]}</h1>
             {launch.task && <p className="mt-0.5 break-words text-ui leading-5">{launch.task}</p>}
-            <p className="mt-1 text-ui-sm leading-5 text-muted">
-              {open(launch)
-                ? `No session exists yet. The server starts it by itself when it has room, and gives up ${until(launch.expires_at)}. Asked ${timeAgo(launch.created_at)}; tried ${launch.attempts} more ${launch.attempts === 1 ? 'time' : 'times'}; ${launch.passed} other ${launch.passed === 1 ? 'launch' : 'launches'} started first.`
-                : `No session was started. Asked ${timeAgo(launch.created_at)}.`}
-            </p>
-            <p className="mt-1.5 text-ui-sm leading-5 text-muted">{open(launch) ? 'The server’s last refusal:' : 'Why:'}</p>
-            <p role={ended ? 'alert' : undefined} className="break-words whitespace-pre-wrap font-mono text-ui-sm leading-5 select-text">
-              {launch.refusal}
-            </p>
+            {open && (
+              <ul className="mt-1 text-ui-sm leading-5 text-muted">
+                <li>No session exists yet. The server starts it by itself when it has room.</li>
+                <li>
+                  Gives up in {formatDuration(Math.max(0, Date.parse(launch.expires_at) - Date.now()))}, {at(launch.expires_at)}.
+                </li>
+                <li>
+                  Asked {timeAgo(launch.created_at)}; tried {launch.attempts} {launch.attempts === 1 ? 'time' : 'times'} since.
+                </li>
+                {launch.passed > 0 && (
+                  <li>
+                    {launch.passed} other {launch.passed === 1 ? 'launch' : 'launches'} started while it waited.
+                  </li>
+                )}
+              </ul>
+            )}
+            {over && (
+              <p className="mt-1 text-ui-sm leading-5 text-muted">
+                No session was started. Asked {timeAgo(launch.created_at)}
+                {launch.ended_at ? `; ended ${at(launch.ended_at)}` : ''}.
+              </p>
+            )}
+            {launch.state === 'started' && <p className="mt-1 text-ui-sm leading-5 text-muted">Its session exists; opening it.</p>}
+            {launch.refusal && (
+              <>
+                <p className="mt-1.5 text-ui-sm leading-5 text-muted">{open ? 'The server’s last refusal:' : 'Why:'}</p>
+                <p role={over ? 'alert' : undefined} className="break-words whitespace-pre-wrap font-mono text-ui-sm leading-5 select-text">
+                  {launch.refusal}
+                </p>
+              </>
+            )}
           </div>
         </div>
         <div className="mt-2.5 flex flex-wrap gap-2">
-          {open(launch) && (
-            <Button variant="secondary" size="sm" disabled={cancelling === launch.id} onClick={() => cancel(launch.id)}>
+          {open && (
+            <Button variant="secondary" size="sm" disabled={cancelling.has(launch.id)} onClick={() => cancel(launch.id)}>
               Cancel launch
             </Button>
           )}
-          <Button variant="ghost" size="sm" onClick={() => navigate('board')}>
-            <ArrowLeft className="size-3.5" aria-hidden />
-            Back to board
-          </Button>
+          {back}
         </div>
       </div>
     </section>
   )
 }
 
-function until(iso: string): string {
+function at(iso: string): string {
   return `at ${new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`
 }
 
 /**
  * The member's launches that wait for room, and those that ended without a
- * session in the last day, above the session list: a launch that is not a
- * session yet has no row there.
+ * session in the last day, above a session list: a launch that is not a
+ * session yet has no row there. `narrow` is the sidebar's: the launch's page
+ * has the refusal and Cancel.
  */
-export function WaitingLaunches() {
+export function WaitingLaunches({ narrow }: { narrow?: boolean }) {
   const offered = useLaunchWait()
   const navigate = useStore((s) => s.navigate)
-  const [list, setList] = useState<LaunchWaiting[]>([])
-  const read = useCallback((signal?: AbortSignal) => api.launchWaitingList(undefined, signal).then(setList, () => {}), [])
+  const launches = useStore((s) => s.waitingLaunches)
+  const own = useStore((s) => s.ownLaunches)
   useEffect(() => {
-    if (!offered) return
-    const abort = new AbortController()
-    void read(abort.signal)
-    const timer = setInterval(() => void read(abort.signal), pollMs)
-    return () => {
-      abort.abort()
-      clearInterval(timer)
-    }
-  }, [offered, read])
-  const { cancelling, cancel } = useCancel(() => void read())
+    // The store only asks after launches it knows are open: one made elsewhere shows when a list opens.
+    if (offered) void loadWaitingLaunches(useStore, api).catch(() => {})
+  }, [offered])
+  const { cancelling, cancel } = useCancel()
+  const list = own.flatMap((id) => launches[id] ?? [])
   if (list.length === 0) return null
   return (
     <ul aria-label="Launches waiting for room" className="border-b border-seam/80">
-      {list.map((w) => (
-        <li key={w.id} className="flex min-w-0 items-start gap-2.5 border-t border-seam/60 px-3 py-2 first:border-t-0 sm:px-4">
-          <Hourglass className={`mt-0.5 size-4 shrink-0 ${open(w) ? 'text-state-paused' : 'text-state-failed'}`} aria-hidden />
-          <button type="button" className="min-w-0 flex-1 text-left" onClick={() => navigate('run', { runId: w.id })}>
-            <span className="block truncate text-ui leading-5">{w.task || `${w.harness} session`}</span>
-            <span className="block text-ui-sm leading-5 text-muted">
-              {heading[w.state]} · asked {timeAgo(w.created_at)}
-            </span>
-            <span className="block break-words font-mono text-ui-sm leading-5 text-muted">{w.refusal}</span>
-          </button>
-          {open(w) && (
-            <Button variant="secondary" size="sm" className="shrink-0" disabled={cancelling === w.id} onClick={() => cancel(w.id)}>
-              Cancel
+      {list.map((w) => {
+        const over = !launchOpen(w)
+        const Icon = over ? CircleX : Hourglass
+        return (
+          <li
+            key={w.id}
+            className={`flex min-w-0 items-start gap-2.5 border-t border-seam/60 px-3 py-2 first:border-t-0 ${narrow ? '' : 'sm:px-4'} ${over ? 'border-l-2 border-l-state-failed' : ''}`}
+          >
+            <Icon className={`mt-0.5 size-4 shrink-0 ${over ? 'text-state-failed' : 'text-state-paused'}`} aria-hidden />
+            <Button
+              variant="quiet"
+              className="block min-w-0 flex-1 text-left text-text hover:not-aria-disabled:no-underline"
+              onClick={() => navigate('run', { runId: w.id })}
+            >
+              <span className="block truncate text-ui leading-5">{w.task || `${w.harness} session`}</span>
+              <span className="block text-ui-sm leading-5 text-muted">
+                <span className={over ? 'text-state-failed' : undefined}>{heading[w.state]}</span> · asked {timeAgo(w.created_at)}
+              </span>
+              {!narrow && <span className="line-clamp-2 break-words font-mono text-ui-sm leading-5 text-muted">{w.refusal}</span>}
             </Button>
-          )}
-        </li>
-      ))}
+            {!narrow && !over && (
+              <Button variant="secondary" size="sm" className="shrink-0" disabled={cancelling.has(w.id)} onClick={() => cancel(w.id)}>
+                Cancel launch
+              </Button>
+            )}
+          </li>
+        )
+      })}
     </ul>
   )
 }

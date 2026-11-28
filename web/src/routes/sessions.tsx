@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { ChartGantt, List } from '@/components/icons'
 import { SidebarRuns } from '@/components/shell/sidebar-runs'
+import { WaitingLaunches } from '@/components/waiting-launch'
 import { RadioPills, RadioPillsItem } from '@/components/ui/radio-pills'
 import { ViewHeader } from '@/components/view-header'
 import { useIsMobile } from '@/lib/breakpoints'
@@ -26,6 +27,7 @@ function Sessions() {
       <ViewHeader title="Sessions" />
       {lanes ? <SessionLanes /> : (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col pt-2">
+          <WaitingLaunches />
           <SidebarRuns regroup={(groups) => byAttention(groups, items, devices.length + merges.length)} />
         </div>
       )}

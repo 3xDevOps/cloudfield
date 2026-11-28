@@ -21,7 +21,7 @@ import { LoaderCircle, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Callout } from '@/components/ui/callout'
 import { SlideOut } from '@/components/ui/slide-out'
-import { api, type RunLaunchParams } from '@/lib/api'
+import { api, ApiError, type RunLaunchParams } from '@/lib/api'
 import { launchWaitFeature } from '@/lib/types'
 import { useClock } from '@/lib/clock'
 import { mobileScreen, useIsMobile } from '@/lib/breakpoints'
@@ -256,6 +256,23 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
     if (savesDefaults) saveLaunchDefaults((current) => ({ ...current, permission: next })).catch((err) => toast.error(`Permission not saved for your next launch: ${message(err)}`))
   }
 
+  // A kept launch whose answer was lost still waits on the server: the same
+  // launch sent again carries the same key and gets that one, not a second.
+  const sent = useRef<{ params: string; key: string } | null>(null)
+  const launchOnce = async (params: RunLaunchParams) => {
+    const same = JSON.stringify(params)
+    if (sent.current?.params !== same) sent.current = { params: same, key: randomID('launch') }
+    try {
+      const result = await api.runLaunchOrWait({ ...params, idempotency_key: sent.current.key })
+      sent.current = null
+      return result
+    } catch (err) {
+      // The server answered: nothing is kept under the key.
+      if (err instanceof ApiError && err.code !== undefined) sent.current = null
+      throw err
+    }
+  }
+
   const launchRun = async () => {
     const trimmed = task.trim()
     const chosenModel = model.trim()
@@ -283,10 +300,11 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
     }
     // A server that keeps a launch it has no room for is asked to: the
     // launch then waits, with the server's refusal, instead of failing.
-    const { run, waiting } = launchWaits ? await api.runLaunchOrWait(params) : { run: await api.runLaunch(params), waiting: undefined }
+    const { run, waiting } = launchWaits ? await launchOnce(params) : { run: await api.runLaunch(params), waiting: undefined }
     if (!signedIn()) return
     rememberChoice(harness, mode, chosenModel)
     if (run) upsertRun(run)
+    if (waiting) useStore.getState().upsertWaitingLaunch(waiting)
     if (useStore.getState().launchDraft?.id === draftID) discard()
     navigate('run', { runId: run?.id ?? waiting?.id ?? '' })
     if (run) toast.success('Session launched')

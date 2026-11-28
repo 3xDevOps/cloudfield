@@ -2848,11 +2848,15 @@ installed ("The Enhanced adapter for <agent> is not installed.", with
 one the control shows, and a refusal from `run.launch` appears in the dialog
 verbatim under "Launch failed" while the dialog stays open, until another
 agent or mode is chosen. On a server whose `server.info` lists `launch-wait` the
-dialog sends `wait`, so a launch the server has no memory or disk for is
-not a failure: the server keeps it, the dialog closes with the toast `The
-server has no room yet. The launch waits and starts by itself.`, and the
-dashboard opens the [waiting launch](#missing-run) under the session ID
-reserved for it. `run.launch` answers only once the session is
+dialog sends `wait` and an `idempotency_key`, so a launch the server has no
+memory or disk for is not a failure: the server keeps it (unless the member
+already has 8 waiting, which it refuses), the dialog closes with the toast
+`The server has no room yet. The launch waits and starts by itself.`, and
+the dashboard opens the [waiting launch](#missing-run) under the session ID
+reserved for it. A launch whose answer never arrived is sent again under the
+same key when the member presses Launch with the form unchanged, so the
+server returns the launch it kept and not a second; a reload forgets the
+key. A launch that does not wait is answered only once the session is
 provisioned, which can take seconds, so the dialog navigates only then: until
 the answer the button reads "Launching…" with a spinner,
 and past the deadline "Still waiting for the server…". A refusal that
@@ -5803,20 +5807,34 @@ not a server that is retrying, so that one says what the error recorded -
 rather than a claim about the session. While the store is still hydrating it is
 a skeleton, held behind `useDelayed` so a fast load never flashes one. Only
 once the store has hydrated does it say the session is not on the server, and
-offer **Back to board**. On a server with `launch-wait` it first asks
-`launch.waiting.list` for that ID (`src/components/waiting-launch.tsx`): a
-launch waiting for room is not a session yet, and its page says so in place
-of "Session not found". It shows **Waiting for room on the server**, the
-task, that no session exists yet and when the server gives up, how long ago
-it was asked, how often it was tried and how many launches started first,
-the server's last refusal verbatim, and **Cancel launch**
-(`launch.waiting.cancel`) beside **Back to board**. It asks again every 5
-seconds; once the session exists its own page takes over. A launch that
-ended without a session reads **Launch gave up waiting**, **Launch refused**
-or **Launch cancelled** with why, in the failed colour. The All workspaces
-list shows the member's waiting launches, and those that ended that way in
-the last day, above its sessions, each with its refusal, a row that opens
-it and **Cancel**. The launch paths seed the session they just started -
+offer **Back to board**. A launch waiting for room is not a session yet, so
+on a server with `launch-wait` its ID shows the launch in place of "Session
+not found" (`src/components/waiting-launch.tsx`): **Waiting for room on the
+server**, the task, that no session exists yet, when the server gives up,
+how long ago it was asked, how often it was tried and how many launches
+started while it waited, the server's last refusal verbatim, and **Cancel
+launch** (`launch.waiting.cancel`) beside **Back to board** (**Back to
+sessions** on a phone). A launch that ended without a session reads
+**Launch gave up waiting**, **Launch refused** or **Launch cancelled** with
+why and when, in the failed colour, and has no Cancel. Once the session
+exists its own page takes over.
+
+The store holds these launches (`src/store/waiting-launches.ts`): the
+member's own from `launch.waiting.list`, waiting or ended without a session
+in the last day (the server leaves out those the member cancelled), and any
+other a tab shows, read by ID. Hydration reads them before it closes the
+tabs of unknown sessions, so a waiting launch's tab and link survive a
+reload and a reconnect. While one is open the connection asks again every 5
+seconds, one read at a time; a launch that started is replaced by its
+session, fetched with `run.get` when its event has not arrived. An ID the
+server answers "not found" for shows "Session not found"; any other read
+error is shown as it is and asked again. The phone's Sessions list and the
+All workspaces list show the member's launches above their sessions: each
+row opens the launch and shows its state and refusal, and a waiting one has
+**Cancel launch**. The sidebar shows the same rows without the refusal and
+the button, which the launch's page has.
+
+The launch paths seed the session they just started -
 both template launches and the onboarding first-session form, the way
 `launch-dialog.tsx` does - so a launch never lands on the deleted claim. On
 a desktop it fills the tile whose tab names the session, and the tab closes
