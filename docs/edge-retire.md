@@ -359,22 +359,95 @@ A connector's grant and tokens are bound to the URL it was added at, so it
 cannot be moved: you add it again at the new address and revoke the old one.
 
 Check: the app's connector settings show the URL you added. In the
-dashboard, **Settings → ChatGPT and Claude** lists each of your connectors
-with the URL it was added at. `cloudfield mcp` prints `at <url>` for a
-connector at a server's own URL and `universal URL` for one at `/mcp`,
-without the address. TODO(after #1131): `cloudfield mcp` marks each connector
-at a retiring or retired address and prints the URL to add instead, with the
-same path; the consent page at the old address shows a warning; a tool
-result carries `Notice for the user: this connector was added at <old>/mcp,
-an address that is retiring[ on <date>]. It must be added again at
-<new>/mcp.`, at most once a day per connector.
+dashboard, **Settings → ChatGPT and Claude** shows `Universal URL` for a
+connector at `/mcp` and `This server’s own URL, <url>` for one at
+`/mcp/<server id>`; `cloudfield mcp` prints `universal URL` and `at <url>`.
+
+The server reads the state of an address from the notices its edge signs
+([Moving a server](#moving-a-server)). From those it marks each of your
+connectors at a retiring or retired address, in four places. Each is
+detailed in
+[connectors.md](connectors.md#adding-a-connector-again-at-a-new-address);
+a server build from before these marks shows none, and a CLI from before
+them prints no such line. Nothing moves or revokes a marked connector for
+you. Each text below drops ` on <date>` when the operator set none.
+
+- `cloudfield mcp` prints a marked connector with `at <url>`, at `/mcp`
+  too, and one line under it. `aether mcp` in these lines is the same
+  command under its old name:
+
+  ```
+  Connected:
+    <id>  <client name> (<client host>)  scopes <scopes>  added <date>  never used  at https://edge-old.example.com/mcp
+      retiring on <date>: add it again at https://edge-new.example.com/mcp, check it works, remove the old one in the app, then: aether mcp revoke <id>
+  ```
+
+  With no new URL named the line is `retiring on <date>: ask this server's
+  admin where to add it again`. At a retired address it is `retired: add it
+  again at https://edge-new.example.com/mcp if you still use it, remove the
+  old one in the app, then: aether mcp revoke <id>`, or with no new URL
+  `retired: remove it in the app, then: aether mcp revoke <id>`. When a
+  named URL is a server's own and the URL `cloudfield mcp` offers takes the
+  edge sign-in, it adds `Reconnecting one at the server's own URL asks for a
+  code: aether mcp code`. When no code can be minted, it prints this list
+  before the error.
+- **Settings → ChatGPT and Claude** shows the connector as `Added at <url>`
+  under the title `This address is retiring on <date>` or `This address is
+  retired`. With a new URL named, the text is `Add it again in <client
+  name> at this URL and check that it works, then remove the old connector
+  in <client name> and select Revoke on this row.` (for a retired address,
+  `This connector no longer works. Add it again in <client name> at this
+  URL, then remove the old connector in <client name> and select Revoke on
+  this row.`), then `Its page asks for a code; run aether mcp code to get
+  one.` where that applies, `Its consent page is where you choose its
+  scopes.` and the URL with a copy button. With none it is `It keeps working
+  until the address is retired. Ask this server’s admin where to add it
+  again.` or `This connector no longer works. Revoke it, and remove the old
+  connector in <client name>.` The row has no **Reconnect** and no **Move to
+  the universal URL**, and Settings never moves or revokes it: you select
+  **Revoke**.
+- The consent page at a retiring address, which the app opens when you
+  connect there, says `This address is retiring on <date>. Add the connector
+  at <url> instead. Connecting here still works until it is retired.` With
+  no new URL its middle sentence is `Ask this server's admin where to add
+  the connector instead.`
+- A tool result carries a second text block, `Notice for the user: this
+  connector was added at https://edge-old.example.com/mcp, an address that
+  is retiring on <date>. It must be added again at
+  https://edge-new.example.com/mcp.`, at most once a day per connector and
+  again after a server restart. It comes only while the address is retiring
+  and a new URL is named, never with a failed call, and never with `search`
+  or `fetch`.
+
+The new URL is the connector's path, `/mcp` or `/mcp/<server id>`, at the
+new relay origin. The server names it only while all of these hold:
+
+- the server is connected to its edge at edge protocol 6 or later, and the
+  edge reports it claimed;
+- the edge announces the new address on that connection;
+- the notice did not come with the connection that pinned the edge key,
+  which is trusted on first use;
+- for `/mcp` in `cloudfield mcp`, Settings and the tool result, you have a
+  GitHub account linked. The consent page at `/mcp` names it without this
+  check.
+
+When no URL is named, a connector at a retiring address keeps working
+until the address is retired. For `/mcp`, link a GitHub account with
+`cloudfield member link --github <login>`
+([teams.md](teams.md#link-or-merge-sign-ins)). Otherwise ask the server's
+admin, who checks the first three conditions and gives you the URL. Then
+follow the steps below.
+
+While the server's own address is retiring and the new URL is named,
+`cloudfield mcp` and Settings also offer that URL for a new connector.
 
 The server must be v0.8.7 or later ([Moving a server](#moving-a-server)).
 
 1. Add the connector again at the same path on the new host, such as
    `https://edge-new.example.com/mcp`, as in
-   [connectors.md](connectors.md#add-it-in-chatgpt). For a server's own URL,
-   `cloudfield mcp code` prints the code it asks for. In Claude Code:
+   [Add it in ChatGPT](connectors.md#add-it-in-chatgpt) or
+   [Add it in Claude](connectors.md#add-it-in-claude). For a server's own
+   URL, `cloudfield mcp code` prints the code it asks for. In Claude Code:
 
    ```sh
    claude mcp add --transport http aether https://edge-new.example.com/mcp
@@ -406,9 +479,11 @@ Every connector path at the old address answers `410 Gone` with:
 ```
 
 The app shows its own error for a failed connection. The server no longer
-accepts a token issued at the old address. Add the connector again and
-revoke the old one as above; the old one also stops being listed once its
-refresh token is unused for 30 days.
+accepts a token issued at the old address. Once the server is connected at
+the new address, `cloudfield mcp` and Settings mark the connector `retired`
+as above; a retired address gives no note in tool results. Add the
+connector again and revoke the old one as above; the old one also stops
+being listed once its refresh token is unused for 30 days.
 
 ## Links
 
