@@ -934,8 +934,9 @@ func (s *Server) Close() error {
 }
 
 // offerRoom tells the SSH server, which starts the launches that wait for
-// room, whenever a session's status or sleep changes or one is deleted:
-// each can free memory or disk.
+// room, whenever a session ends, goes to sleep or is deleted: each can free
+// memory or disk. A start gives back what it had claimed only after its
+// status says running, so the clock finds that room.
 func (s *Server) offerRoom(ctx context.Context) {
 	sub, err := s.bus.Subscribe(ctx, events.SubscribeOptions{Filter: events.Filter{Types: []events.Type{events.TypeRunStatus, events.TypeRunSleep, events.TypeRunDeleted}}})
 	if err != nil {
@@ -951,9 +952,7 @@ func (s *Server) offerRoom(ctx context.Context) {
 				slog.Warn("server: the session status subscription ended; waiting launches are tried on the clock only")
 				return
 			}
-			// One ending, asleep or gone can give room back, and one that
-			// has started gives back what its start had claimed.
-			if status, isStatus := e.Payload.(events.RunStatusPayload); isStatus && !status.To.Terminal() && status.To != domain.RunRunning {
+			if status, isStatus := e.Payload.(events.RunStatusPayload); isStatus && !status.To.Terminal() {
 				continue
 			}
 			s.ssh.RoomAppeared()

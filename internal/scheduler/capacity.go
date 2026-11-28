@@ -115,8 +115,9 @@ type memoryClaim struct {
 	// op and run name the admission in the capacity counters.
 	op  string
 	run domain.RunID
-	// reclaim lets a launch-retry free disk.
-	reclaim bool
+	// reclaim, when set, lets a launch-retry free disk, and is called
+	// when it goes to.
+	reclaim func()
 	// wake starts a container whose disks exist, so it is not held to the
 	// disk reserve: refusing it would keep a saved VM's memory on disk.
 	wake bool
@@ -151,7 +152,7 @@ func (s *Scheduler) reserveCapacity(ctx context.Context) (func(), error) {
 // one was reserved for it. With retry the server tries it again unasked
 // after a capacity refusal: disk reclaim removes what closed and sleeping
 // sessions keep, so only an attempt somebody asked for runs it.
-func (s *Scheduler) reserveLaunch(ctx context.Context, run domain.RunID, retry, reclaim bool) (func(), error) {
+func (s *Scheduler) reserveLaunch(ctx context.Context, run domain.RunID, retry bool, reclaim func()) (func(), error) {
 	op := opLaunch
 	if retry {
 		op = opLaunchRetry
@@ -233,7 +234,10 @@ func (s *Scheduler) reserve(ctx context.Context, claim *memoryClaim) (release fu
 	var short *memoryShortage
 	switch {
 	case ctx.Err() != nil:
-	case errors.Is(err, ErrDiskFull) && (claim.op != opLaunchRetry || claim.reclaim):
+	case errors.Is(err, ErrDiskFull) && (claim.op != opLaunchRetry || claim.reclaim != nil):
+		if claim.reclaim != nil {
+			claim.reclaim()
+		}
 		s.reclaimDisk(ctx, "")
 		return s.tryReserveCapacity(ctx, claim)
 	case errors.As(err, &short) && s.saveIdleVMs(ctx, short.need+short.claimed):
