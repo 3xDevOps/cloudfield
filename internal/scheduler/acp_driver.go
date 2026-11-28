@@ -500,10 +500,11 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 	if !ok {
 		return fmt.Errorf("%w: the runtime cannot run a managed exec", runtime.ErrExecUnavailable)
 	}
-	// A restart during a launch's open leaves no session to restore: the
-	// run's first one is still owed, with its mode, model, effort and task,
-	// whatever a keeper of the unfinished open holds.
-	fresh := how == openNew || how == openRestore && run.HarnessSessionID == "" && cachedSession == ""
+	// A restart during a launch's open, or a move after one that failed,
+	// leaves no session to restore: the run's first one is still owed, with
+	// its mode, model, effort and task, whatever a keeper of the unfinished
+	// open holds.
+	fresh := how == openNew || (how == openRestore || how == openContinue) && run.HarnessSessionID == "" && cachedSession == ""
 	sessionID, mode := "", profile.ACPMode
 	if !fresh {
 		sessionID = run.HarnessSessionID
@@ -780,7 +781,7 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 		d.endOneShot(entry, false, agentstatus.Report{State: agentstatus.Idle, Reason: "model not set: " + modelErr.Error()})
 	case oneShot && effortErr != nil:
 		d.endOneShot(entry, false, agentstatus.Report{State: agentstatus.Idle, Reason: "effort not set: " + effortErr.Error()})
-	case how == openContinue:
+	case how == openContinue && !fresh:
 	case oneShot && how == openSent && sess.State().TurnInFlight:
 		// The continuation's turn runs on; its end ends the run.
 	case oneShot && how == openSent:
@@ -797,6 +798,13 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 		// The restore's idle report can run before setRun, when the run
 		// does not look idle yet.
 		d.wakeIdle(runID)
+	}
+	if how == openContinue && fresh {
+		// The task, sent instead, leaves nothing to continue.
+		d.s.mu.Lock()
+		swap := entry.accountSwap
+		d.s.mu.Unlock()
+		d.s.clearAccountSwap(entry, swap)
 	}
 	if how != openContinue && sess.SessionID() == sessionID {
 		if swap := d.owedContinuation(entry); swap != nil {

@@ -1044,7 +1044,9 @@ func (s *Scheduler) replaceContainer(ctx context.Context, entry *supervised, f *
 		}
 	}
 	switch {
-	case again == "" && run.ACP:
+	// An Enhanced session with no conversation to continue was given its
+	// task instead, which cleared the marker.
+	case again == "" && run.ACP && swap != nil:
 		s.acp.sendContinuation(entry, swap)
 	case again == "":
 	case run.ACP:
