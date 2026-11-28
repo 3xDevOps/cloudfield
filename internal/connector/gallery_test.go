@@ -21,7 +21,7 @@ func consentStates() []consentState {
 	base := consentPage{Client: "ChatGPT (chatgpt.com)", Server: "moss", ServerID: "q3k7m2xw4vbn6hzt5rjc8pdyfa", Request: "fixture"}
 	code := base
 	codeErr := base
-	codeErr.Error = "That code is wrong, expired or already used. Get a new one from Settings → ChatGPT and Claude in the Cloudfield app, or aether mcp, and paste it here."
+	codeErr.Error = "That code is wrong, expired or already used. Get a new one from Settings → Connections → ChatGPT and Claude in the Cloudfield app, or aether mcp, and paste it here."
 	codeErr.Write = true
 	member := base
 	member.Universal, member.Member, member.Account, member.Write = true, "octo-dev", "octo-dev", true

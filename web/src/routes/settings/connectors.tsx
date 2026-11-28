@@ -115,15 +115,15 @@ function CodeStep({ code, busy, expired, onMint }: { code: ConnectorCode | null;
   )
 }
 
-const guides: Record<App, { open: ReactNode; paste: ReactNode; note: string }> = {
+const guides: Record<App, { open: ReactNode; paste: ReactNode; finish?: ReactNode; note?: string }> = {
   chatgpt: {
-    open: <>On chatgpt.com, open <Link href="https://chatgpt.com/plugins">ChatGPT Plugins</Link>, select <strong>+</strong>, then <strong>Add custom MCP server</strong>.</>,
-    paste: <>Name it <strong>Aether</strong>, paste this URL as the server URL, choose <strong>OAuth</strong>, then select <strong>Create as a plugin</strong> and install it.</>,
-    note: 'Write tools need ChatGPT Business or Enterprise/Edu; Pro gets the read tools only. Once added, it works in ChatGPT on the web, desktop and phone.',
+    open: <>On the web, open <Link href="https://chatgpt.com/plugins">ChatGPT Plugins</Link>, select the plus button, then <strong>Add custom MCP server</strong>. Your account or workspace must allow custom MCP servers.</>,
+    paste: <>Name it <strong>Cloudfield</strong>. Under <strong>Connection</strong>, paste this URL into <strong>Server URL</strong> and select <strong>OAuth</strong> for authentication.</>,
+    finish: <>If ChatGPT asks how to register the OAuth client, choose the client ID metadata document (CIMD) option. Review the risk warning, select <strong>I understand and want to continue</strong>, then select <strong>Create as a plugin</strong>. Open the new plugin and select the plus button to install it.</>,
   },
   claude: {
     open: <>Open <Link href="https://claude.ai/settings/connectors">Claude connectors</Link> (<strong>Customize → Connectors</strong>) and select <strong>Add custom connector</strong>. On Team and Enterprise, an Owner adds it first under <strong>Organization settings → Connectors</strong>.</>,
-    paste: <>Name it <strong>Aether</strong>, paste this URL, leave <strong>Advanced settings</strong> empty, select <strong>Add</strong>, then <strong>Connect</strong>.</>,
+    paste: <>Name it <strong>Cloudfield</strong>, paste this URL, leave <strong>Advanced settings</strong> empty, select <strong>Add</strong>, then <strong>Connect</strong>.</>,
     note: 'Free allows one custom connector. Once added, it works in Claude on the web, desktop and phone.',
   },
 }
@@ -131,11 +131,11 @@ const guides: Record<App, { open: ReactNode; paste: ReactNode; note: string }> =
 function SignInStep({ watching, busy, expired, onWatch }: { watching: boolean; busy: boolean; expired: boolean; onWatch: () => void }) {
   return (
     <>
-      <p>On the Cloudfield pages that open, sign in to the edge with GitHub, select <strong>Continue</strong> next to this server, choose its scopes and select <strong>Allow</strong>. No code is needed.</p>
+      <p>On the Cloudfield pages that open, sign in to the edge with GitHub, select the <strong>Continue with</strong> button for your server, choose its scopes and select <strong>Allow</strong>. No code is needed.</p>
       {!watching && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
           <Button size="sm" variant="secondary" disabled={busy} onClick={onWatch}>Watch for the connection</Button>
-          <span className="text-muted">{expired ? 'Nothing connected in the last 10 minutes. ' : ''}Shows it here once it connects, for 10 minutes.</span>
+          <span className="text-muted">{expired ? 'Nothing connected in the last 10 minutes. ' : ''}Waits up to 10 minutes for the connection.</span>
         </div>
       )}
     </>
@@ -177,14 +177,23 @@ function Setup({
   const guide = guides[app]
   const url = at ?? code?.url ?? info.url ?? null
   const universal = atUniversal(info, url)
+  const signIn = signsInAt(info, at)
+  const codeStep = <CodeStep code={code} busy={busy} expired={expired} onMint={onMint} />
   return (
     <div className="flex min-w-0 flex-col gap-3">
-      {universal && <p>Install Aether from the {app === 'chatgpt' ? 'ChatGPT' : 'Claude'} directory where it is listed, or add it as a custom connector:</p>}
+      {universal && <p>If Cloudfield is in your {app === 'chatgpt' ? 'ChatGPT plugin' : 'Claude connector'} directory, install it there and skip to step 3.</p>}
       <ol className="flex min-w-0 flex-col gap-3">
         <Step n={1}><p>{guide.open}</p></Step>
         <Step n={2}>
+          {!url && (
+            <>
+              {edgeNote ?? <p className="text-muted">Get a pairing code to show the server URL.</p>}
+              {!signIn && codeStep}
+            </>
+          )}
           <p>{guide.paste}</p>
-          {url ? <CopyableCommand command={url} /> : edgeNote ?? <p className="text-muted">The URL appears with the code.</p>}
+          {url && <CopyableCommand command={url} />}
+          {guide.finish && <p>{guide.finish}</p>}
           {at && !atUniversal(info, at) && <p className="text-muted">This is this server’s own URL, where the connector you are reconnecting was added. Its page asks for a code.</p>}
           {url && info.universal_url && !universal && !at && (
             <p className="text-muted">
@@ -192,18 +201,22 @@ function Setup({
             </p>
           )}
         </Step>
-        <Step n={3}>
-          {signsInAt(info, at)
+        {app === 'chatgpt' && (
+          <Step n={3}><p>In ChatGPT, switch to <strong>Work</strong> and start a new chat. Type <Code>@</Code>, select <strong>Cloudfield</strong> and ask “What needs me in Cloudfield?”</p></Step>
+        )}
+        <Step n={app === 'chatgpt' ? 4 : 3}>
+          {app === 'chatgpt' && <p>When ChatGPT asks you to connect, follow the prompt to Cloudfield.</p>}
+          {signIn
             ? <SignInStep watching={watching} busy={busy} expired={expired} onWatch={onMint} />
             : (
                 <>
-                  <p>On the Cloudfield page that opens, choose its scopes, paste this code if the page asks for one, and select <strong>Allow</strong>.</p>
-                  <CodeStep code={code} busy={busy} expired={expired} onMint={onMint} />
+                  <p>{universal && <>When Cloudfield opens, sign in to the edge with GitHub and select the <strong>Continue with</strong> button for your server. </>}On the consent page, paste the code, choose its scopes and select <strong>Allow</strong>.</p>
+                  {url && codeStep}
                 </>
               )}
         </Step>
       </ol>
-      <p className="text-muted">{guide.note}</p>
+      {guide.note && <p className="text-muted">{guide.note}</p>}
     </div>
   )
 }
@@ -230,7 +243,7 @@ function Connectors({ client }: { client: Api }) {
   // An attempt watches for a new connector of `app` at `into` until
   // `until`: a code's expiry, or 10 minutes when signing in replaces the
   // code. A move or reconnect, `id`, watches only for one of `replaces`'s
-  // client, and revokes `replaces` once that one has called Aether.
+  // client, and revokes `replaces` once that one has called Cloudfield.
   const [attempt, setAttempt] = useState<{
     id: string
     code: ConnectorCode | null
@@ -314,7 +327,7 @@ function Connectors({ client }: { client: Api }) {
         else if (final) setExpired(true)
         return
       }
-      // A replacement that called Aether wins over one whose tokens may
+      // A replacement that called Cloudfield wins over one whose tokens may
       // never have arrived.
       const candidates = next.filter((c) => !attempt.known.has(c.id) && sameURL(attempt.info, c.resource, attempt.into) &&
         (old.client_id ? c.client_id === old.client_id : c.redirect_host === old.redirect_host))
@@ -443,9 +456,8 @@ function Connectors({ client }: { client: Api }) {
   // A connector on the server's own URL reconnects there, with a code.
   const signsIn = (c: Connector) => signsInAt(info, c.resource)
   const tooOld = listError?.old === true
-  const edgeNote = edge && !edge.edge_url
-    ? <p className="text-muted">This server has no edge, so ChatGPT and Claude cannot reach it. An admin turns one on: <Link href={`${docs}/edge.md#turning-it-on`}>Edge guide</Link>.</p>
-    : edgeError && <p className="text-muted">The URL appears with the code. Reading the server's edge failed: {edgeError}</p>
+  const noEdge = edge?.edge_url === '' && !info.url
+  const edgeNote = edgeError && <p className="text-muted">The URL appears with the code. Reading the server's edge failed: {edgeError}</p>
   const offline = edge?.edge_url && !edge.connected
     ? <p className="text-muted">This server is not connected to its edge at {edge.edge_url}; an admin sees why with <Code>sudo aether-server edge status</Code>.</p>
     : null
@@ -457,7 +469,11 @@ function Connectors({ client }: { client: Api }) {
         help={<>Launch sessions, see what needs you and answer agents from a chat, on your phone too. The connector acts as you. <Link href={`${docs}/connectors.md`}>Connector guide</Link></>}
       >
         {listError && <FailureCallout failure={listError} />}
-        {!tooOld && (
+        {!tooOld && (noEdge ? (
+          <Callout tone="needs-you" title="This server has no edge">
+            ChatGPT and Claude reach Cloudfield through an edge. An admin can set <Code>edge-url</Code> using the <Link href={`${docs}/edge.md#turning-it-on`}>Edge guide</Link>.
+          </Callout>
+        ) : (
           <Tabs value={app} onValueChange={(next) => setApp(next as App)} activationMode="automatic" className="flex min-w-0 flex-col gap-3 text-ui-sm">
             <TabsList look="segmented" aria-label="App" className="self-start">
               <TabsTrigger value="chatgpt">ChatGPT</TabsTrigger>
@@ -470,7 +486,7 @@ function Connectors({ client }: { client: Api }) {
             ))}
             {offline}
           </Tabs>
-        )}
+        ))}
         <div role="status" className="flex min-w-0 flex-col gap-2 text-ui-sm empty:hidden">
           {attempt && (
             <p className="flex items-center gap-1.5 text-muted">
@@ -547,7 +563,7 @@ function Connectors({ client }: { client: Api }) {
       {confirming?.action === 'move' && (
         <Confirm
           title={`Move ${label(confirming.connector)} to the universal URL?`}
-          description={`Add Aether again in ${confirming.connector.client_name} with ${info.universal_url}${info.sign_in ? ' and sign in' : ' and paste the code'}. Once the new connection calls Cloudfield, this connector is revoked; remove the old Aether connector in ${confirming.connector.client_name} too.`}
+          description={`Add Cloudfield again in ${confirming.connector.client_name} with ${info.universal_url}${info.sign_in ? ' and sign in' : ' and paste the code'}. Once the new connection calls Cloudfield, this connector is revoked; remove the old connector in ${confirming.connector.client_name} too.`}
           action="Move"
           pending="Starting…"
           onConfirm={async () => {
@@ -565,7 +581,7 @@ function Connectors({ client }: { client: Api }) {
       {confirming && confirming.action !== 'move' && (confirming.action === 'reconnect' ? (
         <Confirm
           title={`Reconnect ${label(confirming.connector)}?`}
-          description={`${signsIn(confirming.connector) ? 'Connect Aether again' : 'This gets a new code. Connect Aether again'} in ${confirming.connector.client_name}${signsIn(confirming.connector) ? ' and sign in' : ' and paste the code'}; you can choose other scopes. Once the new connection calls Cloudfield, this connector is revoked.`}
+          description={`${signsIn(confirming.connector) ? 'Connect Cloudfield again' : 'This gets a new code. Connect Cloudfield again'} in ${confirming.connector.client_name}${signsIn(confirming.connector) ? ' and sign in' : ' and paste the code'}; you can choose other scopes. Once the new connection calls Cloudfield, this connector is revoked.`}
           action="Reconnect"
           pending="Reconnecting…"
           onConfirm={async () => {
