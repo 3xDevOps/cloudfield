@@ -341,6 +341,11 @@ type LaunchOptions struct {
 	// recorded with FromBranch, instead of capturing the workspace base.
 	FromCommit string
 	FromBranch string
+	// Base starts the checkout at a workspace base captured earlier, for a
+	// launch that waited for room, and Intent creates the session with
+	// that launch intent, ReservedRunID, marked started in one transaction.
+	Base   *LaunchBase
+	Intent bool
 	// LinearIssueURL is recorded on the run as its Linear issue.
 	LinearIssueURL string
 }

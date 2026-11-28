@@ -40,10 +40,9 @@ type LaunchIntent struct {
 	// without its key, replayed as that member at every attempt.
 	Method string
 	Params json.RawMessage
-	// BaseCommit and BaseBranch are the workspace base captured when the
-	// launch began to wait; the session starts from them.
-	BaseCommit string
-	BaseBranch string
+	// Base is the workspace base captured when the launch began to wait;
+	// the session starts from it.
+	Base LaunchBase
 	// Via is the client the request came through.
 	Via   string
 	State LaunchIntentState
@@ -57,4 +56,12 @@ type LaunchIntent struct {
 	CreatedAt   time.Time
 	AttemptedAt time.Time
 	EndedAt     *time.Time
+}
+
+// LaunchBase is a workspace base as a session records it.
+type LaunchBase struct {
+	Commit    string
+	Branch    string
+	Source    string
+	CheckedAt time.Time
 }

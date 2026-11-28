@@ -47,20 +47,20 @@ type LaunchIntentStore interface {
 	PassLaunchIntents(ctx context.Context) (int64, error)
 }
 
-const launchIntentCols = `id, member_id, workspace_id, idempotency_key, method, params, base_commit, base_branch, via, state, refusal,
+const launchIntentCols = `id, member_id, workspace_id, idempotency_key, method, params, base_commit, base_branch, base_source, base_checked_at, via, state, refusal,
 	attempts, passed, created_at, attempted_at, ended_at`
 
 func scanLaunchIntent(row interface{ Scan(...any) error }) (*domain.LaunchIntent, error) {
 	var in domain.LaunchIntent
 	var params string
-	var created, attempted int64
+	var created, attempted, checked int64
 	var ended sql.NullInt64
-	if err := row.Scan(&in.ID, &in.MemberID, &in.WorkspaceID, &in.IdempotencyKey, &in.Method, &params, &in.BaseCommit, &in.BaseBranch, &in.Via,
+	if err := row.Scan(&in.ID, &in.MemberID, &in.WorkspaceID, &in.IdempotencyKey, &in.Method, &params, &in.Base.Commit, &in.Base.Branch, &in.Base.Source, &checked, &in.Via,
 		&in.State, &in.Refusal, &in.Attempts, &in.Passed, &created, &attempted, &ended); err != nil {
 		return nil, err
 	}
 	in.Params = []byte(params)
-	in.CreatedAt, in.AttemptedAt = time.Unix(0, created).UTC(), time.Unix(0, attempted).UTC()
+	in.CreatedAt, in.AttemptedAt, in.Base.CheckedAt = time.Unix(0, created).UTC(), time.Unix(0, attempted).UTC(), time.Unix(0, checked).UTC()
 	if ended.Valid {
 		at := time.Unix(0, ended.Int64).UTC()
 		in.EndedAt = &at
@@ -101,8 +101,8 @@ func (d *DB) CreateLaunchIntent(ctx context.Context, in *domain.LaunchIntent, ma
 		out.IdempotencyKey = id
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO launch_intents (`+launchIntentCols+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, NULL)`,
-		out.ID, out.MemberID, out.WorkspaceID, out.IdempotencyKey, out.Method, string(out.Params), out.BaseCommit, out.BaseBranch, out.Via,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, NULL)`,
+		out.ID, out.MemberID, out.WorkspaceID, out.IdempotencyKey, out.Method, string(out.Params), out.Base.Commit, out.Base.Branch, out.Base.Source, out.Base.CheckedAt.UTC().UnixNano(), out.Via,
 		out.State, out.Refusal, ts.UnixNano(), ts.UnixNano()); err != nil {
 		return nil, false, fmt.Errorf("store: create launch intent: %w", mapConstraint(err, ErrNotFound))
 	}

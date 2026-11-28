@@ -2748,6 +2748,8 @@ CREATE TABLE launch_intents (
 	params          TEXT NOT NULL,
 	base_commit     TEXT NOT NULL,
 	base_branch     TEXT NOT NULL,
+	base_source     TEXT NOT NULL,
+	base_checked_at INTEGER NOT NULL,
 	via             TEXT NOT NULL,
 	state           TEXT NOT NULL CHECK (state IN ('waiting', 'starting', 'started', 'cancelled', 'expired', 'refused')),
 	refusal         TEXT NOT NULL,

@@ -18,7 +18,6 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/fallback"
 	"github.com/3xDevOps/cloudfield/internal/gitengine"
 	"github.com/3xDevOps/cloudfield/internal/harness"
-	"github.com/3xDevOps/cloudfield/internal/mirror"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
 	"github.com/3xDevOps/cloudfield/internal/store"
 )
@@ -356,11 +355,14 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 			extrasCh <- extraCapture{repos, captureErr}
 		}()
 	}
-	var base mirror.CaptureResult
-	if opts.FromCommit != "" {
-		base = mirror.CaptureResult{Commit: opts.FromCommit, Branch: opts.FromBranch, Source: "run", Configured: true, CheckedAt: time.Now().UTC()}
-	} else {
-		base, err = bases.Capture(ctx, workspace, opts.CachedBase)
+	var base domain.LaunchBase
+	switch {
+	case opts.Base != nil:
+		base = *opts.Base
+	case opts.FromCommit != "":
+		base = domain.LaunchBase{Commit: opts.FromCommit, Branch: opts.FromBranch, Source: "run", CheckedAt: time.Now().UTC()}
+	default:
+		base, err = captureBase(ctx, bases, workspace, opts.CachedBase)
 	}
 	var extras extraCapture
 	if extrasCh != nil {
@@ -368,31 +370,12 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	}
 	runtime.Step(ctx, "base")
 	if err != nil {
-		return nil, &BaseCaptureError{Capture: base, Err: err}
+		return nil, err
 	}
 	if extras.err != nil {
 		return nil, extras.err
 	}
-	if opts.CachedBase != "" && (!base.Cached || base.Commit != opts.CachedBase) {
-		return nil, &BaseCaptureError{
-			Capture: base,
-			Err: &gitengine.MirrorError{
-				Kind:        gitengine.MirrorErrorInvalidRequest,
-				WorkspaceID: workspace,
-				Base:        opts.CachedBase,
-				Observed:    base.Commit,
-			},
-		}
-	}
 	source := base.Source
-	switch {
-	case base.Cached && source != "":
-		source = "cached:" + source
-	case base.Cached:
-		source = "cached"
-	case !base.Configured:
-		source = "local"
-	}
 	run := &domain.Run{
 		WorkspaceID:     workspace,
 		MemberID:        member,
@@ -420,7 +403,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	if opts.RequestedAccount != account {
 		run.RequestedAccountMemberID = opts.RequestedAccount
 	}
-	if err := createRun(ctx, s.cfg.Store, run, reservedID); err != nil {
+	if err := createRun(ctx, s.cfg.Store, run, reservedID, opts.Intent); err != nil {
 		if reservedID != "" {
 			existing, getErr := s.cfg.Store.GetRun(ctx, reservedID)
 			if getErr == nil && sameReservedRun(existing, run) && (opts.CachedBase == "" || opts.CachedBase == existing.BaseCommit) {
@@ -914,11 +897,48 @@ func (s *Scheduler) command(ctx context.Context, workspace domain.WorkspaceID, m
 
 // createRun stores run under reserved when a caller minted its ID beforehand,
 // so a retry after a lost response cannot mint a second run.
-func createRun(ctx context.Context, st store.Store, run *domain.Run, reserved domain.RunID) error {
+// captureBase captures workspace's base as a launch records it; cached is
+// the mirror commit a retry of a failed capture accepts.
+func captureBase(ctx context.Context, bases BaseCapture, workspace domain.WorkspaceID, cached string) (domain.LaunchBase, error) {
+	captured, err := bases.Capture(ctx, workspace, cached)
+	if err == nil && cached != "" && (!captured.Cached || captured.Commit != cached) {
+		err = &gitengine.MirrorError{Kind: gitengine.MirrorErrorInvalidRequest, WorkspaceID: workspace, Base: cached, Observed: captured.Commit}
+	}
+	if err != nil {
+		return domain.LaunchBase{}, &BaseCaptureError{Capture: captured, Err: err}
+	}
+	base := domain.LaunchBase{Commit: captured.Commit, Branch: captured.Branch, Source: captured.Source, CheckedAt: captured.CheckedAt}
+	switch {
+	case captured.Cached && base.Source != "":
+		base.Source = "cached:" + base.Source
+	case captured.Cached:
+		base.Source = "cached"
+	case !captured.Configured:
+		base.Source = "local"
+	}
+	return base, nil
+}
+
+// CaptureLaunchBase captures workspace's base now, for a launch that
+// starts from it once the server has room.
+func (s *Scheduler) CaptureLaunchBase(ctx context.Context, workspace domain.WorkspaceID, cached string) (domain.LaunchBase, error) {
+	s.mu.Lock()
+	bases := s.cfg.Bases
+	s.mu.Unlock()
+	if bases == nil {
+		return domain.LaunchBase{}, errors.New("scheduler: base capture is not configured")
+	}
+	return captureBase(ctx, bases, workspace, cached)
+}
+
+func createRun(ctx context.Context, st store.Store, run *domain.Run, reserved domain.RunID, intent bool) error {
 	if reserved == "" {
 		return st.CreateRun(ctx, run)
 	}
 	run.ID = reserved
+	if intent {
+		return st.CreateRunForIntent(ctx, run)
+	}
 	byID, ok := st.(store.ReservedRunStore)
 	if !ok {
 		return errors.New("scheduler: reserved session IDs are unavailable")
