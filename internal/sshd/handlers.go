@@ -243,7 +243,10 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 	p.IdempotencyKey = ""
 	// Whether a launch may wait is not part of what it launches: a retry
 	// with or without it is the same request.
-	wait := p.Wait
+	// The assistant's launches do not wait: nothing of what asked for one,
+	// a connector or a device behind an assistant turn, would be there to
+	// check again when it starts.
+	wait := p.Wait && !fromAssistant(ctx)
 	p.Wait = false
 	attempt := attemptOf(ctx)
 	var earlier any
@@ -272,6 +275,11 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 			case errors.Is(err, store.ErrNotFound):
 			case err != nil:
 				return nil, rpcError(err)
+			case prior.State.Open() && !wait:
+				// A caller that did not ask to wait gets no result it may
+				// not know: the refusal, as a launch always answered.
+				return nil, &protocol.Error{Code: protocol.CodeUnavailable, Message: fmt.Sprintf("%s: %s; the launch under idempotency_key %q is waiting for room and starts by itself",
+					protocol.MethodRunLaunch, prior.Refusal, key)}
 			case prior.State.Open():
 				waiting = prior
 				return nil, nil
@@ -288,9 +296,12 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 		launched := p
 		launched.LinearIssueURL = linkedIssue
 		var refused error
-		started, perr := s.launchRun(ctx, caller, member, launched, mode, policy, attempt, wait, &refused, func(id domain.RunID) {
+		started, launchErr := s.launchRun(ctx, caller, member, launched, mode, policy, attempt, wait, &refused, func(id domain.RunID) {
 			if created != nil {
 				created(id)
+			}
+			if attempt != nil {
+				close(attempt.created)
 			}
 			// Recorded with the row, before the agent starts, so the agent
 			// never runs under the member setting the launcher overrode.
@@ -301,7 +312,7 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 		if attempt != nil {
 			attempt.refused = refused
 		}
-		if perr != nil && wait && attempt == nil && scheduler.IsCapacityRefusal(refused) {
+		if launchErr != nil && wait && attempt == nil && scheduler.IsCapacityRefusal(refused) {
 			in, waitErr := s.waitForRoom(ctx, member, key, p, refused)
 			if waitErr != nil {
 				return nil, waitErr
@@ -309,7 +320,7 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 			waiting = in
 			return nil, nil
 		}
-		return started, perr
+		return started, launchErr
 	})
 	if perr != nil {
 		return nil, perr
@@ -374,7 +385,8 @@ func (s *Server) launchRun(ctx, caller context.Context, member domain.MemberID, 
 		return MeasureUnnamed(ctx, &s.cfg, member, domain.Account{Member: account, Login: login}, p.Harness, policy, payer)
 	}
 	var warming sync.WaitGroup
-	if mirrors := s.cfg.Services.Mirrors; mirrors != nil && p.CachedBase == "" {
+	// A waiting launch starts from the base it kept.
+	if mirrors := s.cfg.Services.Mirrors; mirrors != nil && p.CachedBase == "" && attempt == nil {
 		// The launch's own base capture reports a refresh that fails.
 		warming.Go(func() { _ = mirrors.Warm(ctx, domain.WorkspaceID(p.WorkspaceID)) })
 	}
@@ -433,7 +445,7 @@ func (s *Server) launchRun(ctx, caller context.Context, member domain.MemberID, 
 	}
 	if attempt != nil {
 		in := attempt.intent
-		opts.ReservedRunID, opts.Intent, opts.Base, opts.Retry, opts.Queue, opts.CachedBase = in.ID, true, &in.Base, true, false, ""
+		opts.ReservedRunID, opts.Intent, opts.Base, opts.Retry, opts.Reclaim, opts.Queue, opts.CachedBase = in.ID, true, &in.Base, true, attempt.reclaim, false, ""
 	}
 	run, err := launchWithOptions(ctx, s.cfg.Runs, domain.WorkspaceID(p.WorkspaceID), member, account, p.Task, p.Harness, mode, opts)
 	if err != nil {

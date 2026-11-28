@@ -90,17 +90,19 @@ func TestStatusPrintsItsMeasurementsWithoutADatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Close(); err != nil {
+	if err = db.Close(); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, counted, vmsErr, hours, err := statusHistory(t.Context(), path, time.Now()); err != nil || vmsErr != nil || !counted.IsZero() || len(hours) != 0 {
+	_, counted, vmsErr, hours, err := statusHistory(t.Context(), path, time.Now())
+	if err != nil || vmsErr != nil || !counted.IsZero() || len(hours) != 0 {
 		t.Fatalf("history of a database with nothing recorded = %v, %v, %v, %v", counted, hours, vmsErr, err)
 	}
-	if after, err := os.ReadFile(path); err != nil || !bytes.Equal(before, after) {
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
 		t.Fatalf("reading the history changed the database file (%v)", err)
 	}
 }

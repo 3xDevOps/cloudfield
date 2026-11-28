@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
@@ -30,6 +31,24 @@ const (
 	// tries that a sign of room asks for.
 	launchRetryEvery = 30 * time.Second
 	launchRoomGap    = 5 * time.Second
+	// launchReclaimEvery is how often a try may free disk as a launch
+	// somebody asks for does. Reclaim removes what closed and sleeping
+	// sessions keep, so the other tries leave it alone.
+	launchReclaimEvery = 10 * time.Minute
+	// launchIntentsKept is how long an ended waiting launch is kept, to
+	// answer its idempotency key.
+	launchIntentsKept = 7 * 24 * time.Hour
+	// maxWaitingParams bounds the request a waiting launch stores; a
+	// larger one is refused as a launch always was.
+	maxWaitingParams = 64 << 10
+	// maxDailyWaiting bounds the waiting launches one member may make in
+	// a day, cancelled and ended ones included: they are kept a while.
+	maxDailyWaiting = 200
+	// maxLaunchFailures is how many tries in a row may fail on something
+	// that is neither room nor a refusal before the launch ends refused.
+	maxLaunchFailures = 5
+	// waitingTaskBytes is how much of the task stays on an ended launch.
+	waitingTaskBytes = 200
 	// waitingLaunchOp names top-level launches in the capacity counters.
 	waitingLaunchOp = "launch"
 )
@@ -37,7 +56,12 @@ const (
 // launchAttempt is on the context of the request that starts a waiting
 // launch: the intent it starts, and the launch's own error when it fails.
 type launchAttempt struct {
-	intent  *domain.LaunchIntent
+	intent *domain.LaunchIntent
+	// reclaim lets this try free disk when disk is what it lacks.
+	reclaim bool
+	// created closes once the session's row exists, and refused is the
+	// launch's own error when it fails.
+	created chan struct{}
 	refused error
 }
 
@@ -49,10 +73,8 @@ func attemptOf(ctx context.Context) *launchAttempt {
 }
 
 func wireWaiting(in *domain.LaunchIntent) *protocol.LaunchWaiting {
-	var p protocol.RunLaunchParams
-	_ = json.Unmarshal(in.Params, &p)
 	w := &protocol.LaunchWaiting{
-		ID: string(in.ID), WorkspaceID: string(in.WorkspaceID), Harness: p.Harness, Task: p.Task, State: string(in.State), Refusal: in.Refusal,
+		ID: string(in.ID), WorkspaceID: string(in.WorkspaceID), Harness: in.Harness, Task: in.Task, State: string(in.State), Refusal: in.Refusal,
 		Attempts: in.Attempts, Passed: in.Passed, IdempotencyKey: in.IdempotencyKey,
 		CreatedAt: in.CreatedAt.UTC().Format(time.RFC3339), ExpiresAt: in.CreatedAt.Add(launchWaitLimit).UTC().Format(time.RFC3339),
 	}
@@ -66,27 +88,46 @@ func wireWaiting(in *domain.LaunchIntent) *protocol.LaunchWaiting {
 // to start when there is room. The base is captured now, so the wait does
 // not move it. Over the member's cap the refusal stands.
 func (s *Server) waitForRoom(ctx context.Context, member domain.MemberID, key string, p protocol.RunLaunchParams, refusal error) (*domain.LaunchIntent, *protocol.Error) {
-	base, err := s.cfg.Runs.CaptureLaunchBase(ctx, domain.WorkspaceID(p.WorkspaceID), p.CachedBase)
-	if err != nil {
-		return nil, rpcError(err)
+	// What is refused here was not kept, so its refusal must not say it
+	// waits: a launch sent behind the waiting ones is refused for them.
+	notKept := func(why string) *protocol.Error {
+		reason := refusal.Error()
+		if errors.Is(refusal, scheduler.ErrLaunchesWaiting) {
+			reason = "launches asked for earlier are waiting for room on the server"
+		}
+		return &protocol.Error{Code: protocol.CodeUnavailable, Message: fmt.Sprintf("%s: %s; this launch was not kept to wait: %s", protocol.MethodRunLaunch, reason, why)}
 	}
 	params, err := json.Marshal(p)
 	if err != nil {
 		return nil, rpcError(err)
 	}
+	if len(params) > maxWaitingParams {
+		return nil, notKept(fmt.Sprintf("its request is %d bytes and a waiting launch stores at most %d", len(params), maxWaitingParams))
+	}
+	base, err := s.cfg.Runs.CaptureLaunchBase(ctx, domain.WorkspaceID(p.WorkspaceID), p.CachedBase)
+	if err != nil {
+		// The launch could not start with room either: its own error,
+		// with its code, is the answer.
+		return nil, rpcError(err)
+	}
 	id, _ := ctx.Value(connIdentityKey{}).(connIdentity)
 	in, existing, err := s.cfg.Store.CreateLaunchIntent(ctx, &domain.LaunchIntent{
 		MemberID: member, WorkspaceID: domain.WorkspaceID(p.WorkspaceID), IdempotencyKey: key, Method: protocol.MethodRunLaunch, Params: params,
-		Base: base, Via: domain.ViaFrom(ctx), Connector: id.connector, Refusal: refusal.Error(),
-	}, maxWaitingLaunches)
+		Harness: p.Harness, Task: strings.ToValidUTF8(p.Task[:min(len(p.Task), waitingTaskBytes)], ""),
+		Base: base, Via: domain.ViaFrom(ctx), Connector: id.connector, Device: id.device, Refusal: refusal.Error(),
+	}, maxWaitingLaunches, maxDailyWaiting)
 	if errors.Is(err, store.ErrTooManyWaiting) {
-		return nil, rpcError(refusal)
+		return nil, notKept(fmt.Sprintf("one member may have %d launches waiting, and make %d in a day", maxWaitingLaunches, maxDailyWaiting))
 	}
 	if err != nil {
 		return nil, rpcError(err)
 	}
 	if !existing {
 		s.countLaunchWait(ctx, domain.CapacityEvent{Kind: domain.CapacityWait, Op: waitingLaunchOp, Run: in.ID, Text: in.Refusal})
+	}
+	// One sent behind the others was refused no room: it is tried soon.
+	if errors.Is(refusal, scheduler.ErrLaunchesWaiting) {
+		s.RoomAppeared()
 	}
 	return in, nil
 }
@@ -126,13 +167,13 @@ func (s *Server) launchWaitingList(ctx context.Context, member domain.MemberID, 
 		result.Waiting = append(result.Waiting, *wireWaiting(in))
 		return result, nil
 	}
-	list, err := s.cfg.Store.LaunchIntents(ctx, member, domain.IntentWaiting, domain.IntentStarting, domain.IntentCancelled, domain.IntentExpired, domain.IntentRefused)
+	list, err := s.cfg.Store.LaunchIntents(ctx, member, time.Now().Add(-launchWaitLimit))
 	if err != nil {
 		return nil, rpcError(err)
 	}
-	recent := time.Now().Add(-launchWaitLimit)
 	for _, in := range list {
-		if in.State.Open() || (in.State != domain.IntentCancelled && in.EndedAt != nil && in.EndedAt.After(recent)) {
+		// What its own member cancelled needs no telling.
+		if in.State.Open() || in.Refusal != cancelledBy(in.MemberID) {
 			result.Waiting = append(result.Waiting, *wireWaiting(in))
 		}
 	}
@@ -168,7 +209,7 @@ func (s *Server) launchWaitingCancel(ctx context.Context, member domain.MemberID
 		return nil, perr
 	}
 	now := time.Now()
-	err := s.cfg.Store.EndLaunchIntent(ctx, in.ID, domain.IntentCancelled, "cancelled by "+string(member), now)
+	err := s.cfg.Store.EndLaunchIntent(ctx, in.ID, domain.IntentCancelled, cancelledBy(member), now)
 	if errors.Is(err, store.ErrConflict) {
 		if in, perr = s.ownLaunchIntent(ctx, member, p.ID, protocol.MethodLaunchWaitingCancel); perr != nil {
 			return nil, perr
@@ -182,12 +223,18 @@ func (s *Server) launchWaitingCancel(ctx context.Context, member domain.MemberID
 		return nil, rpcError(err)
 	}
 	noteChange(ctx)
-	s.countLaunchWait(ctx, domain.CapacityEvent{Kind: domain.CapacityWaitEnd, Op: waitingLaunchOp, Cause: "cancelled", Run: in.ID, Waited: now.Sub(in.CreatedAt)})
+	if member == in.MemberID {
+		s.countLaunchWait(ctx, domain.CapacityEvent{Kind: domain.CapacityWaitEnd, Op: waitingLaunchOp, Cause: "cancelled", Run: in.ID, Waited: now.Sub(in.CreatedAt)})
+	} else {
+		s.launchEnded(s.authCtx(), in, domain.IntentCancelled, cancelledBy(member), now)
+	}
 	if in, perr = s.ownLaunchIntent(ctx, member, p.ID, protocol.MethodLaunchWaitingCancel); perr != nil {
 		return nil, perr
 	}
 	return *wireWaiting(in), nil
 }
+
+func cancelledBy(member domain.MemberID) string { return "cancelled by " + string(member) }
 
 // launchNotifier pushes a notice to a member's devices.
 type launchNotifier interface {
@@ -200,10 +247,9 @@ type launchNotifier interface {
 func (s *Server) launchEnded(ctx context.Context, in *domain.LaunchIntent, to domain.LaunchIntentState, reason string, now time.Time) {
 	s.countLaunchWait(ctx, domain.CapacityEvent{Kind: domain.CapacityWaitEnd, Op: waitingLaunchOp, Cause: string(to), Run: in.ID, Waited: now.Sub(in.CreatedAt), Text: reason})
 	notifier, ok := s.cfg.Services.Push.(launchNotifier)
-	if !ok {
+	if !ok || !s.beginHandler() {
 		return
 	}
-	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
 		if err := notifier.Notify(ctx, in.MemberID, "A waiting launch did not start", reason, in.ID, true, nil, nil); err != nil && ctx.Err() == nil {
@@ -261,7 +307,20 @@ func (s *Server) dispatchLaunchIntents(ctx context.Context) {
 // that waited launchWaitLimit ends expired; one a check refuses ends
 // refused and does not hold up the next.
 func (s *Server) startWaitingLaunches(ctx context.Context, now time.Time) {
-	waiting, err := s.cfg.Store.LaunchIntents(ctx, "", domain.IntentWaiting)
+	s.launchPass.Lock()
+	defer s.launchPass.Unlock()
+	if last := time.Unix(0, s.launchPruned.Load()); now.Sub(last) >= time.Hour {
+		s.launchPruned.Store(now.UnixNano())
+		if err := s.cfg.Store.PruneLaunchIntents(ctx, now.Add(-launchIntentsKept)); err != nil {
+			slog.Warn("launch: delete old waiting launches", "error", err)
+		}
+	}
+	// Passes do not overlap and a try holds its claim only within one, so
+	// an intent still starting was left by a try whose last write failed.
+	if err := s.cfg.Store.RecoverLaunchIntents(ctx); err != nil {
+		slog.Warn("launch: settle the launches a try left starting", "error", err)
+	}
+	waiting, err := s.cfg.Store.LaunchIntents(ctx, "", time.Time{})
 	if err != nil {
 		slog.Warn("launch: list waiting launches", "error", err)
 		return
@@ -269,6 +328,9 @@ func (s *Server) startWaitingLaunches(ctx context.Context, now time.Time) {
 	for _, in := range waiting {
 		if ctx.Err() != nil {
 			return
+		}
+		if in.State != domain.IntentWaiting {
+			continue
 		}
 		if now.Sub(in.CreatedAt) >= launchWaitLimit {
 			reason := "no room within 24 hours; the last refusal: " + in.Refusal
@@ -300,56 +362,122 @@ func (s *Server) startWaitingLaunch(ctx context.Context, in *domain.LaunchIntent
 		s.endRefused(ctx, in, "the stored request cannot be read: "+err.Error(), now)
 		return true
 	}
-	// An intent whose request had no key carries its own ID as its key.
-	if in.IdempotencyKey != string(in.ID) {
-		p.IdempotencyKey = in.IdempotencyKey
-	}
+	p.IdempotencyKey = in.IdempotencyKey
 	params, err := json.Marshal(p)
 	if err != nil {
 		s.endRefused(ctx, in, "the stored request cannot be written: "+err.Error(), now)
 		return true
 	}
-	// A launch asked for through a connector is tried as that connector,
-	// with the scopes it has now, and not at all once it was removed.
+	// What admitted the request must still admit it: a launch asked for
+	// through a connector is tried as that connector, with the grant and
+	// scopes it has now, and one asked for from an edge device only while
+	// that device is admitted.
 	local := s.Local(in.MemberID)
-	if in.Connector != "" {
-		var c *store.Connector
-		connectors, ok := s.cfg.Store.(store.ConnectorStore)
-		err := error(store.ErrNotFound)
-		if ok {
-			c, err = connectors.GetConnector(ctx, in.Connector)
-		}
-		switch {
-		case errors.Is(err, store.ErrNotFound) || err == nil && c.Member != in.MemberID:
-			s.endRefused(ctx, in, fmt.Sprintf("the connector that asked for it (%s) was removed", in.Via), now)
-			return true
-		case err != nil:
-			slog.Warn("launch: read the connector of a waiting launch", "launch", in.ID, "error", err)
-			if err := s.cfg.Store.ReleaseLaunchIntent(ctx, in.ID, in.Refusal); err != nil && !errors.Is(err, store.ErrConflict) {
-				slog.Warn("launch: return a launch to waiting", "launch", in.ID, "error", err)
-			}
-			return true
-		}
-		local = s.ConnectorLocal(ConnectorGrant{Member: c.Member, Device: c.Device, Provider: c.Provider, Subject: c.Subject}, c.ID, c.ClientName, c.Scopes)
-	}
-	attempt := &launchAttempt{intent: in}
-	_, perr := local.Call(domain.WithVia(context.WithValue(ctx, launchAttemptKey{}, attempt), in.Via), in.Method, params)
 	switch {
-	case perr == nil:
+	case in.Connector != "":
+		connectors, ok := s.cfg.Store.(store.ConnectorStore)
+		if !ok {
+			s.endRefused(ctx, in, fmt.Sprintf("the connector that asked for it (%s) cannot be checked on this server", in.Via), now)
+			return true
+		}
+		c, err := connectors.GetConnector(ctx, in.Connector)
+		if err != nil && !errors.Is(err, store.ErrNotFound) && in.Failures+1 < maxLaunchFailures {
+			// The read failed; whether the connector stands is not known.
+			s.release(ctx, in, "the connector that asked for it could not be read: "+err.Error(), true)
+			return true
+		}
+		if err == nil && (c.Member != in.MemberID || !c.RefreshExpiresAt.After(now)) {
+			err = store.ErrNotFound
+		}
+		var grant ConnectorGrant
+		if err == nil {
+			grant = ConnectorGrant{Member: c.Member, Device: c.Device, Provider: c.Provider, Subject: c.Subject}
+			err = s.CheckConnectorGrant(ctx, grant)
+		}
+		if err != nil {
+			s.endRefused(ctx, in, fmt.Sprintf("the connector that asked for it (%s) is no longer admitted: %v", in.Via, err), now)
+			return true
+		}
+		local = s.ConnectorLocal(grant, c.ID, c.ClientName, c.Scopes)
+	case in.Device != "":
+		if err := s.checkConnIdentity(ctx, connIdentity{member: in.MemberID, device: in.Device}); err != nil {
+			s.endRefused(ctx, in, fmt.Sprintf("the device that asked for it is no longer admitted: %v", err), now)
+			return true
+		}
+	}
+	attempt := &launchAttempt{intent: in, created: make(chan struct{})}
+	attempt.reclaim = now.Sub(time.Unix(0, s.launchReclaimed.Load())) >= launchReclaimEvery
+	if !s.beginHandler() {
+		return false
+	}
+	done := make(chan *protocol.Error, 1)
+	go func() {
+		defer s.wg.Done()
+		_, perr := local.Call(domain.WithVia(context.WithValue(ctx, launchAttemptKey{}, attempt), in.Via), in.Method, params)
+		done <- perr
+	}()
+	started := func() bool {
+		s.spendReclaim(attempt, now)
 		slog.Info("launch: a waiting launch started", "launch", in.ID, "member", in.MemberID, "waited", now.Sub(in.CreatedAt), "attempts", in.Attempts+1, "passed", in.Passed)
 		s.countLaunchWait(ctx, domain.CapacityEvent{Kind: domain.CapacityWaitEnd, Op: waitingLaunchOp, Cause: "started", Run: in.ID, Waited: now.Sub(in.CreatedAt)})
+		return true
+	}
+	var perr *protocol.Error
+	select {
+	case <-attempt.created:
+		// The session exists and goes on provisioning by itself: what
+		// fails from here is the session's to show. The next launch need
+		// not wait for it.
+		return started()
+	case perr = <-done:
+	}
+	// Both can be ready: a session that exists is a start whatever its
+	// provisioning then returned.
+	select {
+	case <-attempt.created:
+		return started()
+	default:
+	}
+	switch {
+	case perr == nil:
+		if _, err := s.cfg.Store.GetRun(ctx, in.ID); err == nil {
+			// Its session existed already; the next pass settles the row.
+			return started()
+		}
+		// Answered without this launch: its key already named a session.
+		s.endRefused(ctx, in, "its idempotency key already answers with another session, so this one was not started", now)
 		return true
 	case ctx.Err() != nil:
 		// A server stopping: the next one returns it to waiting.
 		return false
 	case scheduler.IsCapacityRefusal(attempt.refused):
-		if err := s.cfg.Store.ReleaseLaunchIntent(ctx, in.ID, attempt.refused.Error()); err != nil && !errors.Is(err, store.ErrConflict) {
-			slog.Warn("launch: return a launch to waiting", "launch", in.ID, "error", err)
-		}
+		s.spendReclaim(attempt, now)
+		s.release(ctx, in, attempt.refused.Error(), false)
 		return false
+	case (perr.Code == protocol.CodeInternal || perr.Code == protocol.CodeUnavailable) && in.Failures+1 < maxLaunchFailures:
+		// Not a refusal: a read or write that failed, or something that
+		// could not be reached. It is tried again, a few times.
+		s.release(ctx, in, perr.Message, true)
+		return true
 	}
 	s.endRefused(ctx, in, perr.Message, now)
 	return true
+}
+
+// spendReclaim uses up the allowance to free disk for a try that had it
+// and reached admission: it started, or was refused for room.
+func (s *Server) spendReclaim(attempt *launchAttempt, now time.Time) {
+	if attempt.reclaim {
+		s.launchReclaimed.Store(now.UnixNano())
+	}
+}
+
+// release returns a claimed launch to waiting with the reason its try did
+// not start it.
+func (s *Server) release(ctx context.Context, in *domain.LaunchIntent, reason string, failed bool) {
+	if err := s.cfg.Store.ReleaseLaunchIntent(ctx, in.ID, reason, failed); err != nil && !errors.Is(err, store.ErrConflict) {
+		slog.Warn("launch: return a launch to waiting", "launch", in.ID, "error", err)
+	}
 }
 
 // endRefused ends a claimed launch refused, unless a cancel or its own
@@ -360,11 +488,7 @@ func (s *Server) endRefused(ctx context.Context, in *domain.LaunchIntent, reason
 	case err == nil:
 		s.launchEnded(ctx, in, domain.IntentRefused, reason, now)
 	case errors.Is(err, store.ErrConflict):
-		// Cancelled meanwhile, or its session was created and then failed,
-		// which the session itself shows.
-		if after, getErr := s.cfg.Store.GetLaunchIntent(ctx, in.ID); getErr == nil && after.State == domain.IntentStarted {
-			s.countLaunchWait(ctx, domain.CapacityEvent{Kind: domain.CapacityWaitEnd, Op: waitingLaunchOp, Cause: "started", Run: in.ID, Waited: now.Sub(in.CreatedAt)})
-		}
+		// A cancel settled it first.
 	default:
 		slog.Warn("launch: end a waiting launch refused", "launch", in.ID, "error", err)
 	}

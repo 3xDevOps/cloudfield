@@ -15,7 +15,7 @@ func (e *testEnv) waitingIntent(t *testing.T) *domain.LaunchIntent {
 		MemberID: e.member.ID, WorkspaceID: e.ws.ID, Method: "run.launch", Params: []byte(`{}`),
 		Base:    domain.LaunchBase{Commit: testBaseCommit, Branch: "kept", Source: "origin", CheckedAt: time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)},
 		Refusal: "no room",
-	}, 8)
+	}, 8, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,8 @@ func TestAWaitingLaunchStartsAsItsReservedSessionFromItsKeptBase(t *testing.T) {
 	if run.ID != in.ID || run.BaseCommit != in.Base.Commit || run.BaseBranch != "kept" || run.BaseSource != "origin" || !run.BaseCheckedAt.Equal(in.Base.CheckedAt) {
 		t.Fatalf("session = %+v, want the reserved ID and the kept base", run)
 	}
-	if got, err := e.db.GetLaunchIntent(t.Context(), in.ID); err != nil || got.State != domain.IntentStarted {
+	got, err := e.db.GetLaunchIntent(t.Context(), in.ID)
+	if err != nil || got.State != domain.IntentStarted {
 		t.Fatalf("intent after the start = %+v, %v", got, err)
 	}
 	// A second start of it is the same session, not another.
