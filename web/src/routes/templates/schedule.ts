@@ -35,7 +35,7 @@ function weekdays(field: string): number[] | null {
   return [...days].sort()
 }
 
-// UTC first, then the Area/Location names zoneName takes.
+// Intl's list leaves out UTC and may hold names without a slash, which zoneName refuses.
 export const zones = ['UTC', ...Intl.supportedValuesOf('timeZone').filter((zone) => zone.includes('/'))]
 
 /**

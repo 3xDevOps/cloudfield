@@ -279,6 +279,8 @@ describe('templates view', () => {
     expect(dialog.getByLabelText('Time zone')).toHaveProperty('value', 'Asia/Tokyo')
     expect(dialog.getByRole('checkbox', { name: 'Friday' }).getAttribute('aria-checked')).toBe('true')
     expect(dialog.getByText('CRON_TZ=Asia/Tokyo 0 7 * * 1-5')).toBeDefined()
+    fireEvent.change(dialog.getByLabelText('Time zone'), { target: { value: 'A' } })
+    expect(dialog.queryByText('Use a full zone name such as America/Los_Angeles.')).toBeNull()
   })
 
   it('keeps the fields when cron was only looked at', async () => {
