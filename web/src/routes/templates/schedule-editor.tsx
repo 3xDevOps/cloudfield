@@ -42,11 +42,13 @@ export function ScheduleEditor({
 }) {
   const id = useId()
   const [plan, setPlan] = useState(() => readRule(draft ?? schedule?.cron ?? '', browserZone()))
+  const [typedCron, setTypedCron] = useState(false)
+  const [zoneLeft, setZoneLeft] = useState(false)
   const [busy, setBusy] = useState(false)
   const late = usePastDeadline(busy || saving)
   const [error, setError] = useState<string | null>(null)
   const set = (fields: Partial<Plan>) => setPlan((current) => ({ ...current, ...fields }))
-  const zone = zoneName(plan.zone)
+  const zone = zoneName(plan.zone, schedule ? readRule(schedule.cron, '').zone : '')
   const rule = writeRule(zone ? { ...plan, zone } : plan)
   const ready = plan.repeat === 'cron' ? Boolean(rule) : Boolean(plan.at && zone && (plan.repeat !== 'weekly' || plan.days.length))
   const saved = schedule && writeRule(readRule(schedule.cron, '')) === rule
@@ -83,9 +85,10 @@ export function ScheduleEditor({
             onValueChange={(value) => {
               const repeat = value as Repeat
               const typed = readRule(plan.rule, plan.zone)
-              // Switching carries the rule across when the other side can show it; a rule only Cron can show stays in Cron.
-              if (plan.repeat === 'cron' && plan.rule.trim() && typed.repeat !== 'cron') setPlan({ ...typed, repeat, rule: plan.rule })
+              // A rule typed in Cron carries into the fields when they can show it; one only Cron can show stays there.
+              if (plan.repeat === 'cron' && typedCron && typed.repeat !== 'cron') setPlan({ ...typed, repeat, rule: plan.rule })
               else set(repeat === 'cron' && ready && typed.repeat !== 'cron' ? { repeat, rule } : { repeat })
+              setTypedCron(false)
             }}
           >
             {repeats.map(([value, label]) => <RadioPillsItem key={value} value={value}>{label}</RadioPillsItem>)}
@@ -129,7 +132,16 @@ export function ScheduleEditor({
             label="Cron rule"
             help={<>Five fields: minute hour day month weekday, such as <code className="font-code whitespace-nowrap">30 9 * * 1-5</code>, or <code className="font-code whitespace-nowrap">@hourly</code>. UTC unless it starts with <code className="font-code whitespace-nowrap">CRON_TZ=&lt;zone&gt;</code> and a space.</>}
           >
-            <Input placeholder="0 3 * * *" value={plan.rule} spellCheck={false} onChange={(e) => set({ rule: e.target.value })} className="font-code" />
+            <Input
+              placeholder="0 3 * * *"
+              value={plan.rule}
+              spellCheck={false}
+              onChange={(e) => {
+                setTypedCron(true)
+                set({ rule: e.target.value })
+              }}
+              className="font-code"
+            />
           </FormField>
         ) : (
           <>
@@ -140,10 +152,10 @@ export function ScheduleEditor({
               <FormField
                 label="Time zone"
                 help="An IANA zone, such as Europe/Berlin."
-                error={plan.zone.trim() && !zone ? 'Not a time zone this browser knows. Check the spelling, such as Europe/Berlin.' : undefined}
+                error={zoneLeft && !zone ? (plan.zone.trim() ? 'Not an IANA zone name. Check the spelling.' : 'Enter a time zone.') : undefined}
                 className="min-w-0 flex-1 basis-40"
               >
-                <Input required value={plan.zone} spellCheck={false} list={`${id}-zones`} onChange={(e) => set({ zone: e.target.value })} />
+                <Input required value={plan.zone} spellCheck={false} list={`${id}-zones`} onBlur={() => setZoneLeft(true)} onChange={(e) => set({ zone: e.target.value })} />
               </FormField>
               <datalist id={`${id}-zones`}>
                 {zones.map((zone) => <option key={zone} value={zone} />)}

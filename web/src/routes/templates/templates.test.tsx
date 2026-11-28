@@ -218,7 +218,7 @@ describe('templates view', () => {
     expect(dialog.queryByText(nextLaunch, { exact: false })).toBeNull()
   })
 
-  it('refuses a zone the browser does not know and saves the browser spelling of one it does', async () => {
+  it('refuses a name that is not an IANA zone once the field is left, and saves the canonical spelling of one that is', async () => {
     const client = fakeApi({ scheduleList: vi.fn(async () => []), scheduleSave: vi.fn(async () => schedule) })
     seed()
     render(<Templates client={client} />)
@@ -226,8 +226,10 @@ describe('templates view', () => {
     await rowAction('Schedule')
     const dialog = within(await screen.findByRole('dialog', { name: `Schedule ${template.name}` }))
     fireEvent.change(dialog.getByLabelText('Time zone'), { target: { value: 'Europe/Berln' } })
-    expect(dialog.getByText('Not a time zone this browser knows. Check the spelling, such as Europe/Berlin.')).toBeDefined()
     expect(dialog.getByRole('button', { name: 'Schedule' }).hasAttribute('disabled')).toBe(true)
+    expect(dialog.queryByText('Not an IANA zone name. Check the spelling.')).toBeNull()
+    fireEvent.blur(dialog.getByLabelText('Time zone'))
+    expect(dialog.getByText('Not an IANA zone name. Check the spelling.')).toBeDefined()
     fireEvent.change(dialog.getByLabelText('Time zone'), { target: { value: 'europe/berlin' } })
     fireEvent.click(dialog.getByRole('button', { name: 'Schedule' }))
     expect(client.scheduleSave).toHaveBeenCalledWith({ workspace_id: workspace.id, template: template.name, cron: 'CRON_TZ=Europe/Berlin 0 9 * * *' })
@@ -264,6 +266,21 @@ describe('templates view', () => {
     expect(dialog.getByLabelText('Time zone')).toHaveProperty('value', 'Asia/Tokyo')
     expect(dialog.getByRole('checkbox', { name: 'Friday' }).getAttribute('aria-checked')).toBe('true')
     expect(dialog.getByText('CRON_TZ=Asia/Tokyo 0 7 * * 1-5')).toBeDefined()
+  })
+
+  it('keeps the fields when cron was only looked at', async () => {
+    const client = fakeApi({ scheduleList: vi.fn(async () => []) })
+    seed()
+    render(<Templates client={client} />)
+
+    await rowAction('Schedule')
+    const dialog = within(await screen.findByRole('dialog', { name: `Schedule ${template.name}` }))
+    fireEvent.click(dialog.getByRole('radio', { name: 'Weekly' }))
+    fireEvent.click(dialog.getByRole('checkbox', { name: 'Thursday' }))
+    fireEvent.click(dialog.getByRole('radio', { name: 'Daily' }))
+    fireEvent.click(dialog.getByRole('radio', { name: 'Cron' }))
+    fireEvent.click(dialog.getByRole('radio', { name: 'Weekly' }))
+    expect(dialog.getByRole('checkbox', { name: 'Thursday' }).getAttribute('aria-checked')).toBe('true')
   })
 
   it('fills cron with the rule the picker makes', async () => {

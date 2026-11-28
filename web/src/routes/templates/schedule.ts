@@ -38,18 +38,23 @@ function weekdays(field: string): number[] | null {
 // Intl lists canonical zones only, which leaves out UTC.
 export const zones = ['UTC', ...Intl.supportedValuesOf('timeZone')]
 
-/** The zone as typed, in the list's spelling when it is listed, or null when the browser does not know it. */
-export function zoneName(typed: string): string | null {
+/**
+ * The zone to save: `kept`, the zone the server already took, as is;
+ * otherwise the browser's canonical name, which Go's zone database loads
+ * even where the typed alias or case does not. Null for a name that is not
+ * an IANA zone.
+ */
+export function zoneName(typed: string, kept: string): string | null {
   const zone = typed.trim()
-  const listed = zones.find((name) => name.toLowerCase() === zone.toLowerCase())
-  if (listed) return listed
+  if (zone && zone === kept) return zone
+  let name: string
   try {
-    new Intl.DateTimeFormat('en', { timeZone: zone })
+    name = new Intl.DateTimeFormat('en', { timeZone: zone }).resolvedOptions().timeZone
   } catch {
     return null
   }
-  // Intl also takes offsets such as +05:30, which Go's zone database does not.
-  return /^[A-Za-z]/.test(zone) ? zone : null
+  // Intl also takes offsets such as +05:30, which are not zone names.
+  return /^[A-Za-z]/.test(name) ? name : null
 }
 
 export function readRule(stored: string, browserZone: string): Plan {

@@ -6505,13 +6505,15 @@ Weekly, Monthly or Cron. Weekly ticks days, Monday first; Monthly picks a
 day from 1 to 28. All three take a time (default 09:00) and an IANA zone
 (the browser's for a new schedule, the rule's own when editing), and show
 the rule they save, such as `CRON_TZ=Europe/Berlin 30 9 * * 1-5`; a UTC rule
-has no prefix. A zone the browser's `Intl` does not know disables Save
-with "Not a time zone this browser knows. Check the spelling, such as
-Europe/Berlin."; a zone in the suggestion list is saved in the list's
-spelling, so `europe/berlin` saves as `Europe/Berlin`, and any other zone
-as typed. Cron takes the rule as text and is where a rule the fields cannot
-show exactly opens. Switching modes carries the rule across when the other
-side can show it, so a rule only Cron can show stays in Cron. While the
+has no prefix. The rule keeps the zone the server already took; any other
+zone is saved in the browser's canonical spelling, which Go's zone
+database loads (`europe/berlin` saves as `Europe/Berlin`, `PST` as
+`America/Los_Angeles`). A name `Intl` does not take as an IANA zone
+disables Save, and once the field is left shows "Not an IANA zone name.
+Check the spelling." Cron takes the rule as text and is where a rule the
+fields cannot show exactly opens. Switching to Cron fills in the rule the
+fields made, and a rule typed in Cron carries back into the fields when
+they can show it. While the
 form shows the saved rule, the next launch is the `next_fire_at` that
 `schedule.save` returned, shown relative and in the viewer's local time
 ("your time"), never computed in the browser. **Duplicate** opens the form

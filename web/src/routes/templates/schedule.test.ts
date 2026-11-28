@@ -33,14 +33,15 @@ describe('schedule rules', () => {
     expect(describeRule(rule)).toEqual({ cron, zone })
   })
 
-  it('keeps a zone as typed, in the listed spelling when listed, and refuses one the browser does not know', () => {
-    expect(zoneName(' europe/berlin ')).toBe('Europe/Berlin')
-    expect(zoneName('utc')).toBe('UTC')
-    expect(zoneName('Asia/Kolkata')).toBe('Asia/Kolkata')
-    expect(zoneName('Etc/UTC')).toBe('Etc/UTC')
-    expect(zoneName('Europe/Berln')).toBeNull()
-    expect(zoneName('+05:30')).toBeNull()
-    expect(zoneName('')).toBeNull()
+  it('keeps the zone the server took and saves any other in the browser canonical spelling', () => {
+    expect(zoneName('Asia/Kolkata', 'Asia/Kolkata')).toBe('Asia/Kolkata')
+    expect(zoneName(' europe/berlin ', '')).toBe('Europe/Berlin')
+    expect(zoneName('utc', '')).toBe('UTC')
+    expect(zoneName('PST', '')).toBe('America/Los_Angeles')
+    expect(['Asia/Kolkata', 'Asia/Calcutta']).toContain(zoneName('asia/kolkata', ''))
+    expect(zoneName('Europe/Berln', '')).toBeNull()
+    expect(zoneName('+05:30', '')).toBeNull()
+    expect(zoneName('', '')).toBeNull()
   })
 
   it('starts a new schedule daily at 09:00 in the browser zone', () => {
