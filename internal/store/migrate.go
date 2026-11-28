@@ -2734,6 +2734,32 @@ CREATE TABLE capacity_vms (
 	saved  INTEGER NOT NULL
 );
 `,
+	// v120: the launches that wait for room (store/launch_intents.go). id
+	// is the session ID reserved for one and has no foreign key: no
+	// session row exists until it is started. An open intent is unique to
+	// its member and key.
+	`
+CREATE TABLE launch_intents (
+	id              TEXT PRIMARY KEY,
+	member_id       TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+	workspace_id    TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+	idempotency_key TEXT NOT NULL,
+	method          TEXT NOT NULL,
+	params          TEXT NOT NULL,
+	base_commit     TEXT NOT NULL,
+	base_branch     TEXT NOT NULL,
+	via             TEXT NOT NULL,
+	state           TEXT NOT NULL CHECK (state IN ('waiting', 'starting', 'started', 'cancelled', 'expired', 'refused')),
+	refusal         TEXT NOT NULL,
+	attempts        INTEGER NOT NULL,
+	passed          INTEGER NOT NULL,
+	created_at      INTEGER NOT NULL,
+	attempted_at    INTEGER NOT NULL,
+	ended_at        INTEGER
+);
+CREATE UNIQUE INDEX launch_intents_open_key ON launch_intents (member_id, idempotency_key) WHERE state IN ('waiting', 'starting');
+CREATE INDEX launch_intents_state ON launch_intents (state, created_at);
+`,
 }
 
 // existingDatabaseMigrations run after their version's migration, in the

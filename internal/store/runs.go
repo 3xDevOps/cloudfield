@@ -48,7 +48,7 @@ func validateRun(r *domain.Run, op string) error {
 	return nil
 }
 func (d *DB) CreateRun(ctx context.Context, r *domain.Run) error {
-	return d.createRun(ctx, r, false)
+	return d.createRun(ctx, r, false, nil)
 }
 
 // CreateRunWithID is the reserved-ID variant used by child runs. It
@@ -58,10 +58,12 @@ func (d *DB) CreateRunWithID(ctx context.Context, r *domain.Run) error {
 	if r == nil || r.ID == "" {
 		return errors.New("store: create reserved session: id is required")
 	}
-	return d.createRun(ctx, r, true)
+	return d.createRun(ctx, r, true, nil)
 }
 
-func (d *DB) createRun(ctx context.Context, r *domain.Run, reserved bool) error {
+// createRun inserts r; also, when not nil, runs in the same transaction
+// after the row exists, and its error undoes the insert.
+func (d *DB) createRun(ctx context.Context, r *domain.Run, reserved bool, also func(*sql.Tx) error) error {
 	if err := validateRun(r, "create"); err != nil {
 		return err
 	}
@@ -132,6 +134,11 @@ func (d *DB) createRun(ctx context.Context, r *domain.Run, reserved bool) error 
 	// Readers judge a run by every workspace it touches, so its extras must exist as soon as it does.
 	if err := upsertRunRepos(ctx, tx, domain.RunID(id), r.Extras); err != nil {
 		return fmt.Errorf("store: create session: %w", err)
+	}
+	if also != nil {
+		if err := also(tx); err != nil {
+			return fmt.Errorf("store: create session: %w", err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: create session: commit: %w", err)
