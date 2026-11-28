@@ -36,6 +36,8 @@ type fakeDir struct {
 	dirWrites int
 	// admitHook, when set, runs once at the start of the next Admit.
 	admitHook func()
+	// replaceHook, when set, runs at the start of every ReplaceDirectory.
+	replaceHook func()
 	// authHook, when set, runs once at the start of the next Authenticate.
 	authHook   func()
 	unenrolled []string
@@ -198,6 +200,12 @@ func (d *fakeDir) owner(serverID string) (edgeproto.Principal, bool) {
 }
 
 func (d *fakeDir) ReplaceDirectory(_ context.Context, serverID string, entries []edgeproto.DirectoryEntry) error {
+	d.mu.Lock()
+	hook := d.replaceHook
+	d.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.dirs[serverID] = entries

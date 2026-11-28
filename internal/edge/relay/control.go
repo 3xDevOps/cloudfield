@@ -498,7 +498,7 @@ func (r *Relay) recordOwner(reg *registration, record func(ctx context.Context) 
 		// row that its earlier marks would keep unrecorded.
 		maps.DeleteFunc(r.connectorUsed, func(u connectorUse, _ time.Time) bool { return u.serverID == reg.id })
 		if reg.hasDirectory {
-			r.queueDirectoryLocked(reg, reg.directory)
+			r.queueDirectoryLocked(reg, reg.directory, true)
 			reg.directory, reg.hasDirectory = nil, false
 		}
 	}
@@ -554,26 +554,28 @@ type directoryWrite struct {
 	reg     *registration
 	entries []edgeproto.DirectoryEntry
 	pending bool
+	// beforeClaim marks a directory pushed while the server was unclaimed.
+	beforeClaim bool
 }
 
 func (r *Relay) replaceDirectory(reg *registration, m edgeproto.Directory) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if reg.claimed {
-		r.queueDirectoryLocked(reg, m.Entries)
+		r.queueDirectoryLocked(reg, m.Entries, false)
 		return
 	}
 	reg.directory, reg.hasDirectory = m.Entries, true
 }
 
-func (r *Relay) queueDirectoryLocked(reg *registration, entries []edgeproto.DirectoryEntry) {
+func (r *Relay) queueDirectoryLocked(reg *registration, entries []edgeproto.DirectoryEntry, beforeClaim bool) {
 	w := r.directories[reg.id]
 	if w == nil {
 		w = &directoryWrite{}
 		r.directories[reg.id] = w
 		go r.storeDirectories(reg.id, w)
 	}
-	w.reg, w.entries, w.pending = reg, entries, true
+	w.reg, w.entries, w.pending, w.beforeClaim = reg, entries, true, beforeClaim
 }
 
 // storeDirectories stores serverID's latest pushed directory at most once
@@ -588,10 +590,10 @@ func (r *Relay) storeDirectories(serverID string, w *directoryWrite) {
 			r.mu.Unlock()
 			return
 		}
-		reg, entries := w.reg, w.entries
+		reg, entries, beforeClaim := w.reg, w.entries, w.beforeClaim
 		w.pending, w.entries = false, nil
 		r.mu.Unlock()
-		if err := r.storeDirectory(reg, entries); err != nil && reg.ctx.Err() == nil {
+		if err := r.storeDirectory(reg, entries, beforeClaim); err != nil && reg.ctx.Err() == nil {
 			slog.Warn("relay: directory not stored; closing the control channel", "server", serverID, "error", err)
 			reg.cancel(err)
 		}
@@ -601,11 +603,18 @@ func (r *Relay) storeDirectories(serverID string, w *directoryWrite) {
 	}
 }
 
-func (r *Relay) storeDirectory(reg *registration, entries []edgeproto.DirectoryEntry) error {
+// storeDirectory stores entries and closes the ssh connections of accounts
+// they no longer name. A directory pushed before the claim closes none: it
+// may not name the claimant yet, and until it is stored the edge admits
+// only the owner the claim made.
+func (r *Relay) storeDirectory(reg *registration, entries []edgeproto.DirectoryEntry, beforeClaim bool) error {
 	ctx, cancel := context.WithTimeout(reg.ctx, directoryTimeout)
 	defer cancel()
 	if err := r.dir.ReplaceDirectory(ctx, reg.id, entries); err != nil {
 		return fmt.Errorf("relay: store directory of %s: %w", reg.id, err)
+	}
+	if beforeClaim {
+		return nil
 	}
 	now := time.Now()
 	// A claim connection is admitted by the server's claim code, not by
