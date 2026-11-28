@@ -101,7 +101,7 @@ func TestTerminalExecScriptMarksOnlyACommandStoppedAtTheLimit(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "child.pid")
 	stubborn := `sh -c 'trap "" TERM; echo $$ >"$0"; while :; do sleep 0.1; done' ` + pidFile + ` & echo out; echo late >&2; sleep 30; echo never`
 	code, stdout, stderr := run(stubborn, func(stdout, stderr string) bool {
-		if _, err := os.Stat(pidFile); err == nil && strings.Contains(stdout, "out\n") && strings.Contains(stderr, "late\n") {
+		if pid, err := os.ReadFile(pidFile); err == nil && len(pid) > 0 && strings.Contains(stdout, "out\n") && strings.Contains(stderr, "late\n") {
 			return true
 		}
 		_ = os.Remove(pidFile)
@@ -139,7 +139,10 @@ func TestTerminalExecScriptMarksOnlyACommandStoppedAtTheLimit(t *testing.T) {
 	}
 	_ = syscall.Kill(child, syscall.SIGKILL)
 
-	ran := func(_, stderr string) bool { return strings.Contains(stderr, "own\n") }
+	// The limit can also come between a command's output and its exit.
+	ran := func(_, stderr string) bool {
+		return strings.Contains(stderr, "own\n") && !strings.HasSuffix(stderr, "MARK\n")
+	}
 	for _, own := range []struct {
 		command string
 		code    int
