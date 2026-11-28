@@ -244,6 +244,9 @@ type Scheduler struct {
 	// capacityCounts carries capacity events to countCapacityEvents.
 	capacityCounts chan capacityCount
 	reclaimMu      sync.Mutex
+	// reclaimSpent is the last pass that ran the whole ladder and left the
+	// filesystem short. Guarded by reclaimMu.
+	reclaimSpent reclaimPass
 	// reclaimSweptAt is when reclaim last swept caches, images and scratch
 	// above the low watermark. Guarded by reclaimMu.
 	reclaimSweptAt       time.Time
@@ -453,6 +456,10 @@ type supervised struct {
 	killRequested  bool
 	killActor      domain.MemberID
 	killBy         domain.RunID // the parent that stopped this child run
+	// diskRetries counts the guard's failed resumes of this hold, and
+	// diskRetryAt is when it tries next. A restart forgets both.
+	diskRetries int
+	diskRetryAt time.Time
 	// agentReport is the last native execution report, independent of outcome
 	// presentation. Input deltas are never retained or replayed.
 	agentReport agentstatus.Report
@@ -606,6 +613,13 @@ type supervised struct {
 	// reclaimed is set once disk reclaim picks the retained container, and
 	// stays through a failed removal so the retry says why.
 	reclaimed bool
+	// captureRetry backs off the periodic tries at the evidence capture this
+	// session's sandbox is kept for, and ends them once spent. captureWaived
+	// is set once the sandbox may go without that capture: it was given up,
+	// and the checkout is on the server or a delete's own try at it failed.
+	// The sidecar keeps both across a restart; a relaunch clears them.
+	captureRetry  cleanupRetry
+	captureWaived bool
 	// relaunching counts the Relaunch calls under way, whose capacity
 	// reservation may run a disk reclaim that must leave this run's
 	// container.

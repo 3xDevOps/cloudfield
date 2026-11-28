@@ -42,11 +42,26 @@ func (c chAPI) state(ctx context.Context) (string, error) {
 }
 
 func (c chAPI) pause(ctx context.Context) error {
-	return c.call(ctx, http.MethodPut, "vm.pause", nil, nil)
+	return c.move(ctx, "vm.pause", "Paused")
 }
 
 func (c chAPI) resume(ctx context.Context) error {
-	return c.call(ctx, http.MethodPut, "vm.resume", nil, nil)
+	return c.move(ctx, "vm.resume", "Running")
+}
+
+// move succeeds on a VM already in the state it asks for, which Cloud
+// Hypervisor refuses with InvalidStateTransition: a server that stopped
+// between a call and its record, or an operator at the socket, leaves the
+// caller's record behind the monitor.
+func (c chAPI) move(ctx context.Context, endpoint, want string) error {
+	err := c.call(ctx, http.MethodPut, endpoint, nil, nil)
+	if err == nil {
+		return nil
+	}
+	if state, stateErr := c.state(ctx); stateErr == nil && state == want {
+		return nil
+	}
+	return err
 }
 
 // snapshot is bounded by ctx alone: writing a large guest's memory to a slow

@@ -68,6 +68,8 @@ func TestRetainedCleanupFailureSurvivesRecoveryAndClearsAfterSettlement(t *testi
 	capture.mu.Lock()
 	capture.failures = 1
 	capture.mu.Unlock()
+	clock, advance := movableClock()
+	e.cfg.Now = clock
 	recovered := e.newScheduler(t, e.rt, newFakePTY())
 	recovered.UseEvidence(capture)
 	if err = recovered.recoverRuns(t.Context()); err != nil {
@@ -80,6 +82,7 @@ func TestRetainedCleanupFailureSurvivesRecoveryAndClearsAfterSettlement(t *testi
 		e.rt.byName(string(run.ID)) != container {
 		t.Fatalf("recovered cleanup failure = %+v, sidecar %+v, %v, %v", info, sc, err, retentionErr)
 	}
+	advance(cleanupRetryBase)
 	recovered.sweepRetained(t.Context())
 	info, err = recovered.Retention(row)
 	if err != nil || info.CleanupPending || info.CleanupError != "" ||

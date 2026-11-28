@@ -446,11 +446,19 @@ func startVMM(socket string, args []string, exit func()) (*fakeVMM, error) {
 		case "vm.info":
 			_ = json.NewEncoder(w).Encode(map[string]string{"state": v.state})
 		case "vm.pause":
+			if v.state == "Paused" {
+				http.Error(w, "InvalidStateTransition(Paused, Paused)", http.StatusInternalServerError)
+				return
+			}
 			v.state = "Paused"
 		case "vm.resume":
 			if v.refuseResumes > 0 {
 				v.refuseResumes--
 				http.Error(w, "resume refused", http.StatusInternalServerError)
+				return
+			}
+			if v.state == "Running" {
+				http.Error(w, "InvalidStateTransition(Running, Running)", http.StatusInternalServerError)
 				return
 			}
 			v.state = "Running"

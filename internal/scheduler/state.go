@@ -128,6 +128,7 @@ func publicRunStatusReason(reason string) string {
 // paths, command output or credentials. The detailed error stays in server logs.
 const (
 	cleanupEvidenceError = "Evidence preservation failed; cleanup will retry"
+	cleanupKeptError     = "Evidence preservation failed; cleanup stopped retrying and keeps the sandbox until the session is deleted"
 	cleanupRuntimeError  = "Execution cleanup failed; cleanup will retry"
 	cleanupStateError    = "Cleanup state persistence failed; cleanup will retry"
 	cleanupLookupError   = "Execution ownership lookup failed; cleanup will retry"
@@ -136,7 +137,7 @@ const (
 
 func publicCleanupError(cause string) string {
 	switch cause {
-	case "", cleanupEvidenceError, cleanupRuntimeError, cleanupStateError, cleanupLookupError, cleanupUnknownError:
+	case "", cleanupEvidenceError, cleanupKeptError, cleanupRuntimeError, cleanupStateError, cleanupLookupError, cleanupUnknownError:
 		return cause
 	default:
 		return cleanupUnknownError
@@ -155,7 +156,7 @@ func (s *Scheduler) recordCleanupErrorLocked(entry *supervised, cause string) {
 	if entry == nil || s.runs[entry.runID] != entry {
 		return
 	}
-	cause = publicCleanupError(cause)
+	cause = entry.evidenceCause(publicCleanupError(cause))
 	changed := entry.cleanupError != cause
 	entry.cleanupError = cause
 	if err := s.persistRetainedSidecar(entry.sidecar()); err != nil {
@@ -432,6 +433,9 @@ type sidecar struct {
 	RetainedUntil   *time.Time        `json:"retained_until,omitempty"`
 	DestroyPending  bool              `json:"destroy_pending,omitempty"`
 	EvidencePending bool              `json:"evidence_pending,omitempty"`
+	CaptureAttempts int               `json:"capture_attempts,omitempty"`
+	CaptureRetryAt  time.Time         `json:"capture_retry_at,omitzero"`
+	CaptureWaived   bool              `json:"capture_waived,omitempty"`
 	CleanupError    string            `json:"cleanup_error,omitempty"`
 	RunUser         string            `json:"run_user,omitempty"`
 	Home            string            `json:"home,omitempty"`
@@ -540,6 +544,9 @@ func (e *supervised) sidecar() sidecar {
 		RetainedUntil:       e.retainedUntil,
 		DestroyPending:      e.destroyPending,
 		EvidencePending:     e.evidencePending,
+		CaptureAttempts:     e.captureRetry.attempts,
+		CaptureRetryAt:      e.captureRetry.next,
+		CaptureWaived:       e.captureWaived,
 		CleanupError:        publicCleanupError(e.cleanupError),
 		RunUser:             e.runUser,
 		Home:                e.home,

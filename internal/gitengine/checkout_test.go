@@ -356,6 +356,46 @@ func TestCreateRunCheckoutAtPinsCapturedCommit(t *testing.T) {
 	}
 }
 
+// HostCheckout decides whether a sandbox may go without its capture, so it
+// is true only for a checkout the server can see is its own directory.
+func TestHostCheckoutIsFalseUnlessTheServerHoldsTheCheckout(t *testing.T) {
+	e := newUnitEngine(t)
+	ctx := t.Context()
+	repo, err := e.InitWorkspaceRepo(ctx, "ws1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedBareMain(t, e, "ws1")
+	base := runCheckoutGit(t, repo, "rev-parse", "--verify", "refs/heads/main")
+	if _, _, err = e.CreateRunCheckoutAt(ctx, "ws1", "run-host", base, "main", "a task", ""); err != nil {
+		t.Fatal(err)
+	}
+	if !e.HostCheckout("run-host") {
+		t.Fatal("a checkout directory on the server is not reported as one")
+	}
+	meta, err := e.readRunMeta("run-host")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.VM = true
+	if err = e.writeRunMeta("run-host", meta); err != nil {
+		t.Fatal(err)
+	}
+	if e.HostCheckout("run-host") {
+		t.Fatal("a checkout on its VM's disk is reported as on the server")
+	}
+	path, err := e.runMetaPath("run-host")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if e.HostCheckout("run-host") || e.HostCheckout("run-unknown") {
+		t.Fatal("a checkout whose record cannot be read, or an unknown one, is reported as on the server")
+	}
+}
+
 // seedBareMain gives the workspace bare repo one commit on main, which is
 // the base branch CreateRunCheckout cuts from.
 func seedBareMain(t *testing.T, e *Engine, ws domain.WorkspaceID) {

@@ -256,7 +256,10 @@ above, and after them every cache, image and scratch directory nobody uses:
    while everything below belongs to a session that is still open. The
    timeline notes `Removed this closed session's container early because
    disk space was low; the session can no longer be reopened, and its branch
-   and history are kept`.
+   and history are kept`. A closed session whose evidence capture failed is
+   left out while that capture waits for its next try. [What stays after a
+   session ends](#what-stays-after-a-session-ends) says which sessions stay
+   left out once Cloudfield gives the capture up.
 2. The saved memory of sleeping Enhanced session VMs whose agent restores
    its conversation, the longest asleep first
    ([Sessions in VMs](#sessions-in-vms)). The timeline notes `Deleted this
@@ -277,6 +280,14 @@ If that is not enough, the launch is refused:
 scheduler: insufficient disk headroom: <filesystem> has <n> free bytes; reserve <n> bytes plus <n> bytes per provisioning (<n> already in flight)
 ```
 
+A pass that ran that whole order and left the filesystem below found
+nothing more to free. Cloudfield does not run it again until what it reads
+of the sessions changes or 5 minutes pass: a session or an environment
+terminal starts or is removed, a session closes or is relaunched, is saved
+to disk or woken from it, or a failed evidence capture comes due. Launches
+and wakes refused meanwhile wait for a pass under way and share its result
+instead of each running their own.
+
 With `session-runtime vm`, a session's disks are sparse files that grow as
 it writes, so a running session can take the filesystem below the reserve.
 When the Cloudfield data filesystem first falls below the reserve, the server
@@ -291,8 +302,14 @@ not a session, such as an environment terminal, is only logged (`a VM that is
 not a session is filling the data filesystem`). Once free space is back above
 the reserve plus 4 GiB, the sessions it paused resume and note `Resumed: the
 server has disk space again.`; one you paused, resumed, closed or woke
-yourself is yours, and the guard leaves it. A session that fills the disk
-again within 10 minutes of such a resume stays paused until you resume it
+yourself is yours, and the guard leaves it. When a resume fails, the
+timeline notes `Could not resume this session now that the server has disk
+space again. ... Error: <error>` and the guard tries again 5 seconds later,
+doubling the wait after each failure. After the eighth failed try, about 10
+minutes in, it notes `Stopped trying to resume this session, ... Resume it
+yourself. Error: <error>` and leaves the session paused for you to resume. A
+session that fills the disk again within 10 minutes of the guard resuming it
+stays paused until you resume it
 (`Paused again: ...`). While a session is held, its Files view and closing it
 wait for the resume. A server restart leaves a held session paused with its
 VM stopped, and it resumes the same way. Files a session deletes give their
@@ -1236,9 +1253,53 @@ retention ends, a closed session's reason reads `retained container expired` or
 `retained container unavailable`; when low disk space removes the container
 early it reads `retained container reclaimed for disk space`.
 
-Cloudfield captures evidence before it removes a container or checkout, and
-retries a failed capture every `--poll-interval`. If the checkout is already
-gone, no retry can capture it: cleanup finishes without an evidence packet and
+Cloudfield captures evidence before it removes a container or checkout. A
+closed session's container or VM waits for that capture, since it may hold
+the only copy of the session's final state. A capture made at the close
+whose packet has since expired, as it has when the default 30 days of both
+end, counts as made. A capture that fails is tried
+again 15 minutes later, then after 30 minutes, 1, 2 and 4 hours. The count
+and the wait survive a server restart; a try the server makes as it starts,
+inside that wait, is not counted. A try that only waits is not counted
+either: while the host is too short of memory to
+boot a stopped VM for the capture, Cloudfield tries every 15 minutes, and
+while that boot backs off it waits for the boot's next try. After the sixth
+failure the periodic tries stop:
+
+- A checkout that is a directory on the server outlives the container and is
+  captured again before checkout cleanup removes it, so the container is
+  removed without an evidence packet when its retention ends or disk runs
+  low. The timeline notes `Stopped capturing this session's final
+  state after 6 tries. ... Last error: <error>`.
+- A checkout on a disk of the session's VM has no other copy, so the VM
+  stays, also past its retention and when disk runs low. The timeline notes
+  `Kept this session's sandbox: its final state could not be captured
+  in 6 tries, ... Last error: <error>`, and the session shows `Evidence
+  preservation failed; cleanup stopped retrying and keeps the sandbox until
+  the session is deleted`. Such a session cannot be relaunched. **Free
+  sandbox…** tries the capture once more and returns its error. **Delete
+  run** (`cloudfield delete <session-id>`) makes that try too, and removes
+  the VM and what it holds whether the try works or fails. A try the host
+  is too short of memory to boot the VM for is not made: the delete fails
+  with `... delete the session again once the host has the memory to boot
+  its VM`.
+
+Deleting a closed session before the capture is given up makes the capture
+first: for a stopped VM it commits the work to the branch, which a delete
+keeps. While the capture fails or waits, so does the delete, with the
+capture's error and `<n> of 6 scheduled tries at this capture have failed,
+the next no sooner than <time>; after all 6 have failed, a delete goes ahead
+once it has made one more try, whether that try works or fails`. The delete's
+own try, made inside the wait, is not one of the six. The time is left out
+after `Cloudfield boots the VM to commit it again at <time>`, which names
+it.
+
+A session that was still open when its container's removal was left
+unfinished, as a server restart can leave it, is captured before each retry
+of that removal, with the same six tries and the same outcome.
+
+If the checkout is already gone, no retry can capture it: cleanup finishes
+without an evidence packet and
 the reason gains `evidence unavailable: session checkout missing`.
 
 A session VM's checkout is on the VM's disk, which only the VM reads. When
@@ -1254,7 +1315,8 @@ memory check of a wake, and counts against later ones while it runs, but
 saves no idle VM and skips the disk check: disk reclaim runs these boots
 to free checkouts. While it does not fit, it waits for the next try. A
 boot that fails otherwise is retried 15
-minutes later, doubling up to 6 hours, and the checkout stays. Only once the VM is gone,
+minutes later, doubling up to 6 hours, and the checkout stays; for a closed
+session's kept VM these tries end after the sixth failure, as above. Only once the VM is gone,
 so that no boot can make the commit, the reason gains `work could not be
 captured: ...` and cleanup goes ahead: the checkout's changes since the
 branch's last published commit are lost.

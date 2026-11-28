@@ -223,7 +223,11 @@ func TestFinalizeKeepsOwnerAfterCleanupPersistenceFailure(t *testing.T) {
 }
 
 func TestCloseRunCaptureFailureKeepsFrozenEvidenceUntilRetry(t *testing.T) {
-	e := newTestEnv(t, func(cfg *Config) { cfg.RunContainerTTL = -time.Second })
+	clock, advance := movableClock()
+	e := newTestEnv(t, func(cfg *Config) {
+		cfg.RunContainerTTL = -time.Second
+		cfg.Now = clock
+	})
 	capture := newSchedulerEvidenceCapture(e.ws.ID)
 	capture.failures = 1
 	e.sched.UseEvidence(capture)
@@ -234,6 +238,11 @@ func TestCloseRunCaptureFailureKeepsFrozenEvidenceUntilRetry(t *testing.T) {
 	if container.currentState() != "paused" || !e.sched.RetainsContainer(t.Context(), run.ID) {
 		t.Fatal("failed capture released its frozen evidence sources")
 	}
+	e.sched.sweepRetained(t.Context())
+	if capture.requestCount() != 1 {
+		t.Fatalf("a sweep before the backoff tried the capture again: %d requests", capture.requestCount())
+	}
+	advance(cleanupRetryBase)
 	e.sched.sweepRetained(t.Context())
 	waitFor(t, "captured container cleanup", func() bool { return e.rt.byName(string(run.ID)) == nil })
 	if capture.packetCount() != 1 {

@@ -119,6 +119,8 @@ func (g *vmCheckoutGit) CommitAll(ctx context.Context, run domain.RunID, message
 	return commit, err
 }
 
+func (g *vmCheckoutGit) HostCheckout(domain.RunID) bool { return false }
+
 func (g *vmCheckoutGit) StartDiffWatch(ctx context.Context, workspace domain.WorkspaceID, run domain.RunID) error {
 	g.mu.Lock()
 	delete(g.final, run)
@@ -289,9 +291,44 @@ func TestAFinishAfterTheLingerBootsTheVMToCommit(t *testing.T) {
 	}
 }
 
-// Boots that keep failing back off, and the checkout stays however many
-// fail. Once the VM is gone, no boot can commit its work: the session's
-// reason records the work as lost and its resources are freed.
+// A delete keeps the session's branch, so it too boots a stopped VM to commit
+// the work only that VM holds, unless the capture was given up.
+func TestDeletingAStoppedVMCommitsItsWorkFirst(t *testing.T) {
+	t.Parallel()
+	clock, advance := movableClock()
+	e, vr, _, _ := newVMEnv(t, func(cfg *Config) { cfg.Now = clock })
+	run := e.launchACP(t, "say pong")
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	e.saveRun(t, run.ID)
+	vr.saveMu.Lock()
+	vr.restoreErr = errors.New("restore: monitor exited")
+	vr.saveMu.Unlock()
+	vr.mu.Lock()
+	vr.bootErr = errors.New("boot: no memory")
+	vr.mu.Unlock()
+	if err := e.end(t, run.ID, "close"); err == nil || !strings.Contains(err.Error(), "boot: no memory") {
+		t.Fatalf("close of a VM that cannot boot = %v, want the boot's error", err)
+	}
+	e.waitTerminal(t, run.ID)
+	vr.mu.Lock()
+	vr.bootErr = nil
+	vr.mu.Unlock()
+	advance(cleanupRetryMax)
+	if err := e.sched.DeleteRun(t.Context(), run.ID, e.member.ID); err != nil {
+		t.Fatalf("delete of the closed VM: %v", err)
+	}
+	if got := e.git.commitsFor(run.ID); len(got) != 1 || vr.boots.Load() != 2 {
+		t.Fatalf("commits %q after %d capture boots; want the delete to boot the VM and commit its work", got, vr.boots.Load())
+	}
+	if e.rt.byName(string(run.ID)) != nil {
+		t.Fatal("delete kept the closed VM")
+	}
+}
+
+// Boots that keep failing back off until the doubling has run out, and the
+// checkout stays however many fail. Once the VM is gone, no boot can commit
+// its work: the session's reason records the work as lost and its resources
+// are freed.
 func TestFailingCaptureBootsKeepTheCheckoutUntilTheVMIsGone(t *testing.T) {
 	t.Parallel()
 	clock, advance := movableClock()
@@ -317,11 +354,14 @@ func TestFailingCaptureBootsKeepTheCheckoutUntilTheVMIsGone(t *testing.T) {
 	if vr.boots.Load() != 1 {
 		t.Fatalf("a sweep before the backoff booted again: %d boots", vr.boots.Load())
 	}
-	for range 7 {
+	if err := e.sched.Release(t.Context(), run.ID, e.member.ID); err == nil || !strings.Contains(err.Error(), "again at") || vr.boots.Load() != 1 {
+		t.Fatalf("Release while the boot backs off = %v after %d boots, want the backoff named and no boot", err, vr.boots.Load())
+	}
+	for range 5 {
 		advance(cleanupRetryMax)
 		e.sched.sweepRetained(t.Context())
 	}
-	if got := vr.boots.Load(); got != 8 {
+	if got := vr.boots.Load(); got != 6 {
 		t.Fatalf("%d capture boots, want one each time the backoff passed", got)
 	}
 	if _, err := os.Stat(worktree); err != nil {
@@ -336,10 +376,6 @@ func TestFailingCaptureBootsKeepTheCheckoutUntilTheVMIsGone(t *testing.T) {
 	if err := e.rt.Destroy(t.Context(), e.cid(t, run.ID)); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.sched.Release(t.Context(), run.ID, e.member.ID); err == nil || !strings.Contains(err.Error(), "again at") {
-		t.Fatalf("Release while the last boot backs off = %v, want the backoff named", err)
-	}
-	advance(cleanupRetryMax)
 	if err := e.sched.Release(t.Context(), run.ID, e.member.ID); err != nil {
 		t.Fatalf("Release once the VM is gone: %v", err)
 	}
@@ -359,7 +395,7 @@ func TestFailingCaptureBootsKeepTheCheckoutUntilTheVMIsGone(t *testing.T) {
 	if _, err := os.Stat(worktree); !os.IsNotExist(err) {
 		t.Fatalf("the checkout of a session whose work is recorded lost stayed: %v", err)
 	}
-	if capture.packetCount() != 0 || vr.boots.Load() != 8 {
+	if capture.packetCount() != 0 || vr.boots.Load() != 6 {
 		t.Fatalf("%d packets and %d boots after the outcome", capture.packetCount(), vr.boots.Load())
 	}
 }

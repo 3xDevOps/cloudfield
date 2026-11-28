@@ -68,6 +68,21 @@ func (r cleanupRetry) failed(finished, now time.Time) cleanupRetry {
 	return r
 }
 
+// spent reports that the doubling has run out: another try would only
+// repeat the longest wait.
+func (r cleanupRetry) spent() bool {
+	return r.attempts > 0 && cleanupRetryBase<<min(r.attempts-1, 5) >= cleanupRetryMax
+}
+
+// captureTries is how many failed tries spend a cleanupRetry.
+var captureTries = func() int {
+	n := 1
+	for !(cleanupRetry{attempts: n}).spent() {
+		n++
+	}
+	return n
+}()
+
 // cleanupDue reports whether run's checkout cleanup may be tried now.
 func (s *Scheduler) cleanupDue(run domain.RunID, finished time.Time) bool {
 	s.mu.Lock()
@@ -127,11 +142,29 @@ func (s *Scheduler) captureStoppedVM(ctx context.Context, r *domain.Run, cause e
 	return protocol.EvidencePacket{}, nil
 }
 
+// captureBootWait is the error of a capture that only waits for the backoff
+// of the boot that commits a stopped VM's work, which ends at at.
+type captureBootWait struct {
+	cause error
+	at    time.Time
+}
+
+func (w *captureBootWait) Error() string {
+	return fmt.Sprintf("%v; Cloudfield boots the VM to commit it again at %s", w.cause, w.at.Format(time.RFC3339))
+}
+
+func (w *captureBootWait) Unwrap() error { return w.cause }
+
 // captureBootPendingLocked is the error a capture of run gives while a boot
-// to commit its work backs off, nil otherwise. Caller holds s.mu.
+// to commit its work backs off, nil otherwise. A capture that was given up
+// has no periodic boot to wait for: each try at it is a member's, and
+// boots. Caller holds s.mu.
 func (s *Scheduler) captureBootPendingLocked(r *domain.Run, cause error) error {
+	if entry := s.runs[r.ID]; entry != nil && entry.captureRetry.spent() {
+		return nil
+	}
 	if retry, ok := s.captureBoots[r.ID]; ok && !retry.due(finishedAt(r), s.cfg.Now()) {
-		return fmt.Errorf("%w; Cloudfield boots the VM to commit it again at %s", cause, retry.next.Format(time.RFC3339))
+		return &captureBootWait{cause: cause, at: retry.next}
 	}
 	return nil
 }
@@ -313,6 +346,11 @@ func (s *Scheduler) captureEvidence(ctx context.Context, run domain.RunID, trigg
 		}
 		if errors.Is(err, gitengine.ErrCheckoutNotFound) {
 			return s.recordEvidenceUnavailable(ctx, run, err)
+		}
+		if errors.Is(err, evidence.ErrExpired) {
+			// This state was captured, and its packet has since outlived
+			// the retention a sandbox is kept for.
+			return nil
 		}
 	} else if errors.Is(err, gitengine.ErrCheckoutNotFound) {
 		// No retry can capture a checkout that is gone. Extra repositories
@@ -671,6 +709,136 @@ func logEvidenceFailure(run domain.RunID, err error) {
 	}
 }
 
+const (
+	captureKeptNote   = "Kept this session's sandbox: its final state could not be captured in %d tries, and the sandbox may hold the only copy of its work. Cloudfield stopped retrying. Deleting the session tries the capture once more, then removes the sandbox and what it holds whether that try worked or failed. While the host is too short of memory to boot the VM for that try, the delete is refused. Last error: %s"
+	captureWaivedNote = "Stopped capturing this session's final state after %d tries. Its checkout stays on the server and is captured before checkout cleanup removes it, so the sandbox goes without an evidence packet. Last error: %s"
+)
+
+// captureFailure is the error of a capture of the final state a session's
+// sandbox is kept for. tried is false when the capture only waited, for
+// host memory or for its boot's backoff.
+type captureFailure struct {
+	error
+	tried bool
+}
+
+func (f *captureFailure) Unwrap() error { return f.error }
+
+// captureRetained captures the final state a session's sandbox is kept for,
+// on every path that removes that sandbox, and bounds the periodic checks'
+// retries of a capture that fails: they wait cleanupRetryBase, doubling, and
+// stop once that doubling has run out. A capture that only waits, for host
+// memory or for its boot's backoff, is waited out without counting. Once
+// they stop, a checkout the server holds outlives the sandbox and is
+// captured before its own cleanup, so the capture is waived and nil
+// returned; otherwise the sandbox stays and the timeline says why. Its
+// callers write the sidecar that keeps the tries and the waiver.
+func (s *Scheduler) captureRetained(ctx context.Context, entry *supervised, outcome domain.RunStatus, identity string) error {
+	s.mu.Lock()
+	waived := entry.captureWaived
+	s.mu.Unlock()
+	if waived {
+		return nil
+	}
+	err := s.captureFinishEvidence(ctx, entry.runID, outcome, identity)
+	now := s.cfg.Now()
+	var (
+		boot  *captureBootWait
+		wait  time.Time
+		tried bool
+	)
+	s.mu.Lock()
+	before := entry.captureRetry
+	switch {
+	case err == nil:
+		entry.captureRetry = cleanupRetry{}
+	case ctx.Err() != nil:
+		// A shutdown moves nothing.
+	case errors.As(err, &boot):
+		wait = boot.at
+	case errors.Is(err, ErrMemoryPressure) || errors.Is(err, ErrCapacityUnknown):
+		wait = now.Add(cleanupRetryBase)
+	case now.Before(before.next):
+		// A member's own try inside the wait is not one of the counted.
+		tried = true
+	default:
+		tried = true
+		entry.captureRetry = before.failed(time.Time{}, now)
+	}
+	if wait.After(entry.captureRetry.next) {
+		entry.captureRetry.next = wait
+	}
+	retry := entry.captureRetry
+	s.mu.Unlock()
+	if err == nil {
+		return nil
+	}
+	slog.Warn("scheduler: retain run after evidence capture failure", "run", entry.runID,
+		"attempt", retry.attempts, "retry_at", retry.next, "error", err)
+	if ctx.Err() != nil {
+		return err
+	}
+	err = &captureFailure{error: err, tried: tried}
+	if before.spent() || !retry.spent() {
+		return err
+	}
+	cause := publicRunStatusReason(err.Error())
+	if !s.cfg.Git.HostCheckout(entry.runID) {
+		s.publishTimeline(ctx, entry.workspaceID, entry.runID, "", events.TimelineNote, fmt.Sprintf(captureKeptNote, retry.attempts, cause))
+		return err
+	}
+	s.mu.Lock()
+	entry.captureWaived, entry.captureRetry = true, cleanupRetry{}
+	s.mu.Unlock()
+	s.publishTimeline(ctx, entry.workspaceID, entry.runID, "", events.TimelineNote, fmt.Sprintf(captureWaivedNote, retry.attempts, cause))
+	return nil
+}
+
+// deleteUncaptured decides a delete of entry's session that failed with err.
+// A failed try at a capture that was given up is the last one: the capture
+// is waived and nil returned, for the delete to go on without it. Any other
+// failed capture gains what lets a later delete go ahead.
+func (s *Scheduler) deleteUncaptured(entry *supervised, err error) error {
+	var failure *captureFailure
+	if !errors.As(err, &failure) {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	retry := entry.captureRetry
+	switch {
+	case failure.tried && retry.spent():
+		entry.captureWaived, entry.captureRetry = true, cleanupRetry{}
+		return nil
+	case retry.spent() && (errors.Is(err, ErrMemoryPressure) || errors.Is(err, ErrCapacityUnknown)):
+		return fmt.Errorf("%w; the capture was not tried, and a delete never goes ahead without trying it: delete the session again once the host has the memory to boot its VM", err)
+	}
+	// A boot's backoff names its own next try.
+	next := ""
+	if !errors.As(err, new(*captureBootWait)) {
+		next = ", the next no sooner than " + retry.next.Format(time.RFC3339)
+	}
+	return fmt.Errorf("%w; %d of %d scheduled tries at this capture have failed%s; after all %d have failed, a delete goes ahead once it has made one more try, whether that try works or fails",
+		err, retry.attempts, captureTries, next, captureTries)
+}
+
+// captureWaitingLocked reports that the periodic checks leave entry's
+// evidence capture alone: a failed one backs off, or was given up. Caller
+// holds s.mu.
+func (s *Scheduler) captureWaitingLocked(entry *supervised) bool {
+	return !entry.captureWaived && (entry.captureRetry.spent() || !entry.captureRetry.due(time.Time{}, s.cfg.Now()))
+}
+
+// evidenceCause is the public cleanup error for cause, which says that a
+// failed evidence capture is no longer retried once it was given up. Caller
+// holds Scheduler.mu.
+func (e *supervised) evidenceCause(cause string) string {
+	if cause == cleanupEvidenceError && e.captureRetry.spent() {
+		return cleanupKeptError
+	}
+	return cause
+}
+
 func (s *Scheduler) retainAfterEvidenceFailure(entry *supervised) {
 	if entry == nil {
 		return
@@ -686,7 +854,7 @@ func (s *Scheduler) retainAfterEvidenceFailure(entry *supervised) {
 		entry.retainedUntil = &now
 	}
 	entry.evidencePending = true
-	entry.cleanupError = cleanupEvidenceError
+	entry.cleanupError = entry.evidenceCause(cleanupEvidenceError)
 	entry.finalizing = false
 	if err := s.writeSidecar(entry.sidecar()); err != nil {
 		slog.Warn("scheduler: persist evidence-retained sidecar", "run", entry.runID, "error", err)
@@ -725,7 +893,7 @@ func (s *Scheduler) persistEvidencePendingErr(run domain.RunID, identity, cause 
 	if entry := s.runs[run]; entry != nil {
 		entry.evidenceIdentity = identity
 		entry.evidencePending = true
-		entry.cleanupError = publicCleanupError(cause)
+		entry.cleanupError = entry.evidenceCause(publicCleanupError(cause))
 		sc = entry.sidecar()
 	}
 	if sc.RunID == "" {

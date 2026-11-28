@@ -55,6 +55,9 @@ type GitEngine interface {
 	// IsVMCheckout reports a checkout on a disk of the session's VM, whose
 	// files the VM's own user already owns.
 	IsVMCheckout(run domain.RunID) bool
+	// HostCheckout reports a checkout that is a directory on the server and
+	// outlives the session's sandbox; false when that cannot be told.
+	HostCheckout(run domain.RunID) bool
 }
 
 type PTYHost interface {

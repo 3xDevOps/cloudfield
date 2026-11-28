@@ -3,6 +3,7 @@ package scheduler
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"log/slog"
 	"maps"
 	"slices"
@@ -28,6 +29,8 @@ const (
 	diskHeldNote     = "Paused: the server is low on disk, and this session's disks were filling it. It resumes on its own once there is space again."
 	diskReheldNote   = "Paused again: the server is still low on disk, and this session's disks filled it again soon after it resumed. Resume it yourself once there is space."
 	diskReleasedNote = "Resumed: the server has disk space again."
+	diskRetryNote    = "Could not resume this session now that the server has disk space again. Cloudfield tries again, less often each time, and you can resume it yourself. Error: %s"
+	diskLeftNote     = "Stopped trying to resume this session, which the server paused while it was low on disk. Resume it yourself. Error: %s"
 )
 
 func (s *Scheduler) watchVMDisks(ctx context.Context) {
@@ -122,6 +125,7 @@ func (s *Scheduler) holdForDisk(ctx context.Context, vms runtime.DiskUseRuntime,
 	paused, rehold := e.paused, time.Since(e.diskReleasedAt) < vmDiskRehold
 	if !paused {
 		e.diskHeld = !rehold
+		e.diskRetries, e.diskRetryAt = 0, time.Time{}
 	}
 	s.mu.Unlock()
 	if !paused {
@@ -145,7 +149,11 @@ func (s *Scheduler) holdForDisk(ctx context.Context, vms runtime.DiskUseRuntime,
 
 // releaseHeldVMs resumes the sessions the guard paused. One a member closed,
 // woke or already resumed is no longer the guard's to resume: its hold is
-// just dropped, so the guard never fights the member or retries forever.
+// just dropped, so the guard never fights the member or retries forever. A
+// resume that fails is tried again after a wait that doubles from one check,
+// and the timeline says why the first time. Once that wait would reach
+// vmDiskRehold the session is its member's to resume, as one held twice is.
+// A resume a shutdown cut short changes nothing.
 func (s *Scheduler) releaseHeldVMs(ctx context.Context) {
 	s.mu.Lock()
 	var held []*supervised
@@ -158,19 +166,41 @@ func (s *Scheduler) releaseHeldVMs(ctx context.Context) {
 	for _, e := range held {
 		s.mu.Lock()
 		resumable := e.paused && !e.retained && e.asleepSince.IsZero() && !e.finalizing && !e.status.Terminal()
+		waiting := s.cfg.Now().Before(e.diskRetryAt)
 		s.mu.Unlock()
 		if !resumable {
 			s.setDiskHeld(e, false)
 			continue
 		}
-		if err := s.Resume(ctx, e.runID, ""); err != nil {
-			slog.Warn("scheduler: disk guard: resume a session", "run", e.runID, "error", err)
+		if waiting {
 			continue
 		}
+		err := s.Resume(ctx, e.runID, "")
 		s.mu.Lock()
-		e.diskReleasedAt = time.Now()
+		// Resume also fails after it resumed the session, when it could not
+		// recover the session's terminals.
+		resumed := err == nil || !e.paused
+		wait := vmDiskCheck << e.diskRetries
+		if resumed {
+			e.diskReleasedAt = time.Now()
+		} else if ctx.Err() == nil {
+			e.diskRetries++
+			e.diskRetryAt = s.cfg.Now().Add(wait)
+		}
 		s.mu.Unlock()
-		s.publishTimeline(ctx, e.workspaceID, e.runID, "", events.TimelineNote, diskReleasedNote)
+		if err != nil {
+			slog.Warn("scheduler: disk guard: resume a session", "run", e.runID, "resumed", resumed, "error", err)
+		}
+		switch {
+		case resumed:
+			s.publishTimeline(ctx, e.workspaceID, e.runID, "", events.TimelineNote, diskReleasedNote)
+		case ctx.Err() != nil:
+		case wait >= vmDiskRehold:
+			s.setDiskHeld(e, false)
+			s.publishTimeline(ctx, e.workspaceID, e.runID, "", events.TimelineNote, fmt.Sprintf(diskLeftNote, publicRunStatusReason(err.Error())))
+		case wait == vmDiskCheck:
+			s.publishTimeline(ctx, e.workspaceID, e.runID, "", events.TimelineNote, fmt.Sprintf(diskRetryNote, publicRunStatusReason(err.Error())))
+		}
 	}
 }
 
