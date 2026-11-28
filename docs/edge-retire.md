@@ -581,14 +581,16 @@ still signed in to edge-new.example.com; sign out there with: aether logout --ed
 ```
 
 A retired address answers `410` before it reads a token, so the CLI
-cannot tell whether the edge still holds this one. Revoke nothing on the
-page the second line names. That page shows no device id: a row is a
-label, a key fingerprint and the times it signed in and was last used,
-and the row with this computer's key there is its new sign-in, whose
-**Revoke** ends the access step 1 set up. The edge deleted the old token
-when the pair was retired, unless it had recorded it at a sign-in host
-that is still served ([At the retired start](#at-the-retired-start)).
-Never try the old token at another address. The second line names
+cannot tell whether the edge still holds this one. The page the second
+line names shows no device id: a row is a label, a key fingerprint and
+the times it signed in and was last used, and a new sign-in keeps this
+computer's key. The edge deleted the old token when the pair was
+retired, unless it had recorded it at a sign-in host that is still
+served ([At the retired start](#at-the-retired-start)). So with one row
+for this computer's key, revoke nothing: that row is the new sign-in,
+and its **Revoke** ends the access step 1 set up. With two rows for the
+key, the edge kept the old token: revoke the row with the earlier
+`Signed in` time. Never try the old token at another address. The second line names
 the sign-in origin this computer recorded when it signed in at the new
 address. Without that sign-in it ends `revoke it on the Devices page of the
 sign-in origin of https://edge-new.example.com` when this computer knows the
