@@ -9,7 +9,7 @@ func TestMoveRefusesTheAddressInUseInAnySpelling(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, target := range []string{"https://edge.cloudfield.ai", "https://EDGE.cloudfield.ai:443/"} {
-		if _, err := a.Move(t.Context(), target); err == nil || err.Error() != "edge-url already is https://edge.cloudfield.ai" {
+		if _, err := moveHeld(t, a, target); err == nil || err.Error() != "edge-url already is https://edge.cloudfield.ai" {
 			t.Errorf("move to %s: %v", target, err)
 		}
 	}

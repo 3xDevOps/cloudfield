@@ -146,7 +146,7 @@ func TestSelect(t *testing.T) {
 			for _, name := range tc.modelOnly {
 				usage.modelOnly[name] = true
 			}
-			measured, err := Measure(ctx, db, usage, launcher, string(ids[tc.requested]), harness, policy)
+			measured, err := Measure(ctx, db, usage, launcher, domain.AccountOf(ids[tc.requested]), harness, policy)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -165,7 +165,7 @@ func TestSelect(t *testing.T) {
 					return true, nil
 				}
 			}
-			got, excluded := Select(ctx, db, measured, launcher, domain.AccountOf(ids[tc.requested]), []domain.WorkspaceID{ws.ID}, policy, launchable)
+			got, excluded := Select(ctx, db, measured, launcher, domain.AccountOf(ids[tc.requested]), harness, []domain.WorkspaceID{ws.ID}, policy, launchable)
 			if got != domain.AccountOf(ids[tc.want]) || (excluded != nil) != (tc.failing != "") ||
 				(excluded != nil && !strings.Contains(excluded.Error(), "input/output error")) {
 				t.Fatalf("Select = %s, excluded %v; want %s", names[got.Member], excluded, tc.want)
@@ -271,7 +271,7 @@ func TestMeasureNextTriesUnknownUsageLast(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got, excluded := Select(ctx, db, measured, launcher, domain.AccountOf(ids["Ada"]), nil, policy, nil); got != domain.AccountOf(ids[tc.want]) || excluded != nil {
+			if got, excluded := Select(ctx, db, measured, launcher, domain.AccountOf(ids["Ada"]), harness, nil, policy, nil); got != domain.AccountOf(ids[tc.want]) || excluded != nil {
 				t.Fatalf("Select = %s, excluded %v; want %s", names[got.Member], excluded, tc.want)
 			}
 		})

@@ -7,13 +7,10 @@ import (
 	"sort"
 	"time"
 
+	"github.com/3xDevOps/cloudfield/internal/disk"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
 )
-
-// reclaimHeadroom is how far above the free-disk floor reclaim keeps free
-// space, so admission rarely meets a refusal.
-const reclaimHeadroom uint64 = 4 << 30
 
 // reclaimStartUsed and reclaimTargetUsed are the percentages of a filesystem
 // in use at which reclaim starts and down to which it frees what nobody
@@ -33,7 +30,7 @@ func (s *Scheduler) reclaimDisk(ctx context.Context, keep domain.MemberID) {
 }
 
 // reclaimDiskLocked starts once a measured filesystem is reclaimStartUsed
-// full or below its floor plus reclaimHeadroom. It first frees what nobody
+// full or below its floor plus disk.ReclaimHeadroom. It first frees what nobody
 // loses, unused images, caches past their budget or age and scratch, until
 // every filesystem is down to reclaimTargetUsed. Below the floor's headroom
 // it then frees the checkout disks kept for the next launch, what sessions
@@ -62,7 +59,7 @@ func (s *Scheduler) reclaimDiskLocked(ctx context.Context, keep domain.MemberID)
 			return
 		}
 	}
-	// A used share of 100 leaves only the floor plus reclaimHeadroom.
+	// A used share of 100 leaves only the floor plus disk.ReclaimHeadroom.
 	if _, low, ok := s.reclaimLevel(ctx, 100); !ok || !low {
 		return
 	}
@@ -151,7 +148,7 @@ func (s *Scheduler) reclaimSessions(ctx context.Context, keep domain.MemberID, r
 }
 
 // reclaimLevel reports the lowest free bytes among the filesystems more than
-// used percent full or below their floor plus reclaimHeadroom, or among all
+// used percent full or below their floor plus disk.ReclaimHeadroom, or among all
 // when none is. ok is false when a measurement failed.
 func (s *Scheduler) reclaimLevel(ctx context.Context, used uint64) (free uint64, short, ok bool) {
 	probeCtx, cancel := context.WithTimeout(ctx, capacityProbeTimeout)
@@ -168,7 +165,7 @@ func (s *Scheduler) reclaimLevel(ctx context.Context, used uint64) (free uint64,
 		target := fs.TotalBytes / 100 * (100 - used)
 		// A floor the filesystem cannot hold is never met, so evicting
 		// toward it would only destroy reopenable runs and unsaved state.
-		if floor := diskReserve(fs.TotalBytes, s.cfg.MinFreeBytes) + reclaimHeadroom; floor < fs.TotalBytes {
+		if floor := disk.Reserve(fs.TotalBytes, s.cfg.MinFreeBytes) + disk.ReclaimHeadroom; floor < fs.TotalBytes {
 			target = max(target, floor)
 		}
 		if fs.FreeBytes < target {

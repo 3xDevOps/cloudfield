@@ -22,6 +22,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/collab"
 	"github.com/3xDevOps/cloudfield/internal/connector"
 	"github.com/3xDevOps/cloudfield/internal/control"
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	edgeagent "github.com/3xDevOps/cloudfield/internal/edge/agent"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
@@ -128,6 +129,9 @@ type Config struct {
 	// EdgeReviewer lets a connector authorized by the edge's reviewer
 	// account act as the member an admin bound it to.
 	EdgeReviewer bool
+	// ConfigPath is the options file the server read at start; server.edge
+	// reads its edge-url again to tell a move waiting for a restart.
+	ConfigPath string
 	// CoordinationDisabled turns the conflict coordination kill switch off.
 	// The zero value keeps coordination enabled, which is the shipped
 	// default.
@@ -347,7 +351,7 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 			checkouts := func(ctx context.Context, path, target string, uid, gid int) (string, guest.Checkout, bool, error) {
 				return s.git.VMCheckoutDisk(ctx, path, target, uid, gid)
 			}
-			vms, images, vmErr := newVMRuntime(ctx, cfg.DataDir, cmp.Or(cfg.VMKernel, DefaultVMKernel), cfg.BrowserImage, ids, s.docker, checkouts)
+			vms, images, vmErr := newVMRuntime(ctx, cfg.DataDir, cmp.Or(cfg.VMKernel, DefaultVMKernel), cfg.BrowserImage, cfg.MinFreeDiskBytes, ids, s.docker, checkouts)
 			if vmErr != nil {
 				return nil, vmErr
 			}
@@ -509,7 +513,7 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 	}); err != nil {
 		return nil, err
 	}
-	authMu := &sync.Mutex{}
+	authMu := &ctxlock.Mutex{}
 	if s.evidence, err = evidence.New(evidence.Config{
 		Store:           s.db,
 		Git:             s.git,
@@ -580,6 +584,7 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 	sshCfg.Services.Preferences = preferences
 	sshCfg.EdgeAccess = cfg.EdgeAccess
 	sshCfg.EdgeReviewer = cfg.EdgeReviewer
+	sshCfg.ConfigPath = cfg.ConfigPath
 	sshCfg.Services.Usage = cfg.Usage
 	if sshCfg.Services.Usage == nil {
 		sshCfg.Services.Usage = quota.New(homes, logins)

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/3xDevOps/cloudfield/internal/disk"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
@@ -215,15 +216,21 @@ func (s *Scheduler) saveLongPaused(ctx context.Context) {
 // hostMemory is the host's available memory, read from /proc/meminfo with
 // no daemon in the way, and admission's floor.
 func (s *Scheduler) hostMemory() (available, floor uint64, err error) {
+	total, available, err := s.hostMemoryTotal()
+	return available, memoryFloor(total), err
+}
+
+// hostMemoryTotal is the host's whole and available memory.
+func (s *Scheduler) hostMemoryTotal() (total, available uint64, err error) {
 	read := s.cfg.hostMemory
 	if read == nil {
 		read = func() (uint64, uint64, error) { return sysstats.HostMemory(procRoot) }
 	}
-	total, available, err := read()
+	total, available, err = read()
 	if err == nil && (total == 0 || available > total) {
 		err = errors.New("the host memory measurement is invalid")
 	}
-	return available, memoryFloor(total), err
+	return total, available, err
 }
 
 // memoryStall is the host's memory stall now, as systemd-oomd reads it, and
@@ -296,7 +303,11 @@ func (s *Scheduler) heldSave(c memoryCandidate, working bool) (saved, held bool)
 	done := make(chan bool, 1)
 	saving := s.markSaving(c.e)
 	s.goMove(func() {
+		available, floor, _ := s.hostMemory()
 		saved := s.saveCandidate(s.superCtx, c, working)
+		if saved {
+			s.countSave(c, available, floor)
+		}
 		saving()
 		done <- saved
 	})
@@ -450,7 +461,7 @@ func (s *Scheduler) saveFits(c memoryCandidate, writing uint64, warn bool) bool 
 		slog.Warn("scheduler: memory guard: measure the data filesystem", "error", err)
 		return false
 	}
-	if data.FreeBytes < diskReserve(data.TotalBytes, s.cfg.MinFreeBytes)+reclaimHeadroom+writing+c.memory {
+	if data.FreeBytes < disk.Reserve(data.TotalBytes, s.cfg.MinFreeBytes)+disk.ReclaimHeadroom+writing+c.memory {
 		if !warn {
 			return false
 		}
@@ -619,7 +630,7 @@ func (s *Scheduler) wakeSavedForMemory(ctx context.Context, room uint64) {
 			s.mu.Unlock()
 			s.wg.Done()
 		}()
-		err := s.WakeRun(ctx, next.runID, "")
+		err := s.WakeRun(context.WithValue(ctx, autoWake{}, true), next.runID, "")
 		switch {
 		case err == nil:
 			slog.Info("scheduler: memory guard: woke a session VM it saved", "run", next.runID)

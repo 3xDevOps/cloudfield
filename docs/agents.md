@@ -292,23 +292,62 @@ Sign-in works as in step 5. Agent names: `claude`, `codex`, `opencode`, `pi`,
 ```sh
 cloudfield sessions --needs-you
 cloudfield sessions <session-id> --json
-cloudfield wait <session-id> --timeout 30m
+cloudfield wait <session-id> [<session-id>...] --timeout 30m
 cloudfield logs <session-id>
+cloudfield messages <session-id> --json
 cloudfield message <session-id> "<reply>"
+cloudfield interrupt <session-id>
 ```
+
+Given several session ids, `cloudfield wait` returns when the first of them
+would end a wait on it alone, prints that session and exits with its code;
+when more than one would, the first in the order given. A session already in
+such a state (finished, failed, needs you, parked or a broken wait) ends the
+wait at once every time, so leave it out to wait on the rest. It reads the
+sessions in the order given and stops at the one that ends the wait, so an
+unknown id after that one is not reported. On timeout it prints every session,
+and with `--json` nothing.
 
 `cloudfield wait` exits 0 when the session finished, 1 when it failed, 3 when it needs
 you, 4 when it is parked with nothing pending (its turn ended without a
 report, or it went silent) and a message continues it, 5 when its wait broke
 (a condition resolved and the wake never reached the agent, or its source
 went unread for an hour), and 124 on
-timeout. `cloudfield sessions <session-id>` shows what a session needs, each
-with the command that answers it.
+timeout. `cloudfield sessions --needs-you` prints on stdout a table of the
+sessions waiting on a member, then on stderr what each needs from you with the
+command that answers it, or that it waits on another member. `cloudfield
+sessions <session-id>` prints that for one session on stdout. With `--json` a
+session carries its `agent`, its `mode`
+(`standard`, `enhanced` or `background`, as `--mode` takes it),
+`unacked_messages` (agent mail it has not acknowledged) and, when set,
+`parent_run_id` (on a subsession, with `detached` once it runs on its own),
+`wait_conditions` and `controller_member_id`. `cloudfield messages <session-id>` prints
+the messages the session sent to or received from other agents, bodies
+included; a line from the session to itself is one the server wrote to wake
+it. What you send with `cloudfield message` reaches the agent as a prompt and
+is not listed.
+
+`cloudfield message --attach <path> <session-id> "<text>"` sends a file from
+this computer with the message, and `--steer` adds the message to an Enhanced
+agent's running turn instead of queueing it. Both flags go before the session
+id: every word after it is the message, and either flag there is refused.
 
 A permission request is the human's: show it with its options, and run the
 `cloudfield answer <session-id> <request-id> <option-id>` they pick. It allows or
 rejects once, never always. Relay a session's question to the human unless the
 task they gave you already answers it.
+
+`cloudfield interrupt` stops the agent's current turn and leaves the session
+open; `cloudfield message` then starts the next one. It works on an Enhanced
+session and on a Standard Codex session that is not paused. It prints
+`sent an interrupt to session <session-id>` and exits 0 whether or not a turn
+was running; `cloudfield timeline <session-id>` then shows the note
+`sent an interrupt` with the member who ran it. A session the server saved to
+disk for memory while it worked keeps its turn: the command fails and names
+`cloudfield resume <session-id>`, which wakes it. Any other Standard agent
+stops only on its own key, so the command fails and names
+`cloudfield attach <session-id>`: **Human:** press the key there. While
+another member controls the session it fails with their name.
 
 ## Bring results back and publish
 

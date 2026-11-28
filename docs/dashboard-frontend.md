@@ -386,7 +386,14 @@ top to bottom:
    server's error, below the row (`choices_error`). Drag the panel's right
    edge, or focus **Resize launch panel** and press the arrow keys, to set its
    width from 360px to 720px, never past the room right of the sidebar. The
-   width is saved on this browser.
+   width is saved on this browser. While the panel is open it calls
+   `workspace.mirror.warm` for its workspace, once when the panel opens or
+   the workspace changes and at most every 5 seconds as the task is edited
+   (`launch/warm-base.ts`), so a launch right after typing starts from a
+   source mirror the server has just refreshed and does not wait for the
+   upstream. One call runs at a time, and after one fails the panel makes no
+   more until the workspace changes or the panel is reopened. Nothing is
+   shown; the launch reports a source that cannot be fetched.
 3. **Sessions** (`sidebar-runs.tsx`), a `region` with three groups, **Needs you**,
    **Working** and **Finished** (see [Session state](#session-state)), each an `h2`
    holding an `aria-expanded` disclosure button, a chevron that turns a
@@ -1516,7 +1523,9 @@ Removal also repairs the selection and open route before any refresh awaits.
 - A `run.status` event for a session the client has never seen fetches that session
   before the event is applied, which is what keeps two quick transitions of a
   brand new session in order. If the fetch fails the event is unresolved: the
-  cursor stays put and a fresh snapshot is taken to repair the store. A
+  cursor stays put and a fresh snapshot is taken to repair the store. The
+  snapshot holds no Lanes history, so when the event is one Lanes holds that
+  workspace's is dropped and a mounted Lanes view reads it again. A
   `run.deleted` event removes the session from every connected dashboard; a
   `run.status` event that raced a local deletion treats a `404` re-fetch as
   resolved instead of forcing a redundant hydration. An event naming an
@@ -2099,13 +2108,19 @@ a time (the Session tree panel's announcer, `src/lib/use-announcement.ts`).
 the view is mounted and reads `workspace.timeline` backward with
 `types: ["run.status", "coord.message", "coord.message.acked"]` and
 `no_rereads: true`, 1000 a page,
-until it passes the window's start, the log's start or 5000 events per
-workspace; "Older history not loaded" marks the last case. History counts as read back to the page's `older_time` (how far the server
+until it passes the window's start, the log's start or the budget per
+workspace: 5000 events for a window up to 6h, 10,000 up to 24h, 25,000
+beyond (`historyBudgetFor`; an event held costs the browser about 0.3 KB).
+"Older history not loaded" marks the last case, with **Load more** beside
+it, which adds 10,000 to the budget and reads on. Both show only while the
+window reaches back past what is held and no read has failed (a failed read
+shows **Retry**). The budget only rises while a view holds history; a server
+switch or a new signed-in member puts it back to the window's own. History counts as read back to the page's `older_time` (how far the server
 read, rereads included), or to its first event when a server does not send
 one. Of a page that would pass the budget only the newest events that fit
 are kept, and history then counts as read back to the oldest of those. `sync.ts` appends
 live events of those types, rereads left out, to held history, which keeps a workspace's newest
-5000 and moves its loaded boundary past what it drops; the last view to leave
+events up to the budget and moves its loaded boundary past what it drops; the last view to leave
 drops it, and a server switch or a new signed-in member clears it for a fresh
 read. Lane geometry comes from the model
 (`model.ts`, `segments.ts`, `edges.ts`, `axis.ts`), never from DOM
@@ -2208,6 +2223,7 @@ running"; beside the chip, the chip's own count stands.
 | State | Dot | Comes from | Group |
 | --- | --- | --- | --- |
 | Working | filled circle, pulses | `state` `working` (a turn is in progress), or `queued` / `provisioning` ("Queued", "Starting") | Working |
+| Starting | filled circle, pulses | A `running` session whose `aether-acp` stream is live in this tab and last acked `starting`: the launch returned before the agent started | Working |
 | Waiting for agents | clock | `waiting-agents`: held background subagents or workflows, ACP Task agents, a session with live subsessions, or a `waiting --for agents` report | Working |
 | Waiting for CI | clock | `waiting-ci`: a `waiting --for ci` report | Working |
 | Waiting for process | clock | `waiting-tools`: a background task the agent holds, such as Claude's Monitor, or a `waiting --for process` report | Working |
@@ -4142,8 +4158,10 @@ Escape already closes sheets and an accidental reject cancels the tool call.
 The header's **Answer** focuses the docked card on every screen. While Session shows the dock, Details' **Needs
 you** shows one link, "1 request, shown below the timeline", that closes a
 Details sheet and focuses the card; on other views it lists the cards. `routes/run/session-failure.tsx` shows an adapter failure with
-**Retry Enhanced** and **Open in Standard**, and a sign-in failure with the
-agent's auth methods. On a run on the viewer's own account it adds **Sign in
+**Retry Enhanced** and **Open in Standard**, which starts a new Standard
+session when the switch is refused with `session_not_reported`, and a sign-in failure with the
+agent's auth methods, plus **Retry Enhanced** when the agent failed to start,
+since signing in does not start it. On a run on the viewer's own account it adds **Sign in
 on Agents**, and when that agent's `agent.list` row has `login_problem` its
 title is the alert's ("Claude Code is signed out" or "Claude Code's sign-in
 was refused"); a login-file problem shows verbatim, while a refusal is
@@ -6457,10 +6475,14 @@ selection is the address's `id`; with none, or a name the workspace lacks
 or duplicated template is selected once saved, and deleting the selected one
 selects the next.
 
-The detail shows the name, the mode, **Edit** and a menu with **Schedule…**,
+The detail shows the name, the mode, **Edit**, **Schedule** and a menu with
 **Duplicate** and **Delete**; a meta line with the agent, the model or
-"agent default", the effort when set, the schedule (`Scheduled <cron> UTC, next in 3 hours`) or
-when it was saved, and the advisory budget; then the task. Each `{{name}}`
+"agent default", the effort when set, the schedule or
+when it was saved, and the advisory budget; then the task. The schedule
+reads in words when the editor's fields can show its rule (`Scheduled
+weekdays at 09:30 Europe/Berlin, next in 3 hours`), with the time in the
+browser's locale format, and as the rule otherwise (`Scheduled */15 * * * *
+UTC`). Each `{{name}}`
 placeholder (the server's pattern in `internal/templates/render.go`) is an
 inline field at its first occurrence, prefilled with the template's default;
 later occurrences mirror it. "N of M filled" counts placeholders with a value
@@ -6477,9 +6499,29 @@ On a phone the list and the detail are one pane at a time, with
 **Templates** to go back. A failed `template.list` read shows the
 server's error with **Retry**.
 
-**Schedule…** opens the cron editor in a dialog; the preview is
-the `next_fire_at` that `schedule.save` returned, shown relative and in UTC,
-never computed in the browser. **Duplicate** opens the form prefilled under
+**Schedule** opens the schedule editor in a dialog
+(`schedule-editor.tsx`, rules in `schedule.ts`). **Repeats** picks Daily,
+Weekly, Monthly or Cron. Weekly ticks days, Monday first; Monthly picks a
+day from 1 to 28. All three take a time (default 09:00) and an IANA zone
+(the browser's for a new schedule, the rule's own when editing), and show
+the rule they save, such as `CRON_TZ=Europe/Berlin 30 9 * * 1-5`; a UTC rule
+has no prefix. The rule keeps the zone the server already took; any other
+Area/Location name is saved in the browser's canonical spelling, which
+Go's zone database loads (`europe/berlin` saves as `Europe/Berlin`).
+A name without a slash other than UTC is refused, since `Intl` maps
+abbreviations such as `BST` to surprising zones ("Use a full zone name
+such as America/Los_Angeles."), and so is an Area/Location name `Intl`
+does not take ("Not an IANA zone name. Check the spelling."). Save is
+disabled at once; the message shows when the field is left or Enter is
+pressed in it, when the editor opens with a refused zone, and when a rule
+carried from Cron brings one. Cron takes the rule as text and is where a
+rule the fields cannot show exactly opens. Switching to Cron fills in the
+rule the fields made, unless Cron holds a rule only it can show, and a
+rule typed in Cron carries back into the fields when they can show it.
+While the form shows the saved rule, the next launch is the `next_fire_at` that
+`schedule.save` returned, shown relative and in the viewer's local time
+("your time"), never computed in the browser. **Duplicate** opens the form
+prefilled under
 `<name> copy`. The form's agent select lists the agents from `agent.list` by
 display name and keeps the template's current agent as an extra option when
 the list omits it. An **Effort** field, as in New session, shows for an agent with
@@ -6514,7 +6556,7 @@ was. A form reopened before the first `template.list` read answers keeps
 what it saves.
 **Retry** in a dialog sends what the dialog shows now, so edits made after
 the deadline are not lost. A template whose save the server has not answered, past the deadline
-too, offers no **Launch**, **Delete** or **Schedule…**, since
+too, offers no **Launch**, **Delete** or **Schedule**, since
 `template.launch` sends the name and the filled-in parameters, never the
 task. **Unschedule** reads "Unscheduling…", then
 "Still waiting for the server…" past the deadline; while a schedule save for

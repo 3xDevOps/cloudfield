@@ -518,6 +518,11 @@ A restored VM's clock stopped while it was saved. The server calls
 save of a running VM it calls `Sync`, which writes every filesystem's dirty data to its
 disk, so the cache disk of a saved VM that is deleted without a restore
 holds what the session wrote. `Sync` then drops the guest's page cache.
+`CacheUse` returns how many blocks and inodes the cache volume has free
+(`statfs`). The server asks before `Boot` on a new cache disk, after the
+`Sync` of a save and before `PowerOff`, and promotes the cache only when a
+count moved ([environments.md](environments.md#sessions-in-virtual-machines)); a helper
+that does not answer counts as one whose cache grew.
 Free page reporting hands the freed memory to the host in passes 2 seconds
 apart, each about a sixteenth of the guest's free memory, so the server
 waits until a 4-second check sees under 16 MiB more come back, at most 40
@@ -544,6 +549,27 @@ holds for it. A restore starts Cloud Hypervisor with `--restore` in its
 default mode, which writes every saved page into the guest's memory before
 the VM can be resumed.
 
+The page cache the snapshot writes is charged to the VM's unit. Held to
+the unit's `MemoryMax`, the save of a VM whose session filled it reached
+the limit, and the kernel could then kill Cloud Hypervisor (`Memory cgroup
+out of memory: Killed process ... (cloud-hyperviso)`), which lost the
+session's memory. So the save writes `max` to the unit's `memory.max` once
+the guest is paused and can take no more memory
+(`TestKVMSaveOfAFullVMNeverReachesTheUnitsMemoryLimit`).
+
+A saved VM's unit ends, and its next one starts with `MemoryMax`. A guest
+that stays paused in its unit, after a save that failed or one a stopping
+server cut short, keeps `max` until it is resumed. The resume writes the
+limit from the VM's record once Cloud Hypervisor has answered, which it
+does only when it is done writing a snapshot, and once the files of a
+snapshot that saved nothing are removed: resumed with the limit under
+their page cache, the monitor was killed the same way
+(`TestKVMAResumeAfterASnapshotGivesTheUnitItsMemoryLimitBack`).
+A snapshot is not covered while systemd applies the unit's settings again,
+which writes `MemoryMax` back from its own state: `systemctl daemon-reload`
+does that, and so does a start or stop of another unit in the slice that
+changes the slice's enabled controllers.
+
 Cloud Hypervisor v54.1 can load that memory on demand instead
 (`memory_restore_mode=ondemand`): it resumes at once and copies each page in
 through `userfaultfd` on its first use. That mode is not used. It takes a
@@ -554,8 +580,8 @@ saved bytes. On a hosted runner a host process reads each new process's
 memory through `/proc/<pid>/mem`: of 31 restores of one saved 5 GiB VM
 whose memory file was read from disk, 12 came back with 11 to 419 saved
 pages zeroed at the start of the RAM past 4 GiB, and all 7 such VMs that
-were resumed died by their third wake
-(`TestKVMRepeatedSaveAndWakeKeepsMemoryAndProcesses`).
+were resumed died by their third wake. `TestKVMSleepWakeChain` wakes a
+5 GiB VM twelve times, every other time with its memory file read from disk.
 
 The load gets 60 seconds plus 1 second per 20 MiB of the VM unit's memory
 cap, and the wake around it 1 second per 20 MiB of saved memory beyond its
@@ -626,8 +652,15 @@ the workspace is deleted or the server runs low on disk
 ([Recover from disk pressure](failure-handling.md#recover-from-disk-pressure)).
 When a source mirror moves the base branch, the
 server builds the new commit's prepared disk in the background for every owner
-kept there. A launch after that build does not wait for it; the launch whose
-own refresh moved the base waits for the rest of it.
+kept there, for one commit at a time per workspace: a commit the base has left
+before its turn is skipped. A launch after that build does not wait for it;
+the launch whose own refresh moved the base waits for the rest of it. A
+refresh from the launch panel
+([Launch and mirror failures](failure-handling.md#launch-and-mirror-failures))
+moves the base too, so each upstream commit that arrives while someone edits
+a task costs one build per owner, and the disk of the commit before it stays
+until the server next deletes unused disks, every hour and when a VM is
+removed.
 
 The helper mounts each checkout disk on `/run/aether-guest/checkouts/<key>`,
 binds its `checkout/` at `/run/aether-guest/data/git/<key>` for the git

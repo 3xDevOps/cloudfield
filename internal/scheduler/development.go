@@ -15,6 +15,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/browser"
 	"github.com/3xDevOps/cloudfield/internal/control"
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/fallback"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
@@ -258,6 +259,7 @@ func (s *Scheduler) developmentAuthorization(ctx context.Context, id domain.RunI
 		if !shared {
 			return fmt.Errorf("%w: backing account is not shared", permissions.ErrDenied)
 		}
+		return fallback.ResolveRunLogin(ctx, s.cfg.Store, actor, run, nil)
 	}
 	return nil
 }

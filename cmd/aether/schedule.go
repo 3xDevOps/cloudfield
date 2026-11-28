@@ -18,6 +18,7 @@ func init() {
 			"cloudfield schedule delete <template> [--workspace <name>]",
 		example: "cloudfield schedule list\n" +
 			"cloudfield schedule set nightly-audit \"0 3 * * *\"\n" +
+			"cloudfield schedule set standup \"CRON_TZ=Europe/Berlin 30 9 * * 1-5\"\n" +
 			"cloudfield schedule delete nightly-audit",
 		run: runSchedule,
 	})
@@ -58,7 +59,7 @@ func runSchedule(args []string) error {
 			return err
 		}
 		// The policy is worth stating where people read schedules.
-		fmt.Println("\ncron rules are evaluated in UTC; launches missed while the server was down are skipped, never caught up")
+		fmt.Println("\nrules without a CRON_TZ=<zone> prefix are evaluated in UTC; launches missed while the server was down are skipped, never caught up")
 		return nil
 	})
 }
@@ -68,7 +69,7 @@ func scheduleSet(args []string) error {
 	workspace := fs.String("workspace", "", "workspace ID or name (default: the only workspace)")
 	rest, err := parseTwoArgs(fs, args)
 	if err != nil {
-		return fmt.Errorf("usage: cloudfield schedule set <template> \"<cron>\" [--workspace]\ncron is standard five-field syntax or an @descriptor, in UTC")
+		return fmt.Errorf("usage: cloudfield schedule set <template> \"<cron>\" [--workspace]\ncron is standard five-field syntax or an @descriptor, in UTC unless prefixed CRON_TZ=<zone>")
 	}
 	template, spec := rest[0], rest[1]
 	return withControl(func(c *protocol.Client) error {

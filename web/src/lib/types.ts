@@ -1056,6 +1056,10 @@ export interface RunMessage {
   outcome?: string
   summary?: string
   next_action?: string
+  /** Size of the body a report carries beside its summary; unset for none. */
+  report_body_bytes?: number
+  /** That body, when the list was asked for report bodies. */
+  report_body?: string
 }
 
 export interface CoordMessagesListResult {
@@ -1413,9 +1417,18 @@ export interface EdgeLogin {
   error?: string
 }
 
+/** edge.status's `retiring`: what an edge address says of itself, that it
+ * is retiring or, as a refusal, retired, and the address to use instead.
+ * Nothing authenticates it. */
+export interface EdgeStatusNotice {
+  state: 'retiring' | 'retired'
+  replacement: string
+  date?: string
+}
+
 /** edge.status: every edge this machine is signed in to. */
 export interface EdgeStatus {
-  edges: { edge: string; signin_origin?: string; account?: EdgeAccount; error?: string }[]
+  edges: { edge: string; signin_origin?: string; account?: EdgeAccount; error?: string; retiring?: EdgeStatusNotice }[]
   login?: EdgeLogin
 }
 
@@ -1515,6 +1528,35 @@ export interface ServerEdge {
   owner: { provider: string; login: string } | null
   connected: boolean
   claimed: boolean
+  /** What the pinned edge key signed about edge_url; absent when it said nothing. */
+  notice?: EdgeNotice
+  /** What it signed about the edge-url a restart applies, when that address is leaving too. */
+  pending?: EdgePending
+}
+
+/** The edge-url the server's options file names for the next restart is itself retiring or retired. */
+export interface EdgePending {
+  state: 'retiring' | 'retired'
+  /** YYYY-MM-DD, text for people. */
+  date?: string
+  /** Super admins only: that edge-url, the address the edge names for it, and whether the notice came on first use. */
+  edge_url?: string
+  replacement?: string
+  first_use?: boolean
+}
+
+/** The server's edge address is retiring or retired; `replacement` is the address of the same edge to move to. */
+export interface EdgeNotice {
+  state: 'retiring' | 'retired'
+  replacement: string
+  /** YYYY-MM-DD, text for people. */
+  date?: string
+  /** Came with the connection that pinned the edge key: trusted on first use only. */
+  first_use?: boolean
+  /** The server's options file names another edge-url than edge_url: moved, not yet restarted. */
+  restart_pending?: boolean
+  /** Super admins only: that edge-url, canonical. */
+  moved_to?: string
 }
 
 /** server.edge.claimcode: a claim code bound to the calling admin. */
