@@ -89,7 +89,7 @@ func (s *Scheduler) checkVMMemory(ctx context.Context) (uint64, bool) {
 	}
 	// Spares go before any member's session is saved, and before one the
 	// guard saved waits longer; the next check measures what that freed.
-	if (available < 2*floor || s.memoryWanted() > 0) && s.dropSpares(ctx, false, nil) {
+	if (available < 2*floor || lasting || s.memoryWanted() > 0) && s.dropSpares(ctx, false, nil) {
 		return 0, false
 	}
 	if available < 2*floor {
