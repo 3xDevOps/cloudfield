@@ -42,6 +42,8 @@ type fakeDir struct {
 	admittedErr map[edgeproto.Principal]error
 	// admittedHook, when set, runs at the start of every Admitted.
 	admittedHook func()
+	// admits counts the Admit calls, which record the account's reach.
+	admits int
 	// admittedCalls counts the Admit and Admitted calls for a principal.
 	admittedCalls map[edgeproto.Principal]int
 	// authHook, when set, runs once at the start of the next Authenticate.
@@ -93,6 +95,9 @@ func (d *fakeDir) Admit(ctx context.Context, serverID string, a edgeproto.Accoun
 	if hook != nil {
 		hook()
 	}
+	d.mu.Lock()
+	d.admits++
+	d.mu.Unlock()
 	return d.Admitted(ctx, serverID, a)
 }
 

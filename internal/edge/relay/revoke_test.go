@@ -166,6 +166,27 @@ func TestPassLeavesAClaimConnection(t *testing.T) {
 	roundTrip(t, client, server, "the claim connection after a pass")
 }
 
+// A pass asks without recording: only an admission records that an
+// account reached a server.
+func TestPassRecordsNoReach(t *testing.T) {
+	e := newEnv(t)
+	a := claimedAgent(t, e)
+	_, token := e.addDevice(t, account("owner"), "dev-owner")
+	e.connect(t, a, token)
+	admits := func() int {
+		e.dir.mu.Lock()
+		defer e.dir.mu.Unlock()
+		return e.dir.admits
+	}
+	before := admits()
+	passed := e.checked(t, account("owner"))
+	e.r.revoke(a.id)
+	passed()
+	if got := admits(); got != before {
+		t.Fatalf("a pass made %d recording admissions", got-before)
+	}
+}
+
 // When a server reports that its owner changed or that it has none, the
 // former owner's connection ends, unless the directory names them.
 func TestFormerOwnerIsCutUnlessTheDirectoryNamesThem(t *testing.T) {
@@ -294,6 +315,12 @@ func TestPassesForOneServerDoNotPileUp(t *testing.T) {
 	e.connect(t, a, token)
 
 	asking, answer := make(chan struct{}, 8), make(chan struct{})
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			close(answer)
+		}
+	})
 	e.dir.mu.Lock()
 	e.dir.admittedHook = func() {
 		asking <- struct{}{}
@@ -313,6 +340,7 @@ func TestPassesForOneServerDoNotPileUp(t *testing.T) {
 		t.Fatal("a second pass over the server's connections began while the first was running")
 	case <-time.After(100 * time.Millisecond):
 	}
+	released = true
 	close(answer)
 	select {
 	case <-asking:
