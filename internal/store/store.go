@@ -128,10 +128,15 @@ type Store interface {
 	DeleteTerminal(ctx context.Context, member domain.MemberID) error
 
 	CreateRun(ctx context.Context, r *domain.Run) error
+	// ClaimSpareRun turns spare run r.ID into the queued run a launch of r
+	// would have created, and unhides it; ErrNotFound when r.ID is no spare.
+	ClaimSpareRun(ctx context.Context, r *domain.Run) error
 	GetRun(ctx context.Context, id domain.RunID) (*domain.Run, error)
 	ListRunsByWorkspace(ctx context.Context, id domain.WorkspaceID) ([]*domain.Run, error)
 	ListRunsByMember(ctx context.Context, id domain.MemberID) ([]*domain.Run, error)
 	ListActiveRuns(ctx context.Context) ([]*domain.Run, error)
+	// ListSpareRuns lists every spare run, whatever its status.
+	ListSpareRuns(ctx context.Context) ([]*domain.Run, error)
 	ListLiveRunSummaries(ctx context.Context, workspace domain.WorkspaceID, taskBytes int) ([]*RunSummary, error)
 	UpdateRun(ctx context.Context, r *domain.Run) error
 

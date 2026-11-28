@@ -42,7 +42,9 @@ replaced, farthest first, then the notes that replaced it.
 ## What sessions see automatically
 
 A session is told only about pinned notes and recent sessions. It gets a short **brief**
-once, when it launches. The brief holds:
+once, when it launches. A session made from a
+[spare](enhanced-sessions.md#spare-sessions) has the brief of the spare's
+start, up to 15 minutes earlier. The brief holds:
 
 - the titles of the notes members pinned for the workspace, and of the notes
   the session's owner pinned for themselves

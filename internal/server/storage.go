@@ -80,7 +80,7 @@ type storageGauge struct {
 }
 
 func newStorageGauge(d Deps) *storageGauge {
-	g := &storageGauge{walks: disk.NewCache(d.DataDir, 0, storageEnricher(d)), store: d.Store}
+	g := &storageGauge{walks: disk.NewCache(d.DataDir, 0, storageEnricher(d)), store: d.Spares}
 	g.runtime, _ = d.Runtime.(containerSizer)
 	return g
 }
@@ -133,6 +133,10 @@ func attributeContainers(ctx context.Context, db store.Store, sizes map[string]u
 			failure = "Container owner lookup failed"
 			continue
 		}
+		if run.Spare {
+			containers = append(containers, disk.Container{OwnerKind: "member", OwnerID: string(run.MemberID), MemberID: string(run.MemberID), Bytes: size})
+			continue
+		}
 		containers = append(containers, disk.Container{OwnerKind: "run", OwnerID: string(run.ID), MemberID: string(run.MemberID), Bytes: size})
 	}
 	slices.SortFunc(containers, func(a, b disk.Container) int {
@@ -142,7 +146,7 @@ func attributeContainers(ctx context.Context, db store.Store, sizes map[string]u
 }
 
 func attributeStorage(ctx context.Context, d Deps, u *disk.Usage, now time.Time) {
-	active, activeErr := d.Store.ListActiveRuns(ctx)
+	active, activeErr := d.Spares.ListActiveRuns(ctx)
 	inUse := make(map[string]bool, len(active))
 	for _, run := range active {
 		if run.Worktree != "" {
@@ -180,7 +184,7 @@ func attributeStorage(ctx context.Context, d Deps, u *disk.Usage, now time.Time)
 				e.Error = strings.Join(nonemptyStorageErrors(e.Error, "Cache retention lookup failed"), "; ")
 			}
 		case "home":
-			member, err := d.Store.GetMember(ctx, domain.MemberID(e.Key))
+			member, err := d.Spares.GetMember(ctx, domain.MemberID(e.Key))
 			if err != nil {
 				unknownStorageOwner(e, err)
 				continue
@@ -193,15 +197,18 @@ func attributeStorage(ctx context.Context, d Deps, u *disk.Usage, now time.Time)
 				e.Reason = "Environment /tmp; emptied each time the environment starts"
 				continue
 			}
-			run, err := d.Store.GetRun(ctx, domain.RunID(e.Key))
+			run, err := d.Spares.GetRun(ctx, domain.RunID(e.Key))
 			if err != nil {
 				unknownStorageOwner(e, err)
+				continue
+			}
+			if spareOwner(e, run) {
 				continue
 			}
 			e.OwnerKind, e.OwnerID = "run", string(run.ID)
 			e.Reason = "Session /tmp; removed when the session's sandbox is removed"
 		case "repo":
-			workspace, err := d.Store.GetWorkspace(ctx, domain.WorkspaceID(e.Key))
+			workspace, err := d.Spares.GetWorkspace(ctx, domain.WorkspaceID(e.Key))
 			if err != nil {
 				unknownStorageOwner(e, err)
 				continue
@@ -217,12 +224,15 @@ func attributeStorage(ctx context.Context, d Deps, u *disk.Usage, now time.Time)
 				e.Reason = "Dictation engine VM disks; deleted after 10 minutes without a clip and when the server stops"
 				continue
 			}
-			if attributeMemberVM(ctx, d.Store, e) {
+			if attributeMemberVM(ctx, d.Spares, e) {
 				continue
 			}
-			run, err := d.Store.GetRun(ctx, domain.RunID(e.Key))
+			run, err := d.Spares.GetRun(ctx, domain.RunID(e.Key))
 			if err != nil {
 				unknownStorageOwner(e, err)
+				continue
+			}
+			if spareOwner(e, run) {
 				continue
 			}
 			e.OwnerKind, e.OwnerID = "run", string(run.ID)
@@ -249,9 +259,12 @@ func attributeStorage(ctx context.Context, d Deps, u *disk.Usage, now time.Time)
 			}
 		case "checkout", "snapshot", "transcript", "coord":
 			owner, _ := domain.ParentRun(domain.RunID(e.Key))
-			run, err := d.Store.GetRun(ctx, owner)
+			run, err := d.Spares.GetRun(ctx, owner)
 			if err != nil {
 				unknownStorageOwner(e, err)
+				continue
+			}
+			if spareOwner(e, run) {
 				continue
 			}
 			e.OwnerKind, e.OwnerID = "run", string(run.ID)
@@ -323,7 +336,7 @@ func attributeStorage(ctx context.Context, d Deps, u *disk.Usage, now time.Time)
 			e.Reason = "Evidence owner is unknown; cleanup eligibility unknown"
 		}
 	}
-	attributeEvidence(ctx, d.Store, u, now)
+	attributeEvidence(ctx, d.Spares, u, now)
 }
 
 // memberVMs are the VMs that run for a member rather than a session, by the
@@ -377,6 +390,17 @@ func nonemptyStorageErrors(values ...string) []string {
 		}
 	}
 	return out
+}
+
+// spareOwner attributes what a spare session holds to the member it is
+// kept for, as their terminal is: no member can open the session.
+func spareOwner(e *disk.Entry, run *domain.Run) bool {
+	if !run.Spare {
+		return false
+	}
+	e.OwnerKind, e.OwnerID = "member", string(run.MemberID)
+	e.Reason = "Spare session kept ready for the member's next launch; removed after 15 minutes without one"
+	return true
 }
 
 func unknownStorageOwner(e *disk.Entry, err error) {

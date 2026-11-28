@@ -69,6 +69,10 @@ The old names keep working, with no end date.
   of the filesystem, at least 5 GiB, at most 20 GiB; `min-free-disk` overrides
   it) plus 1 GiB per starting session free
   ([environments.md](environments.md#resource-limits-and-launch-admission)).
+  With `session-runtime vm`, count 1 GiB more for each member who
+  launches Enhanced Claude Code sessions: the server keeps them a
+  [spare session](enhanced-sessions.md#spare-sessions) for 15 minutes after
+  a launch, while twice that memory reserve plus 1 GiB stays available.
   `cloudfield-server install` warns below this.
 - Optional: Sysbox, so agents can run Docker inside their sessions. Setup offers
   it on Ubuntu and Debian

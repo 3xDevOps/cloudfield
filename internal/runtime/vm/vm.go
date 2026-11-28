@@ -444,6 +444,25 @@ func (e *engine) setCommand(key string, command []string) error {
 	return e.store(rec)
 }
 
+func (r *Runtime) PublishCache(_ context.Context, id runtime.ID) error {
+	key, ok := vmKey(id)
+	if !ok {
+		return errors.New("vm runtime: only a session VM has a cache disk to publish; Docker containers cannot")
+	}
+	return r.vms.publishCache(key)
+}
+
+func (e *engine) publishCache(key string) error {
+	unlock := e.lock(key)
+	defer unlock()
+	rec, err := e.load(key)
+	if err != nil {
+		return err
+	}
+	rec.CacheUnpublished = false
+	return e.store(rec)
+}
+
 // SessionVMs tells the scheduler that sessions run in VMs, whose host files
 // need no ownership pass.
 func (r *Runtime) SessionVMs() {}

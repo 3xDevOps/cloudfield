@@ -34,6 +34,7 @@ func init() {
 			Dir:              filepath.Join(d.DataDir, "coord"),
 			Disabled:         d.Config.CoordinationDisabled,
 			Store:            d.Store,
+			Self:             d.Spares.GetRun,
 			RetainsContainer: d.Runs.RetainsContainer,
 			Mail:             mail,
 			Bus:              d.Bus,

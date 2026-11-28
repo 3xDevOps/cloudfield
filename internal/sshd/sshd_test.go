@@ -892,6 +892,12 @@ func (f *fakeRuns) StopTerminal(_ context.Context, member domain.MemberID) error
 
 func (f *fakeRuns) ForgetOMPAccount(context.Context, domain.MemberID) {}
 
+func (f *fakeRuns) DropSpares(_ context.Context, member domain.MemberID, wait bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, fmt.Sprintf("drop-spares:%s:%t", member, wait))
+}
+
 func (f *fakeRuns) WithStoppedTerminal(ctx context.Context, member domain.MemberID, afterStop func() error) error {
 	if err := f.StopTerminal(ctx, member); err != nil {
 		return err

@@ -243,11 +243,19 @@ func (s *Server) memberMergeAccept(ctx context.Context, member domain.MemberID, 
 	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, rpcError(err)
 	}
+	policy := string(s.cfg.EdgeAccess)
+	// Before the locks: this waits for the spares' sandboxes to go. The
+	// proposal is read again under them.
+	if pending, err := ms.PendingMerges(ctx, member, policy, time.Now()); err == nil {
+		if pm, refusal := acceptable(pending, p, member); refusal == nil {
+			s.cfg.Runs.DropSpares(ctx, pm.Minted, true)
+			s.cfg.Runs.DropSpares(ctx, pm.Proposer, true)
+		}
+	}
 	s.registerMu.Lock()
 	defer s.registerMu.Unlock()
 	s.authorizationMu.Lock()
 	defer s.authorizationMu.Unlock()
-	policy := string(s.cfg.EdgeAccess)
 	pending, err := ms.PendingMerges(ctx, member, policy, time.Now())
 	if err != nil {
 		return nil, rpcError(err)

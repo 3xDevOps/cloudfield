@@ -67,6 +67,7 @@ func (s *Server) memberRole(ctx context.Context, member domain.MemberID, params 
 	if m.Role == role {
 		return protocol.MemberRoleResult{Member: protocol.MemberFromDomain(m)}, nil
 	}
+	s.cfg.Runs.DropSpares(ctx, m.ID, false)
 	// An invitation grants its role and workspaces when accepted, and only
 	// admins create them, so SetMemberRole revokes an admin's open
 	// invitations with any demotion. createInvitation and

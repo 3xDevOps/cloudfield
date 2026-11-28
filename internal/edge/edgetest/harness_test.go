@@ -738,6 +738,8 @@ func (noRuns) StopTerminal(context.Context, domain.MemberID) error { return nil 
 
 func (noRuns) ForgetOMPAccount(context.Context, domain.MemberID) {}
 
+func (noRuns) DropSpares(context.Context, domain.MemberID, bool) {}
+
 // agent.list asks about agents no run here uses.
 func (noRuns) WakeRefusal(string, domain.LaunchMode) error { return nil }
 

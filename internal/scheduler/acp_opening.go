@@ -3,9 +3,13 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"strconv"
 
 	"github.com/3xDevOps/cloudfield/internal/acphost"
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/events"
+	"github.com/3xDevOps/cloudfield/internal/harness"
 	"github.com/3xDevOps/cloudfield/internal/ptyhost"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
@@ -163,4 +167,51 @@ func (d *acpDriver) liveStarted(ctx context.Context, run domain.RunID) (*acphost
 		err = fmt.Errorf("%w: the agent is still starting", err)
 	}
 	return sess, err
+}
+
+// setModelAndEffort gives sess the model and effort run asks for, and
+// records a refusal as a notice on the session and, for the model, on the
+// run. A one-shot run's caller ends it on either error.
+func (d *acpDriver) setModelAndEffort(ctx context.Context, sess *acphost.Session, run *domain.Run, profile harness.Profile, oneShot bool) (error, error) {
+	var modelErr error
+	if run.Model != "" {
+		if modelErr = sess.SetModel(ctx, run.Model); modelErr != nil {
+			reason := modelErr.Error()
+			// A one-shot run ends on the error below; a refused live
+			// session keeps the model it reports.
+			refused := !oneShot && acphost.Refused(modelErr)
+			running := sess.Model()
+			// Claude Code's adapter reports its default as "default".
+			if running == "default" || running == run.Model || domain.ValidModel(running) != nil {
+				running = ""
+			}
+			if refused {
+				on := "the agent's default model"
+				if running != "" {
+					on = strconv.Quote(running)
+				}
+				reason = fmt.Sprintf("The agent refused %q, so the session runs on %s: %v", run.Model, on, modelErr)
+			}
+			if err := sess.Notice("error", "Model not set", reason); err != nil {
+				slog.Warn("scheduler: record the model notice", "run", run.ID, "error", err)
+			}
+			if refused {
+				if changed, err := d.s.cfg.Store.RefuseRunModel(ctx, run.ID, run.Model, running, reason); err != nil {
+					slog.Warn("scheduler: record the refused model", "run", run.ID, "error", err)
+				} else if changed {
+					d.s.publish(ctx, events.Event{WorkspaceID: run.WorkspaceID, RunID: run.ID, Payload: events.RunModelPayload{Model: running}})
+				}
+			}
+		}
+	}
+	// After the model: the levels an agent offers can depend on it.
+	var effortErr error
+	if run.Effort != "" && !profile.ACPEffortArgs {
+		if effortErr = sess.SetEffort(ctx, run.Effort); effortErr != nil {
+			if err := sess.Notice("error", "Effort not set", effortErr.Error()); err != nil {
+				slog.Warn("scheduler: record the effort notice", "run", run.ID, "error", err)
+			}
+		}
+	}
+	return modelErr, effortErr
 }

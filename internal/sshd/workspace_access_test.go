@@ -196,6 +196,11 @@ func TestWorkspaceAccessRevokeRefusedWhileInUse(t *testing.T) {
 	if !strings.Contains(pe.Message, "in use") || !strings.Contains(pe.Message, string(run.ID)) {
 		t.Fatalf("revoke refusal %q does not name the session in use", pe.Message)
 	}
+	// The refusal names the session in use, never the member's spare,
+	// which the revoke drops without waiting.
+	if drop := "drop-spares:" + string(e.u.ID) + ":false"; !slices.Contains(e.runs.Calls(), drop) {
+		t.Fatalf("RunController calls = %v, want %q", e.runs.Calls(), drop)
+	}
 	wantMissing(t, a.Call(protocol.MethodWorkspaceAccessRevoke,
 		protocol.WorkspaceAccessRevokeParams{WorkspaceID: string(e.wsB.ID), MemberID: string(e.u.ID)}, nil), "A revokes in B's workspace")
 

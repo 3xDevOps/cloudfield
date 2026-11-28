@@ -64,6 +64,10 @@ func (s *Scheduler) reclaimDiskLocked(ctx context.Context, keep domain.MemberID)
 		return
 	}
 	floor := func(step string) bool { return recovered(step, 100) }
+	// Spares go before anything a member's session holds.
+	if s.dropSpares(ctx, true, nil) && floor("spare sessions") {
+		return
+	}
 	if vms, ok := s.cfg.Runtime.(vmImageSweeper); ok {
 		if err := vms.DropKeptCheckoutDisks(); err != nil {
 			slog.Warn("scheduler: disk reclaim: drop kept checkout disks", "error", err)

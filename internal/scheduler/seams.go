@@ -45,6 +45,12 @@ type TeamMemory interface {
 
 type GitEngine interface {
 	CreateRunCheckoutAt(ctx context.Context, ws domain.WorkspaceID, run domain.RunID, baseCommit, baseBranch, task, origin string) (checkoutPath, branch string, err error)
+	// ReleaseRunBranch gives back the name a deleted run no member ever saw
+	// reserved.
+	ReleaseRunBranch(ctx context.Context, ws domain.WorkspaceID, branch string) error
+	// RenameRunBranch gives run the branch name a launch of task reserves
+	// and returns it. The branch in the checkout is the caller's to rename.
+	RenameRunBranch(ctx context.Context, run domain.RunID, task string) (branch string, err error)
 	CommitAll(ctx context.Context, run domain.RunID, message string, author domain.GitIdentity, signingKey []byte) (commit string, err error)
 	PublishRunBranch(ctx context.Context, run domain.RunID) (commit string, err error)
 	RemoveRunCheckout(ctx context.Context, run domain.RunID) error

@@ -16,9 +16,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/envname"
 	"github.com/3xDevOps/cloudfield/internal/fallback"
-	"github.com/3xDevOps/cloudfield/internal/gitengine"
 	"github.com/3xDevOps/cloudfield/internal/harness"
-	"github.com/3xDevOps/cloudfield/internal/mirror"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
 	"github.com/3xDevOps/cloudfield/internal/store"
 )
@@ -267,7 +265,18 @@ func (s *Scheduler) Launch(ctx context.Context, workspace domain.WorkspaceID, me
 // LaunchWithOptions captures the base before the run row is created, so a
 // failed capture leaves no durable or in-memory run state.
 func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode, opts domain.LaunchOptions) (*domain.Run, error) {
+	return s.launch(ctx, workspace, member, account, task, harness, mode, opts, nil)
+}
+
+// launch makes a member's session, from their spare when it is the session
+// this launch would make, or with sp the spare a later launch may claim.
+func (s *Scheduler) launch(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode, opts domain.LaunchOptions, sp *spare) (made *domain.Run, err error) {
 	ctx = runtime.WithSteps(ctx)
+	var target *spareTarget
+	if sp == nil {
+		ended := s.launchBegan(member)
+		defer func() { ended(made, target) }()
+	}
 	for _, id := range append([]domain.WorkspaceID{workspace}, opts.ExtraWorkspaces...) {
 		lock := s.workspaceLock(id)
 		lock.RLock()
@@ -333,8 +342,27 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	if err != nil {
 		return nil, err
 	}
+	// A launch that may claim the member's spare captures its base first:
+	// the claim needs it, and takes no admission of its own.
+	var run *domain.Run
+	if sp == nil && s.spareReady(member) {
+		if run, err = s.launchRun(ctx, workspace, member, account, task, harness, mode, acp, perUse, extraRepos, opts); err != nil {
+			return nil, err
+		}
+		if spareable(run, opts, profile) {
+			if claimed, claimErr := s.claimSpare(ctx, run, ws, actor, profile, opts); claimed != nil || claimErr != nil {
+				if claimed != nil && !opts.Scheduled {
+					target = &spareTarget{workspace: workspace, harness: harness, permission: opts.Permission, limits: opts.Limits}
+				}
+				return claimed, claimErr
+			}
+		}
+	}
 	reserve := s.reserveCapacity
-	if opts.Retry {
+	switch {
+	case sp != nil:
+		reserve = s.reserveSpare
+	case opts.Retry:
 		reserve = s.reserveRetry
 	}
 	release, err := reserve(ctx)
@@ -346,84 +374,12 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	var launched domain.RunID
 	defer func() { s.acp.afterOpening(launched, release) }()
 	runtime.Step(ctx, "admission")
-	s.mu.Lock()
-	bases := s.cfg.Bases
-	s.mu.Unlock()
-	if bases == nil {
-		return nil, errors.New("scheduler: base capture is not configured")
-	}
-	var extrasCh chan extraCapture
-	if len(opts.ExtraWorkspaces) > 0 {
-		extrasCh = make(chan extraCapture, 1)
-		go func() {
-			repos, captureErr := s.captureExtras(ctx, bases, extraRepos)
-			extrasCh <- extraCapture{repos, captureErr}
-		}()
-	}
-	var base mirror.CaptureResult
-	if opts.FromCommit != "" {
-		base = mirror.CaptureResult{Commit: opts.FromCommit, Branch: opts.FromBranch, Source: "run", Configured: true, CheckedAt: time.Now().UTC()}
-	} else {
-		base, err = bases.Capture(ctx, workspace, opts.CachedBase)
-	}
-	var extras extraCapture
-	if extrasCh != nil {
-		extras = <-extrasCh
-	}
-	runtime.Step(ctx, "base")
-	if err != nil {
-		return nil, &BaseCaptureError{Capture: base, Err: err}
-	}
-	if extras.err != nil {
-		return nil, extras.err
-	}
-	if opts.CachedBase != "" && (!base.Cached || base.Commit != opts.CachedBase) {
-		return nil, &BaseCaptureError{
-			Capture: base,
-			Err: &gitengine.MirrorError{
-				Kind:        gitengine.MirrorErrorInvalidRequest,
-				WorkspaceID: workspace,
-				Base:        opts.CachedBase,
-				Observed:    base.Commit,
-			},
+	if run == nil {
+		if run, err = s.launchRun(ctx, workspace, member, account, task, harness, mode, acp, perUse, extraRepos, opts); err != nil {
+			return nil, err
 		}
 	}
-	source := base.Source
-	switch {
-	case base.Cached && source != "":
-		source = "cached:" + source
-	case base.Cached:
-		source = "cached"
-	case !base.Configured:
-		source = "local"
-	}
-	run := &domain.Run{
-		WorkspaceID:     workspace,
-		MemberID:        member,
-		AccountMemberID: account,
-		Task:            task,
-		Harness:         harness,
-		Mode:            mode,
-		Model:           opts.Model,
-		Effort:          opts.Effort,
-		Permission:      opts.Permission,
-		Limits:          opts.Limits,
-		Via:             domain.ViaFrom(ctx),
-		ACP:             acp,
-		Status:          domain.RunQueued,
-		BaseCommit:      base.Commit,
-		BaseBranch:      base.Branch,
-		BaseSource:      source,
-		BaseCheckedAt:   base.CheckedAt,
-		Fallback:        opts.Fallback,
-		AccountLogin:    opts.AccountLogin,
-		Extras:          extras.repos,
-		LinearIssueURL:  opts.LinearIssueURL,
-	}
-	run.AccountLoginPerUse = perUse
-	if opts.RequestedAccount != account {
-		run.RequestedAccountMemberID = opts.RequestedAccount
-	}
+	run.Spare = sp != nil
 	if err := createRun(ctx, s.cfg.Store, run, reservedID); err != nil {
 		if reservedID != "" {
 			existing, getErr := s.cfg.Store.GetRun(ctx, reservedID)
@@ -436,6 +392,11 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	for i := range run.Extras {
 		run.Extras[i].Key = domain.RepoKey(run.ID, i+1)
 	}
+	if sp != nil {
+		s.hideSpare(sp, run.ID)
+	} else if spareable(run, opts, profile) && !opts.Scheduled {
+		target = &spareTarget{workspace: workspace, harness: harness, permission: opts.Permission, limits: opts.Limits}
+	}
 	if opts.Created != nil {
 		opts.Created(run.ID)
 	}
@@ -445,7 +406,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	if opts.Admitted != nil {
 		opts.Admitted()
 	}
-	if err := s.provision(ctx, run, ws, actor, argv, profile); err != nil {
+	if err := s.provision(ctx, run, ws, actor, argv, profile, sp); err != nil {
 		return nil, err
 	}
 	runtime.LogSteps(ctx, "scheduler: launch steps", "run", run.ID)
@@ -455,8 +416,9 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 // provision registers the run in s.runs before any provisioning I/O so a
 // concurrent Kill takes the supervised path instead of transitioning the row
 // underneath the in-flight launch.
-func (s *Scheduler) provision(ctx context.Context, run *domain.Run, ws *domain.Workspace, actor *domain.Member, argv []string, profile harness.Profile) error {
+func (s *Scheduler) provision(ctx context.Context, run *domain.Run, ws *domain.Workspace, actor *domain.Member, argv []string, profile harness.Profile, sp *spare) error {
 	entry := &supervised{
+		spare:       sp,
 		runID:       run.ID,
 		workspaceID: run.WorkspaceID,
 		task:        run.Task,
@@ -541,7 +503,15 @@ func (s *Scheduler) provisionSteps(ctx context.Context, entry *supervised, run *
 			return fmt.Errorf("check the account share: %w", err)
 		}
 	}
-	s.updateHarness(run, plan, profile)
+	if entry.spare != nil {
+		// Before the start adds what is the run's own to the plan. An
+		// update of the agent would change what the claim compares.
+		if entry.spare.spec, err = s.specDigest(ctx, run, actor, plan); err != nil {
+			return err
+		}
+	} else {
+		s.updateHarness(run, plan, profile)
+	}
 	// Recorded before coordination is provisioned, because the co-author
 	// list written there already leaves this address out: the agent's own
 	// commits carry it, so telling the agent to credit it would make it
@@ -740,6 +710,12 @@ func (s *Scheduler) startRunContainer(ctx context.Context, entry *supervised, ru
 		return nil, s.failContainer(ctx, entry, cid, "create container", errKillRequested)
 	}
 	if serr := s.cfg.Runtime.Start(ctx, cid); serr != nil {
+		if entry.spare != nil {
+			// The launch that cancelled this spare waits on the member's
+			// cache lock, not on the VM's removal: the run's row still
+			// names its member as the caches' owner.
+			unlockCaches()
+		}
 		return nil, s.failContainer(ctx, entry, cid, "start container", serr)
 	}
 	s.mu.Lock()

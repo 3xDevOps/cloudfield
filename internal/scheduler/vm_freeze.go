@@ -69,6 +69,12 @@ func (s *Scheduler) brakeVMMemory(ctx context.Context, vms runtime.FreezeRuntime
 	if err != nil {
 		return
 	}
+	// Spares go first: their removal starts here, nothing is frozen on this
+	// check, and the next one freezes as ever if memory is still short.
+	// Only a spare to remove is worth the lock that takes.
+	if available < floor && s.sparesKept.Load() > 0 && s.dropSpares(ctx, false, nil) {
+		return
+	}
 	var froze []runtime.ID
 	if available < floor {
 		for _, id := range s.vmBrakeTargets {
@@ -119,8 +125,8 @@ func (s *Scheduler) settleFrozen(ctx context.Context, vms runtime.FreezeRuntime,
 		case busy && !e.admitting || e.status == domain.RunProvisioning || !e.retained && (e.status.Terminal() || e.killRequested || e.finalizing):
 			s.thawBraked(vms, cid)
 		// Frozen too, a VM paused in memory would take a thaw, one a check,
-		// ahead of a working one.
-		case e.asleepResident:
+		// ahead of a working one. A spare is removed, never frozen.
+		case e.asleepResident, e.spare != nil:
 		default:
 			s.vmBrakeTargets = append(s.vmBrakeTargets, cid)
 			if slices.Contains(froze, cid) && !e.retained && !e.paused && now.Sub(e.frozenNotedAt) >= memoryFrozenNoteEvery {

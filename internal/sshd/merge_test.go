@@ -213,6 +213,10 @@ func TestMergeTailnetMemberWithEdgeMember(t *testing.T) {
 	if err != nil {
 		t.Fatalf("member.merge.accept: %v", err)
 	}
+	// Neither member's spare session, which nobody can stop, holds the merge up.
+	if calls := e.runs.Calls(); !slices.Contains(calls, "drop-spares:"+string(tina.ID)+":true") || !slices.Contains(calls, "drop-spares:"+gh.ID+":true") {
+		t.Fatalf("RunController calls = %v, want both members' spare sessions dropped and waited for", calls)
+	}
 	if res.Member.ID != string(tina.ID) || res.Merge.AbsorbedID != gh.ID || res.Merge.Discarded.DisplayName != "Octo Cat" ||
 		res.Merge.ConfirmedByKind != "ssh" || res.Merge.ArchivePath != filepath.Join(merged, res.Merge.ID) {
 		t.Fatalf("merge = %+v", res)

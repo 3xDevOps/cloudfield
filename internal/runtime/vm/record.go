@@ -129,6 +129,9 @@ type record struct {
 	// Either is zero when the guest gave no count.
 	CacheSeed guest.CacheUse `json:"cache_seed,omitzero"`
 	CacheUse  guest.CacheUse `json:"cache_use,omitzero"`
+	// CacheUnpublished keeps the cache disk out of its pool when the VM
+	// stops for good: it is a spare session's, which no member has used.
+	CacheUnpublished bool `json:"cache_unpublished,omitempty"`
 	// ExitCode is the last boot's until the next boot exits.
 	Exited   bool      `json:"exited,omitempty"`
 	ExitCode int       `json:"exit_code,omitempty"`

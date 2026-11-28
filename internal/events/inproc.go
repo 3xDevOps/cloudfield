@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/3xDevOps/cloudfield/internal/domain"
 )
 
 // replayBatch is how many events a replaying subscription reads from the
@@ -24,6 +26,32 @@ type InProc struct {
 	seq    uint64
 	subs   map[*inprocSub]struct{}
 	closed bool
+	hidden map[domain.RunID]struct{}
+}
+
+// Hide drops every event published about run until Show: a spare session is
+// unknown to members and to the services that follow the bus, and nothing
+// about it is logged for a later replay.
+func (b *InProc) Hide(run domain.RunID) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.hidden == nil {
+		b.hidden = make(map[domain.RunID]struct{})
+	}
+	b.hidden[run] = struct{}{}
+}
+
+func (b *InProc) Show(run domain.RunID) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.hidden, run)
+}
+
+func (b *InProc) hides(run domain.RunID) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, hidden := b.hidden[run]
+	return run != "" && hidden
 }
 
 // NewInProc builds an in-process bus. log may be nil, in which case
@@ -56,6 +84,9 @@ func (b *InProc) Publish(ctx context.Context, e Event) (Event, error) {
 	}
 	if e.WorkspaceID == "" {
 		return Event{}, ErrNoWorkspace
+	}
+	if b.hides(e.RunID) {
+		return e, nil
 	}
 	if e.Type == "" {
 		e.Type = e.Payload.EventType()

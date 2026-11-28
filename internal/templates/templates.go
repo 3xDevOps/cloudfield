@@ -278,15 +278,15 @@ func (s *Service) Launch(ctx context.Context, workspace domain.WorkspaceID, name
 	if current := Version(t); version != "" && version != current {
 		return nil, fmt.Errorf("%w: %s was saved again and is now version %s, not %s", ErrChanged, name, current, version)
 	}
-	return s.launch(ctx, t, member, params, created)
+	return s.launch(ctx, t, member, params, created, false)
 }
 
-func (s *Service) launch(ctx context.Context, t *store.Template, member domain.MemberID, params map[string]string, created func(domain.RunID)) (*Launched, error) {
+func (s *Service) launch(ctx context.Context, t *store.Template, member domain.MemberID, params map[string]string, created func(domain.RunID), scheduled bool) (*Launched, error) {
 	task, err := Render(t.Task, t.Params, params)
 	if err != nil {
 		return nil, fmt.Errorf("templates: launch %s: %w", t.Name, err)
 	}
-	run, err := s.runs.LaunchWithOptions(ctx, t.WorkspaceID, member, member, task, t.Harness, t.Mode, domain.LaunchOptions{Model: t.Model, Effort: t.Effort, LinearIssueURL: linear.FindIssueURL(task), Created: created})
+	run, err := s.runs.LaunchWithOptions(ctx, t.WorkspaceID, member, member, task, t.Harness, t.Mode, domain.LaunchOptions{Model: t.Model, Effort: t.Effort, LinearIssueURL: linear.FindIssueURL(task), Created: created, Scheduled: scheduled})
 	if err != nil {
 		return nil, fmt.Errorf("templates: launch %s: %w", t.Name, err)
 	}

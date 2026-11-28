@@ -223,7 +223,7 @@ func TestHistoryRetentionIsIndependentOfCheckout(t *testing.T) {
 	if err := s.db.CreateRun(t.Context(), run); err != nil {
 		t.Fatal(err)
 	}
-	deps := Deps{Store: s.db, Runs: s.sched, DataDir: root, Config: Config{CheckoutTTL: time.Hour}}
+	deps := Deps{Store: s.db, Spares: s.db.WithSpares(), Runs: s.sched, DataDir: root, Config: Config{CheckoutTTL: time.Hour}}
 	for _, checkout := range []string{filepath.Join(root, "checkouts", string(run.ID)), ""} {
 		run.Worktree = checkout
 		if err := s.db.UpdateRun(t.Context(), run); err != nil {
@@ -270,7 +270,7 @@ func TestServerDiskAttributesContainerSizes(t *testing.T) {
 		string(run.ID):                       47 << 30,
 		"harness-update-" + string(admin.ID): 5,
 	}}
-	gauge := newStorageGauge(Deps{Store: s.db, Runtime: rt, DataDir: root})
+	gauge := newStorageGauge(Deps{Store: s.db, Spares: s.db.WithSpares(), Runtime: rt, DataDir: root})
 	read := func() disk.Usage {
 		t.Helper()
 		u, err := gauge.Usage(t.Context())

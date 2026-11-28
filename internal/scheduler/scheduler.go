@@ -251,6 +251,14 @@ type Scheduler struct {
 	// memoryClaims is guarded by capacityGate.
 	memoryClaims []*memoryClaim
 
+	// members is what the spare sessions follow of each member, and
+	// sparesLeft the spares whose removal failed, both guarded by mu.
+	members    map[domain.MemberID]*memberSpare
+	sparesLeft []domain.RunID
+	// sparesKept counts the spares members holds, for the memory brake,
+	// which reads it before it may take a lock.
+	sparesKept atomic.Int32
+
 	// vmDiskMu serializes the disk guard's checks. vmDiskBase is each VM's
 	// disk use when the filesystem first fell below the reserve, held while
 	// vmDiskLow until it recovers.
@@ -494,6 +502,8 @@ type supervised struct {
 	// restart need not reconstruct an old image/profile choice.
 	home            string
 	userReservation *credentialUserReservation
+	// spare is set while the run is a spare session no launch has claimed.
+	spare *spare
 	// exitObserved / exitCode are the durable Wait result, persisted
 	// before finalize so a crash can resume the original exit.
 	exitObserved bool
@@ -899,6 +909,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 		_ = limits.Close()
 		return recoveryError(err)
 	}
+	s.removeLeftoverSpares(ctx)
 	if err := s.recoverTerminals(ctx); err != nil {
 		_ = limits.Close()
 		return recoveryError(err)
@@ -953,6 +964,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 		case <-sweep.C:
 			s.checkStalls(ctx)
 			s.sleepIdle(ctx)
+			s.sweepSpares()
 			s.refreshActivities(ctx)
 			s.finishOverdueReports()
 			s.sweepRetained(ctx)
@@ -1221,5 +1233,6 @@ func (s *Scheduler) containerSpec(run *domain.Run, member *domain.Member, argv [
 		NestedDocker:      run.Permission != domain.PermissionIsolated,
 		Egress:            plan.Egress,
 		Sudo:              plan.Sudo,
+		CacheUnpublished:  run.Spare,
 	}
 }

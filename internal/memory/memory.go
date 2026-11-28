@@ -41,6 +41,9 @@ type Store interface {
 
 type Config struct {
 	Store Store
+	// Self reads the row of the run that calls, which may be a spare
+	// session no member can see; Store.GetRun when unset.
+	Self func(context.Context, domain.RunID) (*domain.Run, error)
 	// Bus carries memory.change events to the activity feed.
 	Bus events.Bus
 	// Log holds the run.diff snapshots whose HEAD an agent's note cites.
@@ -57,6 +60,9 @@ type Service struct {
 func New(cfg Config) (*Service, error) {
 	if cfg.Store == nil || cfg.Bus == nil || cfg.Log == nil {
 		return nil, errors.New("memory: config: Store, Bus and Log are required")
+	}
+	if cfg.Self == nil {
+		cfg.Self = cfg.Store.GetRun
 	}
 	return &Service{cfg: cfg}, nil
 }

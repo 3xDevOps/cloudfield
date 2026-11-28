@@ -120,6 +120,13 @@ type FreezeRuntime interface {
 	Thaw(ID) error
 }
 
+// CacheRuntime optionally starts a container whose cache disk is never
+// published to its member's pool of caches (Spec.CacheUnpublished), which
+// PublishCache lifts for a container some member now owns.
+type CacheRuntime interface {
+	PublishCache(context.Context, ID) error
+}
+
 var ErrNotSaved = errors.New("it has no saved state")
 
 // CaptureRuntime optionally starts a stopped session container with a main
@@ -291,6 +298,10 @@ type Spec struct {
 	// a surviving container was created from the same settings. It is stored
 	// in clear, so it must not be derived reversibly from secrets.
 	Fingerprint string
+	// CacheUnpublished keeps what the container writes to its MountCache
+	// out of the member's pool, until CacheRuntime.PublishCache. Only a
+	// CacheRuntime honors it.
+	CacheUnpublished bool
 }
 
 // Validate reports every problem that makes the spec unusable by any

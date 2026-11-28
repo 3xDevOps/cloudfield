@@ -27,7 +27,7 @@ type policy struct {
 // resolve reads the parent's lineage and the owner's authority. It never
 // trusts the agent: the parent is the socket's run.
 func (s *Service) resolve(ctx context.Context, parentID domain.RunID) (*policy, error) {
-	parent, err := s.cfg.Store.GetRun(ctx, parentID)
+	parent, err := s.cfg.Self(ctx, parentID)
 	if err != nil {
 		return nil, err
 	}

@@ -227,6 +227,10 @@ func TestMemberRemoveCleansTerminalAndHome(t *testing.T) {
 	if len(calls) == 0 || calls[len(calls)-1] != want {
 		t.Fatalf("RunController calls = %v, want final %q", calls, want)
 	}
+	// The member's spare session, which nobody can stop, goes first.
+	if drop := "drop-spares:" + string(target.ID) + ":true"; calls[0] != drop {
+		t.Fatalf("RunController calls = %v, want %q first", calls, drop)
+	}
 }
 
 // The member's private signing key goes with them. One the server cannot
