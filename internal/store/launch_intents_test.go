@@ -46,7 +46,8 @@ func TestALaunchIntentKeepsItsRequestAndIsOneToItsKey(t *testing.T) {
 	if _, _, err = db.CreateLaunchIntent(ctx, &domain.LaunchIntent{MemberID: m.ID, WorkspaceID: w.ID, Method: "run.launch", Params: []byte(`{}`)}, 3); !errors.Is(err, ErrTooManyWaiting) {
 		t.Fatalf("a fourth open intent with a cap of three = %v, want ErrTooManyWaiting", err)
 	}
-	if by, err := db.LaunchIntentByKey(ctx, m.ID, "k-1"); err != nil || by.ID != in.ID {
+	by, err := db.LaunchIntentByKey(ctx, m.ID, "k-1")
+	if err != nil || by.ID != in.ID {
 		t.Fatalf("LaunchIntentByKey = %+v, %v", by, err)
 	}
 	list, err := db.LaunchIntents(ctx, "", domain.IntentWaiting)
@@ -139,8 +140,9 @@ func TestIntentsLeftStartingAreSettledAfterARestart(t *testing.T) {
 	for id, want := range map[domain.RunID]domain.LaunchIntentState{
 		noSession.ID: domain.IntentWaiting, withSession.ID: domain.IntentStarted, waiting.ID: domain.IntentWaiting,
 	} {
-		if got, err := db.GetLaunchIntent(ctx, id); err != nil || got.State != want {
-			t.Fatalf("intent %s after the restart = %+v, %v; want %s", id, got, err, want)
+		got, getErr := db.GetLaunchIntent(ctx, id)
+		if getErr != nil || got.State != want {
+			t.Fatalf("intent %s after the restart = %+v, %v; want %s", id, got, getErr, want)
 		}
 	}
 	if got, _ := db.GetLaunchIntent(ctx, noSession.ID); got.Refusal != "no room" || got.Attempts != 1 {
