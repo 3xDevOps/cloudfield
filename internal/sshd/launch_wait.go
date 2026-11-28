@@ -57,8 +57,9 @@ const (
 // launch: the intent it starts, and the launch's own error when it fails.
 type launchAttempt struct {
 	intent *domain.LaunchIntent
-	// reclaim lets this try free disk when disk is what it lacks.
-	reclaim bool
+	// reclaim, when set, lets this try free disk when disk is what it
+	// lacks, and spends the allowance when it does.
+	reclaim func()
 	// created closes once the session's row exists, and refused is the
 	// launch's own error when it fails.
 	created chan struct{}
@@ -381,9 +382,13 @@ func (s *Server) startWaitingLaunch(ctx context.Context, in *domain.LaunchIntent
 			return true
 		}
 		c, err := connectors.GetConnector(ctx, in.Connector)
-		if err != nil && !errors.Is(err, store.ErrNotFound) && in.Failures+1 < maxLaunchFailures {
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			// The read failed; whether the connector stands is not known.
-			s.release(ctx, in, "the connector that asked for it could not be read: "+err.Error(), true)
+			if in.Failures+1 < maxLaunchFailures {
+				s.release(ctx, in, "the connector that asked for it could not be read: "+err.Error(), true)
+			} else {
+				s.endRefused(ctx, in, fmt.Sprintf("the connector that asked for it (%s) could not be read: %v", in.Via, err), now)
+			}
 			return true
 		}
 		if err == nil && (c.Member != in.MemberID || !c.RefreshExpiresAt.After(now)) {
@@ -406,7 +411,9 @@ func (s *Server) startWaitingLaunch(ctx context.Context, in *domain.LaunchIntent
 		}
 	}
 	attempt := &launchAttempt{intent: in, created: make(chan struct{})}
-	attempt.reclaim = now.Sub(time.Unix(0, s.launchReclaimed.Load())) >= launchReclaimEvery
+	if now.Sub(time.Unix(0, s.launchReclaimed.Load())) >= launchReclaimEvery {
+		attempt.reclaim = func() { s.launchReclaimed.Store(now.UnixNano()) }
+	}
 	if !s.beginHandler() {
 		return false
 	}
@@ -417,7 +424,6 @@ func (s *Server) startWaitingLaunch(ctx context.Context, in *domain.LaunchIntent
 		done <- perr
 	}()
 	started := func() bool {
-		s.spendReclaim(attempt, now)
 		slog.Info("launch: a waiting launch started", "launch", in.ID, "member", in.MemberID, "waited", now.Sub(in.CreatedAt), "attempts", in.Attempts+1, "passed", in.Passed)
 		s.countLaunchWait(ctx, domain.CapacityEvent{Kind: domain.CapacityWaitEnd, Op: waitingLaunchOp, Cause: "started", Run: in.ID, Waited: now.Sub(in.CreatedAt)})
 		return true
@@ -451,7 +457,6 @@ func (s *Server) startWaitingLaunch(ctx context.Context, in *domain.LaunchIntent
 		// A server stopping: the next one returns it to waiting.
 		return false
 	case scheduler.IsCapacityRefusal(attempt.refused):
-		s.spendReclaim(attempt, now)
 		s.release(ctx, in, attempt.refused.Error(), false)
 		return false
 	case (perr.Code == protocol.CodeInternal || perr.Code == protocol.CodeUnavailable) && in.Failures+1 < maxLaunchFailures:
@@ -462,14 +467,6 @@ func (s *Server) startWaitingLaunch(ctx context.Context, in *domain.LaunchIntent
 	}
 	s.endRefused(ctx, in, perr.Message, now)
 	return true
-}
-
-// spendReclaim uses up the allowance to free disk for a try that had it
-// and reached admission: it started, or was refused for room.
-func (s *Server) spendReclaim(attempt *launchAttempt, now time.Time) {
-	if attempt.reclaim {
-		s.launchReclaimed.Store(now.UnixNano())
-	}
 }
 
 // release returns a claimed launch to waiting with the reason its try did
