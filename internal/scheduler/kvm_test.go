@@ -34,7 +34,7 @@ func kvmEnhancedSession(t *testing.T) (*testEnv, *domain.Run, runtime.ID) {
 		t.Fatalf("NewDocker: %v", err)
 	}
 	t.Cleanup(func() { _ = docker.Close() })
-	images, err := vmimage.Open(filepath.Join(dir, "vm", "images"), kernel, docker)
+	images, err := vmimage.Open(filepath.Join(dir, "vm", "images"), kernel, docker, -1)
 	if err != nil {
 		t.Fatal(err)
 	}
