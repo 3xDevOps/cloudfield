@@ -377,6 +377,11 @@ type fakeRuns struct {
 	// environmentReads lists the workspaces LoginPayer read.
 	environmentReads []domain.WorkspaceID
 	launchOptions    []domain.LaunchOptions
+	// stalled, when set, holds a launch that admission let in before its
+	// run row is written, as a server killed there does, until stallEnd
+	// closes.
+	stalled  chan<- struct{}
+	stallEnd <-chan struct{}
 	// noRoom, when set, refuses every launch as admission does.
 	noRoom       error
 	paused       map[domain.RunID]bool
@@ -545,13 +550,18 @@ func (f *fakeRuns) AgentSwitchable(_ context.Context, _, _ domain.MemberID, harn
 func (f *fakeRuns) LaunchWithOptions(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode, opts domain.LaunchOptions) (*domain.Run, error) {
 	f.mu.Lock()
 	f.launchOptions = append(f.launchOptions, opts)
-	started, release, admitInto, failAdmitted, noRoom := f.launchStarted, f.launchRelease, f.admitInto, f.failAdmitted, f.noRoom
+	started, release, admitInto, failAdmitted, noRoom, stalled, stallEnd := f.launchStarted, f.launchRelease, f.admitInto, f.failAdmitted, f.noRoom, f.stalled, f.stallEnd
 	f.mu.Unlock()
 	if err := f.record(fmt.Sprintf("launch:%s:%s:%s:%s:%s", workspace, member, task, harness, mode)); err != nil {
 		return nil, err
 	}
 	if noRoom != nil {
 		return nil, noRoom
+	}
+	if stalled != nil {
+		stalled <- struct{}{}
+		<-stallEnd
+		return nil, errors.New("the server was killed")
 	}
 	run := &domain.Run{
 		ID: "run_new", WorkspaceID: workspace, MemberID: member, AccountMemberID: account,
