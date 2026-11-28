@@ -2,10 +2,14 @@ package scheduler
 
 import (
 	"errors"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/3xDevOps/cloudfield/internal/acphost/acpmock"
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 )
 
@@ -72,5 +76,67 @@ func TestAMoveOfASessionThatNeverOpenedGivesTheTask(t *testing.T) {
 				t.Fatalf("run = %+v, %v; want it live", row, err)
 			}
 		})
+	}
+}
+
+// A server that stops while the agent a move started is opening leaves the
+// move's continuation owed, and the next server process sends it once.
+func TestAShutdownDuringAMovesOpenLeavesItsContinuationOwed(t *testing.T) {
+	t.Parallel()
+	e, rt, notes, usage, second := newLoginMoveEnv(t, enhancedClaude)
+	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+	stopped := make(chan struct{})
+	var once sync.Once
+	rt.mu.Lock()
+	rt.onAttach = func() error {
+		attachErr := error(nil)
+		once.Do(func() {
+			go func() {
+				_ = e.sched.Close()
+				close(stopped)
+			}()
+			<-e.sched.superCtx.Done()
+			attachErr = e.sched.superCtx.Err()
+			rt.mu.Lock()
+			rt.startErr = attachErr
+			rt.mu.Unlock()
+		})
+		return attachErr
+	}
+	rt.mu.Unlock()
+	_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+	<-stopped
+	if sc, scErr := e.sched.readSidecar(run.ID); scErr != nil || sc.AccountSwap == nil || sc.AccountSwap.Continuation != continuedOnSecond || sc.AccountSwap.Sending {
+		t.Fatalf("marker after the stop: %+v, %v; want the continuation owed", sc.AccountSwap, scErr)
+	}
+	rt.mu.Lock()
+	rt.startErr = nil
+	rt.mu.Unlock()
+
+	cfg := e.cfg
+	cfg.PTY = newFakePTY()
+	cfg.PTY.(*fakePTY).logDir = e.pty.logDir
+	s2, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s2.Close() })
+	s2.UseUsageFallback(UsageFallback{Usage: usage, AuthorizationMu: &ctxlock.Mutex{}, Note: notes.post})
+	startScheduler(t, s2)
+	continuations := func() int {
+		return len(slices.DeleteFunc(allPrompts(t, rt), func(text string) bool { return text != continuedOnSecond }))
+	}
+	waitFor(t, "the owed continuation", func() bool { return continuations() == 1 })
+	waitFor(t, "the marker cleared", func() bool {
+		sc, scErr := s2.readSidecar(run.ID)
+		return scErr == nil && sc.AccountSwap == nil
+	})
+	time.Sleep(200 * time.Millisecond)
+	if row, err := e.db.GetRun(t.Context(), run.ID); err != nil || row.Status.Terminal() || row.Account() != second || continuations() != 1 {
+		t.Fatalf("run = %+v, %v, %d continuations; want it live on the second login, continued once", row, err, continuations())
 	}
 }

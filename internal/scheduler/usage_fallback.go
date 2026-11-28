@@ -1026,6 +1026,9 @@ func (s *Scheduler) replaceContainer(ctx context.Context, entry *supervised, f *
 	}
 	if run.ACP {
 		if err := s.acp.openError(run.ID); err != nil {
+			if s.superCtx.Err() != nil {
+				return usageShutdown, ""
+			}
 			s.clearAccountSwap(entry, swap)
 			s.leaveIfRevoked(ctx, entry, &next)
 			return usageNoFallback, fmt.Sprintf("%sthe session is on %s's account and its conversation could not be restored: %v", m.stopped(fromName), toName, err)
