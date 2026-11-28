@@ -5,6 +5,7 @@ import { watchPush } from '@/lib/push'
 import { backoff, connectEvents, onWake } from '@/lib/stream'
 import { allowSnapshot, clearSnapshot, paintSnapshot, refuseSnapshot, saveSnapshot } from '@/lib/snapshot-cache'
 import { redirectRoute } from '@/lib/url-state'
+import { launchWaitFeature } from '@/lib/types'
 import type {
   CoordMessageAckedPayload,
   CoordMessagePayload,
@@ -301,7 +302,14 @@ export async function hydrate(
     ) {
       redirectRoute(store, { name: 'onboarding', params: {} })
     }
-    else if (unknownLink) redirectRoute(store, { name: 'board', params: {} })
+    else if (unknownLink) {
+      // A link to a launch waiting for room names a session that does not
+      // exist yet: its page says so, and the board would lose it.
+      const waits = info.features?.includes(launchWaitFeature) === true &&
+        (await client.launchWaitingList(linked).then((list) => list.length > 0, () => false))
+      if (signal?.aborted) return false
+      if (!waits && store.getState().route === s.route) redirectRoute(store, { name: 'board', params: {} })
+    }
     s.setUnreachable(null)
     allowSnapshot(store)
     saveSnapshot(store)
