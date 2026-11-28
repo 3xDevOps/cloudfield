@@ -255,6 +255,9 @@ type Scheduler struct {
 	// sparesLeft the spares whose removal failed, both guarded by mu.
 	members    map[domain.MemberID]*memberSpare
 	sparesLeft []domain.RunID
+	// sparesKept counts the spares members holds, for the memory brake,
+	// which reads it before it may take a lock.
+	sparesKept atomic.Int32
 
 	// vmDiskMu serializes the disk guard's checks. vmDiskBase is each VM's
 	// disk use when the filesystem first fell below the reserve, held while

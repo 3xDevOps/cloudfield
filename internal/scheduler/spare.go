@@ -95,6 +95,7 @@ func (s *Scheduler) launchBegan(member domain.MemberID) func(run *domain.Run, ta
 	var starting *spare
 	if m.spare != nil && !m.spare.ready {
 		starting, m.spare = m.spare, nil
+		s.sparesKept.Add(-1)
 	}
 	s.mu.Unlock()
 	if starting != nil {
@@ -132,6 +133,7 @@ func (s *Scheduler) goSpare(member domain.MemberID) {
 	ctx, cancel := context.WithCancel(s.superCtx)
 	sp := &spare{member: member, target: *m.target, cancel: cancel, done: make(chan struct{})}
 	m.spare = sp
+	s.sparesKept.Add(1)
 	s.wg.Add(1)
 	s.mu.Unlock()
 	go func() {
@@ -160,6 +162,7 @@ func (s *Scheduler) makeSpare(ctx context.Context, sp *spare) {
 		sp.ready = true
 	} else if m != nil && m.spare == sp {
 		m.spare = nil
+		s.sparesKept.Add(-1)
 	}
 	s.mu.Unlock()
 	if kept {
@@ -200,6 +203,7 @@ func (s *Scheduler) takeSpare(member domain.MemberID) *spare {
 	}
 	sp := m.spare
 	m.spare = nil
+	s.sparesKept.Add(-1)
 	return sp
 }
 
@@ -275,6 +279,7 @@ func (s *Scheduler) dropSpares(ctx context.Context, wait bool, match func(*spare
 		if m.spare != nil && (match == nil || match(m.spare)) {
 			dropped = append(dropped, m.spare)
 			m.spare = nil
+			s.sparesKept.Add(-1)
 		}
 	}
 	s.mu.Unlock()
@@ -341,6 +346,7 @@ func (s *Scheduler) sweepSpares() {
 		case sp.ready && (old || s.runs[sp.run] == nil || s.runs[sp.run].status.Terminal()):
 			gone = append(gone, sp)
 			m.spare = nil
+			s.sparesKept.Add(-1)
 		}
 	}
 	s.mu.Unlock()

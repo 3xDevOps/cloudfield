@@ -71,7 +71,8 @@ func (s *Scheduler) brakeVMMemory(ctx context.Context, vms runtime.FreezeRuntime
 	}
 	// Spares go first: their removal starts here, nothing is frozen on this
 	// check, and the next one freezes as ever if memory is still short.
-	if available < floor && s.dropSpares(ctx, false, nil) {
+	// Only a spare to remove is worth the lock that takes.
+	if available < floor && s.sparesKept.Load() > 0 && s.dropSpares(ctx, false, nil) {
 		return
 	}
 	var froze []runtime.ID
