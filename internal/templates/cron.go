@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -34,6 +35,10 @@ func (s *Service) Schedules(ctx context.Context, workspace domain.WorkspaceID) (
 // somebody else. Unless replaceAny, it replaces only a schedule member
 // created and returns store.ErrScheduleOwner for another member's.
 func (s *Service) SaveSchedule(ctx context.Context, workspace domain.WorkspaceID, template, spec string, member domain.MemberID, replaceAny bool) (*ScheduleInfo, error) {
+	// robfig/cron v3.0.1 panics on a zone prefix with no space after it.
+	if (strings.HasPrefix(spec, "TZ=") || strings.HasPrefix(spec, "CRON_TZ=")) && !strings.Contains(spec, " ") {
+		return nil, fmt.Errorf("%w: cron %q: a time-zone prefix needs a rule after it, such as \"CRON_TZ=Europe/Berlin 0 9 * * *\"", ErrInvalidDefinition, spec)
+	}
 	rule, err := cron.ParseStandard(spec)
 	if err != nil {
 		return nil, fmt.Errorf("%w: cron %q: %s", ErrInvalidDefinition, spec, err)
