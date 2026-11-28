@@ -832,7 +832,8 @@ and their helper disk, until they stop. A VM saved to disk wakes on the Cloud
 Hypervisor in place at its wake, and an older one may not load what a newer
 one saved: v54.1 exits on a VM saved by v55.0 with
 `Error deserialising: trailing characters`. After a rollback across such a
-change, each VM saved since the update fails its restore, and its session
+change, each VM that the newer Cloud Hypervisor ran since the update fails
+its next restore from disk, and its session
 either starts again from its disk without its processes or stays asleep
 until the newer release is back
 ([failure-handling.md](failure-handling.md#sessions-in-vms)). Before it starts any VM, a server started by its systemd unit also
