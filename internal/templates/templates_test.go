@@ -208,6 +208,26 @@ func TestImpossibleCronRuleIsRefusedAndNeverFires(t *testing.T) {
 	}
 }
 
+func TestBareTimeZonePrefixIsRefused(t *testing.T) {
+	ctx := context.Background()
+	e := newGateEnv(t, &fakeClock{t: time.Date(2026, 8, 13, 3, 0, 0, 0, time.UTC)})
+	for _, spec := range []string{"TZ=UTC", "CRON_TZ=Europe/Berlin", "TZ=UTC\t0\t9\t*\t*\t*"} {
+		if _, err := e.svc.SaveSchedule(ctx, e.ws, e.tpl, spec, e.owner, false); !errors.Is(err, ErrInvalidDefinition) {
+			t.Fatalf("SaveSchedule(%q) error = %v, want ErrInvalidDefinition", spec, err)
+		}
+	}
+	stored, err := e.gate.Store.ListSchedules(ctx, e.ws)
+	if err != nil {
+		t.Fatalf("list schedules: %v", err)
+	}
+	if len(stored) != 0 {
+		t.Fatalf("stored schedules = %d, want none", len(stored))
+	}
+	if _, err := e.svc.SaveSchedule(ctx, e.ws, e.tpl, "CRON_TZ=Europe/Berlin 0 9 * * *", e.owner, false); err != nil {
+		t.Fatalf("SaveSchedule of a zoned rule: %v", err)
+	}
+}
+
 // A cron fire supplies no parameters, so a template with a placeholder
 // that has no default could only ever fail unattended. Scheduling one is
 // refused at save time, naming the parameter; a template whose

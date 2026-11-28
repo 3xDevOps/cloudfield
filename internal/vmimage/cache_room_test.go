@@ -41,13 +41,18 @@ func TestCachePromotionKeepsTheReserveFree(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	empty, err := s.NewCacheDisk(t.Context(), "pool2", filepath.Join(dir, "empty.img"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	// A reserve no filesystem meets stands in for a full one.
 	s.minFree = math.MaxInt64
-	for _, cache := range []Disk{session, first} {
+	for name, cache := range map[string]Disk{"pool1": session, "pool2": empty} {
 		if snapshot, err = s.SnapshotCache(cache); err != nil {
 			t.Fatal(err)
 		}
-		if err = s.PromoteCache("pool1", snapshot); err == nil || !strings.Contains(err.Error(), "skipped") {
+		if err = s.PromoteCache(name, snapshot); err == nil || !strings.Contains(err.Error(), "skipped") {
 			t.Errorf("promoting the %s cache without room = %v, want it skipped", cache.Format, err)
 		}
 	}
@@ -83,8 +88,12 @@ func TestCachePromotionKeepsTheReserveFree(t *testing.T) {
 		t.Error("a promotion under way holds no room against the next one")
 	}
 	release()
+	last, err := s.NewCacheDisk(t.Context(), "pool1", filepath.Join(dir, "last.img"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	s.promoting = math.MaxInt64
-	if snapshot, err = s.SnapshotCache(first); err != nil {
+	if snapshot, err = s.SnapshotCache(last); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.PromoteCache("pool1", snapshot); err == nil || !strings.Contains(err.Error(), "skipped") {
@@ -92,17 +101,17 @@ func TestCachePromotionKeepsTheReserveFree(t *testing.T) {
 	}
 	s.promoting = 0
 
-	// The session is deleted while stopped: only its snapshot still links
-	// the cache it read over, which is no longer the pool's newest.
+	// The earlier session is deleted: no disk links the cache it read
+	// over, which is no longer the pool's newest.
 	s.minFree = math.MaxInt64
-	if snapshot, err = s.SnapshotCache(session); err != nil {
+	if snapshot, err = s.SnapshotCache(last); err != nil {
 		t.Fatal(err)
 	}
 	if err = errors.Join(os.Remove(session.Path), os.Remove(session.Backing)); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.PromoteCache("pool1", snapshot); err == nil || !strings.Contains(err.Error(), "skipped") {
-		t.Errorf("promoting a deleted session's cache without room = %v, want it skipped", err)
+		t.Errorf("promoting a cache without room = %v, want it skipped", err)
 	}
 	if _, err = os.Stat(newest.Path); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("a skipped promotion left the cache no disk reads on disk: stat = %v", err)

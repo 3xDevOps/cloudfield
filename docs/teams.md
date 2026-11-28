@@ -495,6 +495,7 @@ more than one workspace exists`. `cloudfield sessions` lists sessions from every
 | `cloudfield attach [--read-only] <session>` | Attach to a session's terminal. Several people can attach at once |
 | `cloudfield message [--steer] [--attach <path>]... <session> "..."` | Message a session's agent. It shows as a banner in your color. `--attach` sends a file with it, `--steer` adds it to an Enhanced agent's running turn |
 | `cloudfield pause`, `resume`, `kill <session>` | Suspend, thaw or stop a session. The checkout and transcript survive a kill |
+| `cloudfield interrupt <session>` | Stop the agent's current turn and keep the session open: an Enhanced session, or a Standard Codex one. Any other Standard agent stops on its own key after `cloudfield attach` |
 | `cloudfield sessions --needs-you` | Sessions waiting on a member, then on stderr what each needs from you with the command that answers it, or that it waits on another member. `cloudfield sessions <session-id>` prints that for one session on stdout, with its agent, mode, parent, unacknowledged mail, controller and wait conditions |
 | `cloudfield timeline` | The workspace history. `cloudfield timeline <session-id>` shows one session's. Filter with `--member`, `--type`, `--limit`. `--jsonl` exports |
 | `cloudfield messages` | The messages agents sent each other, with bodies. `cloudfield messages <session-id>` shows one session's, `--thread <id>` one question and its replies ([coordination.md](coordination.md#seeing-agent-messages)) |

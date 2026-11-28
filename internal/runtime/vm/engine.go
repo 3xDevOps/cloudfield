@@ -724,6 +724,14 @@ func (e *engine) boot(ctx context.Context, rec *record) error {
 	if rec.TTY {
 		tty = &guest.Size{Cols: 80, Rows: 24}
 	}
+	// Counted after the directories above are made, so they are not what
+	// the session added.
+	if rec.Cache.Path != "" && rec.CacheSeed == (guest.CacheUse{}) {
+		rec.CacheSeed = e.cacheUse(upCtx, rec.Key)
+		if err = e.store(rec); err != nil {
+			return err
+		}
+	}
 	// The setup script runs once per VM, as once per container: the root
 	// disk keeps what it did.
 	argv, script := rec.Command, rec.SetupScript

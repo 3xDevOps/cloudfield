@@ -262,7 +262,10 @@ Steering, answering, interrupting and changing options need control of the sessi
 The owner's desktop tab takes it when it first shows Chat and nobody holds
 it. Without control you still get **Send**, and the message waits for the
 controller as in a Standard session ([Messages and
-notes](terminal.md#messages-and-notes)).
+notes](terminal.md#messages-and-notes)). `cloudfield interrupt <session-id>`
+stops the turn from a shell: it works while nobody holds control or you hold
+it in a tab, and while another member holds it the command fails with their
+name.
 
 **Attach files** adds files to the composer, at most eight: images up to 8 MiB,
 other files up to 64 MiB. Images go to the agent as image content and other files

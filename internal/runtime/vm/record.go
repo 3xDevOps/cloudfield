@@ -123,6 +123,12 @@ type record struct {
 	// the guest synced.
 	CacheRan    bool `json:"cache_ran,omitempty"`
 	CacheSynced bool `json:"cache_synced,omitempty"`
+	// CacheSeed is what the guest counted free on the cache disk before the
+	// first boot on it, and CacheUse what it counted when CacheSynced was
+	// last set. Equal counts mean the session added nothing to the disk.
+	// Either is zero when the guest gave no count.
+	CacheSeed guest.CacheUse `json:"cache_seed,omitzero"`
+	CacheUse  guest.CacheUse `json:"cache_use,omitzero"`
 	// CacheUnpublished keeps the cache disk out of its pool when the VM
 	// stops for good: it is a spare session's, which no member has used.
 	CacheUnpublished bool `json:"cache_unpublished,omitempty"`

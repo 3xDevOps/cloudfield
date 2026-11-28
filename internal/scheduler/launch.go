@@ -359,8 +359,11 @@ func (s *Scheduler) launch(ctx context.Context, workspace domain.WorkspaceID, me
 		}
 	}
 	reserve := s.reserveCapacity
-	if sp != nil {
+	switch {
+	case sp != nil:
 		reserve = s.reserveSpare
+	case opts.Retry:
+		reserve = s.reserveRetry
 	}
 	release, err := reserve(ctx)
 	if err != nil {
