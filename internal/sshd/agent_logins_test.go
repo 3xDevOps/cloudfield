@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/fallback"
 	"github.com/3xDevOps/cloudfield/internal/memberhome"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 	"github.com/3xDevOps/cloudfield/internal/quota"
@@ -160,7 +161,7 @@ func TestAgentLoginMethodsActOnTheCallersOwnLogins(t *testing.T) {
 	if _, perr := e.call(t, e.member.ID, protocol.MethodAgentLoginOrder, protocol.AgentLoginOrderParams{Agent: "claude", LoginIDs: []string{"lgn-spare00000", "default", "lgn-work000000"}}); perr != nil {
 		t.Fatal(perr)
 	}
-	if _, perr := e.call(t, e.member.ID, protocol.MethodAgentLoginAutomatic, protocol.AgentLoginAutomaticParams{Agent: "claude", LoginID: "lgn-work000000"}); perr != nil {
+	if _, perr := e.call(t, e.member.ID, protocol.MethodAgentLoginAutomatic, protocol.AgentLoginAutomaticParams{Agent: "claude", LoginID: "lgn-work000000", Automatic: new(false)}); perr != nil {
 		t.Fatal(perr)
 	}
 	if out, _ := e.list(t, e.member.ID); ids(out.Logins) != "spare,default,work" || out.Logins[2].Automatic {
@@ -305,7 +306,7 @@ func TestRemovingALoginInUseNamesTheOwnersSessionsAndCountsTheRest(t *testing.T)
 	_, perr := e.call(t, e.member.ID, protocol.MethodAgentLoginRemove, protocol.AgentLoginParams{Agent: "claude", LoginID: "lgn-work000000"})
 	own := []string{string(e.run.ID), "run-queuedchild"}
 	slices.Sort(own)
-	want := `login "work" is in use by your sessions ` + strings.Join(own, ", ") + ` (end them) and 1 of your teammates' sessions`
+	want := `login "work" is in use by your sessions ` + strings.Join(own, ", ") + ` (end them, or free the sandbox of one that has ended) and 1 of your teammates' sessions`
 	if perr == nil || perr.Code != protocol.CodeConflict || !strings.Contains(perr.Message, want) || !strings.Contains(perr.Message, "cloudfield account revoke <member-id>") || strings.Contains(perr.Message, "use for shares") {
 		t.Fatalf("removal of a login in use: %v; want %q and the revoke command", perr, want)
 	}
@@ -563,5 +564,57 @@ func TestANamedLoginAVariableWouldPayForIsRefused(t *testing.T) {
 	defer e.runs.mu.Unlock()
 	if len(e.runs.launchOptions) != 0 {
 		t.Fatalf("launches = %+v; want none", e.runs.launchOptions)
+	}
+}
+
+// A switch request whose boolean is missing, misspelled or null is
+// refused, never read as off: off for shares would move teammates'
+// sessions away.
+func TestALoginSwitchNeedsItsValue(t *testing.T) {
+	e := newLoginEnv(t)
+	e.seed(t, e.member.ID, "lgn-work000000", "work", "ada@work.example.test")
+	for _, tc := range []struct{ method, params string }{
+		{protocol.MethodAgentLoginShare, `{"agent":"claude","login_id":"lgn-work000000"}`},
+		{protocol.MethodAgentLoginShare, `{"agent":"claude","login_id":"lgn-work000000","shared":null}`},
+		{protocol.MethodAgentLoginShare, `{"agent":"claude","login_id":"lgn-work000000","share":true}`},
+		{protocol.MethodAgentLoginAutomatic, `{"agent":"claude","login_id":"lgn-work000000"}`},
+		{protocol.MethodAgentLoginAutomatic, `{"agent":"claude","login_id":"lgn-work000000","automatic":null}`},
+	} {
+		if _, perr := e.srv.dispatch(context.Background(), e.member.ID, tc.method, json.RawMessage(tc.params)); perr == nil || perr.Code != protocol.CodeInvalidParams {
+			t.Errorf("%s %s: %v; want invalid params", tc.method, tc.params, perr)
+		}
+	}
+	if out, _ := e.list(t, e.member.ID); !out.Logins[1].Shared || !out.Logins[1].Automatic {
+		t.Fatalf("after refused requests: %+v; want work still automatic and on for shares", out.Logins[1])
+	}
+	if _, perr := e.call(t, e.member.ID, protocol.MethodAgentLoginShare, protocol.AgentLoginShareParams{Agent: "claude", LoginID: "lgn-work000000", Shared: new(false)}); perr != nil {
+		t.Fatal(perr)
+	}
+	if out, _ := e.list(t, e.member.ID); out.Logins[1].Shared {
+		t.Fatalf("after turning it off: %+v", out.Logins[1])
+	}
+}
+
+type unreadableUsage struct{}
+
+func (unreadableUsage) Read(context.Context, domain.MemberID, bool) ([]quota.Provider, error) {
+	return nil, errors.New("usage cannot be read")
+}
+
+// Removing a login forgets that its owner's session ran out on one of
+// their logins whose usage cannot be read: the next launch on the default
+// login measures it as any launch with no added login does.
+func TestRemovingALoginForgetsItsRunOuts(t *testing.T) {
+	e := newLoginEnv(t)
+	e.seed(t, e.member.ID, "lgn-work000000", "work", "ada@work.example.test")
+	def := domain.AccountOf(e.member.ID)
+	fallback.NoteRunOut(def, "claude", time.Now())
+	t.Cleanup(func() { fallback.ForgetRunOuts(e.member.ID, "claude") })
+	if _, perr := e.call(t, e.member.ID, protocol.MethodAgentLoginRemove, protocol.AgentLoginParams{Agent: "claude", LoginID: "lgn-work000000"}); perr != nil {
+		t.Fatal(perr)
+	}
+	measured, err := fallback.Measure(context.Background(), e.db, unreadableUsage{}, e.member.ID, def, "claude", domain.AccountFallback{})
+	if err != nil || measured != nil {
+		t.Fatalf("measured %v, %v; want the default login unread and not passed over", measured, err)
 	}
 }

@@ -87,7 +87,10 @@ The old names keep working, with no end date.
 With `session-runtime vm`, each session runs in its own Cloud Hypervisor
 virtual machine ([environments.md](environments.md#sessions-in-virtual-machines)).
 The host must be x86-64 and expose `/dev/kvm`: bare metal, or a cloud VM with
-nested virtualization.
+nested virtualization. It needs Linux 6.8 or newer: Cloud Hypervisor v55.0
+exits on a kernel whose KVM lacks `KVM_CAP_USER_MEMORY2`, which 6.8 added.
+`uname -r` prints the version. Ubuntu 24.04 ships 6.8; the 6.1 Debian 12
+ships is too old.
 
 Before installing, put the data directory on a filesystem that can share
 blocks between files: XFS made with `reflink=1`, the `mkfs.xfs` default, or
@@ -118,12 +121,14 @@ sudo cloudfield-server install --session-runtime vm   # a new server
 sudo cloudfield-server vm install                     # a server already installed
 ```
 
-Both first open `/dev/kvm` and stop with the error when they cannot, such as
-`session VMs need KVM: open /dev/kvm: no such file or directory`; `install`
-then writes nothing. They install `qemu-img`, `mkfs.ext4`,
+Both first open `/dev/kvm` and ask it for `KVM_CAP_USER_MEMORY2`, and stop
+with the error when either fails, such as
+`session VMs need KVM: open /dev/kvm: no such file or directory` or
+`session VMs need Linux 6.8 or newer: /dev/kvm has no KVM_CAP_USER_MEMORY2, which Cloud Hypervisor v55.0 requires`;
+`install` then writes nothing. They install `qemu-img`, `mkfs.ext4`,
 `/usr/libexec/virtiofsd`, `iptables`, `nft` and `ip` with `apt-get` when
-missing (Debian 12 or Ubuntu 24.04 and newer ship `virtiofsd` at that path), Cloud Hypervisor
-v54.1 at `/usr/local/bin/cloud-hypervisor` after checking its SHA-256, the
+missing (Ubuntu 24.04 and newer ship `virtiofsd` at that path), Cloud Hypervisor
+v55.0 at `/usr/local/bin/cloud-hypervisor` after checking its SHA-256, the
 oh-my-pi release whose auth broker holds session VMs' omp logins at
 `/usr/local/libexec/aether/omp` after checking its SHA-256
 ([harnesses.md](harnesses.md#oh-my-pi-in-session-vms)), and the
@@ -821,14 +826,23 @@ aether         /usr/local/bin/aether  v0.8.7-beta.13
 
 With `session-runtime vm`, `sudo cloudfield-server update` has the new binary run
 `cloudfield-server vm install` before the restart, and prints its steps, so new VMs
-boot the release's Cloud Hypervisor and guest kernel. Running VMs keep theirs,
-and their helper disk, until they stop; Ctrl-C during that step undoes the
-update. Before it starts any VM, a server started by its systemd unit also puts
+boot the release's Cloud Hypervisor and guest kernel; Ctrl-C during that step
+undoes the update. Running VMs keep theirs,
+and their helper disk, until they stop. A VM saved to disk wakes on the Cloud
+Hypervisor in place at its wake, and an older one may not load what a newer
+one saved: v54.1 exits on a VM saved by v55.0 with
+`Error deserialising: trailing characters`. After a rollback across such a
+change, each VM that the newer Cloud Hypervisor ran since the update fails
+its next restore from disk, and its session
+either starts again from its disk without its processes or stays asleep
+until the newer release is back
+([failure-handling.md](failure-handling.md#sessions-in-vms)). Before it starts any VM, a server started by its systemd unit also
+runs the `/dev/kvm` check and then puts
 its release's Cloud Hypervisor and kernel in place, downloading the kernel only
 when the one there came from another release. That covers an update from a
 client or the dashboard, and a rollback. If it cannot during an update's first
-start, the update rolls back; on any other start the server logs the error and
-keeps serving. `AETHER_NO_UPDATE_CHECK=1` turns that check off.
+start, the update rolls back with the old Cloud Hypervisor still in place; on
+any other start the server logs the error and keeps serving. `AETHER_NO_UPDATE_CHECK=1` turns that check off.
 
 `cloudfield server update --when idle` waits until no session is working, no terminal
 is attached and no SSH connection into a session is open; `--cancel` clears that

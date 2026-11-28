@@ -27,7 +27,7 @@ import { commandSuggestions, currentChoice, OptionPills, SuggestionList, trigger
 import { beginDraftRequest, composerBlock, composerDraft, draftSendKey, enhancedBlock, pillFor, pillHint, saveComposerDraft, sentDraft, startingHint, useComposerDraft, type ComposerDraft, type Pill } from '@/routes/run/composer-state'
 import { TemplateInsert } from '@/routes/run/composer-templates'
 import type { RunRoom } from '@/routes/run/room'
-import { TypingIndicator, useTypingSignal } from '@/routes/run/typing'
+import { TypingIndicator, useTypingSignal, useWakeOnTyping } from '@/routes/run/typing'
 import { sessionColumn } from '@/routes/run/session-rows'
 import { sameIdentity, useStore } from '@/store'
 import { useCapability, useSelf } from '@/store/hooks'
@@ -255,10 +255,10 @@ function ComposerBox({ textarea, autoFocus, collapsed, value, onChange, onCaret,
   )
 }
 
-function ComposerHint({ id, uploading, description }: { id: string; uploading: boolean; description: string }) {
+function ComposerHint({ id, uploading, shown, description }: { id: string; uploading: boolean; shown?: boolean; description: string }) {
   return uploading
     ? <p id={id} role="status" className="line-clamp-2 px-4 text-ui-sm text-muted">Uploading…</p>
-    : <p id={id} className="sr-only">{description}</p>
+    : <p id={id} className={shown ? 'line-clamp-2 px-4 text-ui-sm text-muted' : 'sr-only'}>{description}</p>
 }
 
 function SendActions({ pill, label, hint, description, disabled, onClick, onCancel, dictation }: {
@@ -317,6 +317,7 @@ function StandardComposer({ run, agent, room, textarea, autoFocus, onFocusChange
   const dictating = useDictationState(textarea).active
   const hintID = useId()
   const maySteer = allowed('steer', self, { owner: run.member_id, protected: run.protected, steerOthers })
+  const wakeOnTyping = useWakeOnTyping(run, maySteer)
   const block = composerBlock(run, maySteer, maySteer && cap.hasMethod('run.relaunch') && canReopenRun(run))
   const images = useComposerImages(run.id, !block && cap.hasMethod('terminal.file'))
   const attachOff = busy || !cap.hasMethod('terminal.file')
@@ -364,7 +365,10 @@ function StandardComposer({ run, agent, room, textarea, autoFocus, onFocusChange
         autoFocus={autoFocus}
         value={body}
         readOnly={Boolean(draft.busy)}
-        onChange={(next) => saveComposerDraft(run.id, { body: next })}
+        onChange={(next) => {
+          saveComposerDraft(run.id, { body: next })
+          wakeOnTyping(next)
+        }}
         onFocusChange={onFocusChange}
         onSend={send}
         onEscape={onEscape}
@@ -442,6 +446,8 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
   const queueHeld = useQueueHeld(focused)
 
   const maySteer = allowed('steer', self, { owner: run.member_id, protected: run.protected, steerOthers })
+  // A docked composer unmounts while a wake resubscribes the agent stream, which would take the field from under the member.
+  const wakeOnTyping = useWakeOnTyping(run, maySteer && !docked)
   const state = session?.state
   const stream = session?.stream
   const connecting = stream === 'live' || stream === 'refused' ? undefined : stream === 'reconnecting' || stream === 'offline' ? 'Reconnecting to the agent…' : 'Connecting to the agent…'
@@ -462,8 +468,8 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
   const turnRunning = state?.turn_in_flight ?? false
   const waiting = shape?.waiting ?? false
   const blocked = Boolean(gate || connecting)
-  // A sleeping or starting session's agent reports its prompt types once it runs.
-  const supportsImages = state?.prompt_images === true || Boolean(run.asleep_since) || starting
+  // Only a live agent has reported its prompt types; the server refuses the rest.
+  const supportsImages = !state || state.prompt_images === true || starting
   const images = useComposerImages(run.id, !blocked && cap.hasMethod('terminal.file'))
   const attachOff = busy || blocked || !cap.hasMethod('terminal.file')
   const drop = dropRoom(images, attachOff)
@@ -667,6 +673,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
         )}
         onChange={(value, at) => {
           setBody(value)
+          wakeOnTyping(value)
           setCaret(at)
           setActive(0)
           setDismissed(false)
@@ -706,7 +713,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
           }
         }}
       />
-      <ComposerHint id={hintID} uploading={images.uploading} description={hintText} />
+      <ComposerHint id={hintID} uploading={images.uploading} shown={Boolean(connecting) && hasContent} description={hintText} />
       <p role="status" className="sr-only">{connecting}</p>
     </ComposerFrame>
   )

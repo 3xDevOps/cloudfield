@@ -3117,6 +3117,17 @@ last signal, so a closed tab or lost connection stops showing. A restored draft
 signals nothing until it changes. Typing is held in memory only and feeds no
 count, chart or timeline.
 
+The first keystroke in the Chat view's composer of a sleeping session also
+calls `run.wake`, once per sleep, so the wake runs while the member writes.
+An Enhanced session's composer docked under Changes, Files and Trace does
+not: it unmounts while a wake resubscribes the agent stream.
+
+The Chat view's message box stays mounted, with its focus and draft, while a
+session falls asleep, wakes or its agent stream reconnects. While the stream
+reconnects, Send is off and a draft with content shows `Reconnecting to the
+agent…` under the box. A message to an Enhanced agent that is not running is
+refused with the server's error, shown above the box; the draft is kept.
+
 ### Session tiles
 
 The session page is the tile area (`components/tiles/`, `TileArea`). A **tile** is a pane showing one view of one session, and a

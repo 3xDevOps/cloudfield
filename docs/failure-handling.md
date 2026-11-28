@@ -934,7 +934,7 @@ login shell stay up.
 
 | Failure | What you see | What you do |
 | --- | --- | --- |
-| The session cannot start, for example because the agent is not signed in | **Disconnected**, `enhanced session failed: <error>`. Messages are refused with `scheduler: the enhanced session is not running: <error>`. | Fix the cause, then press **Retry Enhanced** in the Chat view. A session whose first start failed then starts with the task it was launched with. |
+| The session cannot start, for example because the agent is not signed in | **Disconnected**, `enhanced session failed: <error>`. Messages are refused with `scheduler: the Enhanced agent is not running: <error>`. | Fix the cause, then press **Retry Enhanced** in the Chat view. A session whose first start failed then starts with the task it was launched with. |
 | The agent's process exits | The turn in flight shows **Turn interrupted**; **Disconnected**, `enhanced session ended: the agent's ACP server exited with code <n>`, with `; stderr: <tail>` when it printed any. | **Retry Enhanced**. |
 | The agent drops its conversation but keeps running, as Claude's adapter does when Claude Code dies | **Prompt failed** with `Session not found`, then **Agent conversation lost** while Cloudfield restores the conversation. Lost again within 5 minutes: **Disconnected**, `enhanced session failed: the agent lost its conversation again within 5 minutes: ...`. | Send the failed message again. After a second loss, **Retry Enhanced**. |
 | The agent refuses a turn with `Authentication required` | **Sign-in refused**, or **Agent signed out** when the login file cannot sign the agent in, while Cloudfield restarts the agent in its container, then `enhanced turn failed: ... Authentication required ...; <owner>'s <agent> login is signed out. Sign in, then send the message again: dashboard Agents page, or aether agent login <agent>`, or `...; Cloudfield restarted the agent to reread <owner>'s login: send the message again. Refused again? Sign in: ...` when the login file looks sound. The account owner's dashboard shows **\<agent\> is signed out** or **\<agent\>'s sign-in was refused** until the login works again. | Send the message again when the reason says so. Otherwise the account's owner signs in on the **Agents** page or with `cloudfield agent login <agent>`, then you send it again ([harnesses.md](harnesses.md#when-a-login-is-signed-out)). |
@@ -1046,8 +1046,9 @@ row unfolds what the sleep kept and what it stopped. A session VM saved to
 disk reads **Asleep since &lt;time&gt;** alone, because its processes are
 saved. While the session wakes, the row reads **Waking…**.
 
-The session wakes when you send a message, change its model, mail
-reaches it, you type in its terminal, open a shell tab, use its Browser tab,
+The session wakes when you start typing a message in the Chat view's
+composer or send one, change its model, mail reaches it, you type in its
+terminal, open a shell tab, use its Browser tab,
 start `cloudfield ssh` or a port forward to it, run `cloudfield resume <session-id>`,
 or choose **Wake** in the Chat view. Opening the session or its Browser tab
 without acting does not wake it. A port forward wakes the session, but a server
@@ -1195,9 +1196,9 @@ runner, a VM with 1.3 GiB of saved memory woke in 1.9 to 8.5 seconds with
 the file read from disk, and in about 1 second with it still in the host's
 page cache. Cloud Hypervisor can also load the memory on demand, which ran
 the first command 0.8 to 1.5 seconds after the wake began, and Cloudfield
-does not use it: Cloud Hypervisor v54.1 takes a page that is already there
-as loaded, so a page anything on the host had touched first kept zeros, and
-VMs died as they woke
+does not use it: through v55.0 Cloud Hypervisor takes a page that is already
+there as loaded, so with v54.1 a page anything on the host had touched first
+kept zeros, and VMs died as they woke
 ([vm-guest.md](vm-guest.md#save-and-restore)). On a test host, a
 message to a sleeping Claude Code or Codex session running a dev server and
 a `docker compose` stack was accepted 0.7 to 1.5 seconds after it was sent,

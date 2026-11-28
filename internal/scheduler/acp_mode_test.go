@@ -3,6 +3,7 @@ package scheduler
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
 	"github.com/3xDevOps/cloudfield/internal/harness"
+	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
 
 func withMockClaude(cfg *Config) {
@@ -361,6 +363,137 @@ func TestComposerEffortChoiceIsRecorded(t *testing.T) {
 			}
 		}
 		timer.Stop()
+	}
+}
+
+func TestModelAndEffortSetByValueAreRecorded(t *testing.T) {
+	t.Parallel()
+	e, rt := newACPEnv(t, withMockClaude)
+	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "say pong", "claude", domain.LaunchACP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	sub := e.subscribe(t)
+	if model, effort, err := e.sched.ACPSetModelEffort(t.Context(), run, e.member.ID, "Opus", "medium"); err != nil || model != "opus" || effort != "medium" {
+		t.Fatalf("Opus and medium leave the session on model %q and effort %q (%v), want the agent's own name for the model, opus, and medium", model, effort, err)
+	}
+	if ev := waitTimelineEvent(t, sub, run.ID, events.TimelineNote); ev.ActorID != e.member.ID || ev.Payload.(events.TimelinePayload).Message != "set model opus, effort medium" {
+		t.Fatalf("timeline note = %+v, want the change recorded as the agent reports it, with who made it", ev)
+	}
+	if model, effort, err := e.sched.ACPSetModelEffort(t.Context(), run, e.member.ID, "", "low"); err != nil || model != "opus" || effort != "low" {
+		t.Fatalf("an effort alone leaves the session on model %q and effort %q (%v), want opus and low", model, effort, err)
+	}
+	if row, err := e.db.GetRun(t.Context(), run.ID); err != nil || row.Model != "opus" || row.Effort != "low" {
+		t.Fatalf("the session records model %q and effort %q (%v), want opus and low", row.Model, row.Effort, err)
+	}
+	exec := rt.all()[0]
+	if model, effort := exec.wire.setOption(t, "model"), exec.wire.setOption(t, "effort"); !slices.Equal(model, []any{"Opus"}) || !slices.Equal(effort, []any{"medium", "low"}) {
+		t.Fatalf("the agent's model option was set to %v and its effort option to %v, want [Opus] and [medium low]", model, effort)
+	}
+	exec.wire.mu.Lock()
+	wire := exec.wire.data.String()
+	exec.wire.mu.Unlock()
+	if model, effort := strings.Index(wire, `"configId":"model"`), strings.Index(wire, `"configId":"effort"`); effort < model {
+		t.Fatalf("the effort was not set after the model: %s", wire)
+	}
+}
+
+func TestAModelStaysSetAndRecordedWhenItsEffortFails(t *testing.T) {
+	t.Parallel()
+	e, rt := newACPEnv(t, withMockClaude)
+	rt.fixture.SessionNew = json.RawMessage(`{"sessionId":"model-only","configOptions":[{"id":"model","category":"model","type":"select",` +
+		`"currentValue":"sonnet","options":[{"value":"sonnet","name":"Sonnet"},{"value":"opus","name":"Opus"}]}]}`)
+	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "say pong", "claude", domain.LaunchACP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	sub := e.subscribe(t)
+	want := "scheduler: the session's agent offers no such option: effort; the session is now set to model opus"
+	if _, _, err = e.sched.ACPSetModelEffort(t.Context(), run, e.member.ID, "opus", "high"); !errors.Is(err, ErrNoSuchOption) || err.Error() != want {
+		t.Fatalf("a model with an effort the agent has no option for = %v, want %q", err, want)
+	}
+	if row, err := e.db.GetRun(t.Context(), run.ID); err != nil || row.Model != "opus" {
+		t.Fatalf("the session records model %q (%v), want the opus its agent is now on", row.Model, err)
+	}
+	if ev := waitTimelineEvent(t, sub, run.ID, events.TimelineNote); ev.ActorID != e.member.ID || ev.Payload.(events.TimelinePayload).Message != "set model opus" {
+		t.Fatalf("timeline note = %+v, want the model change recorded with who made it", ev)
+	}
+}
+
+func TestModelOrEffortTheAgentHasNoOptionForIsRefused(t *testing.T) {
+	t.Parallel()
+	e, rt := newACPEnv(t, withMockClaude)
+	rt.fixture.SessionNew = json.RawMessage(`{"sessionId":"legacy"}`)
+	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "say pong", "claude", domain.LaunchACP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	sub := e.subscribe(t)
+	for _, set := range []struct{ model, effort, want string }{
+		{"opus", "high", "scheduler: the session's agent offers no such option: model"},
+		{"", "high", "scheduler: the session's agent offers no such option: effort"},
+	} {
+		if _, _, err = e.sched.ACPSetModelEffort(t.Context(), run, e.member.ID, set.model, set.effort); !errors.Is(err, ErrNoSuchOption) || err.Error() != set.want {
+			t.Fatalf("model %q and effort %q = %v, want %q", set.model, set.effort, err, set.want)
+		}
+	}
+	if methods := rt.all()[0].agent.Methods(); slices.Contains(methods, acp.AgentMethodSessionSetConfigOption) || slices.Contains(methods, "session/set_model") {
+		t.Fatalf("the agent was asked to change an option it does not offer: %v", methods)
+	}
+	marker, err := e.bus.Publish(t.Context(), events.Event{
+		WorkspaceID: e.ws.ID, RunID: run.ID,
+		Payload: events.TimelinePayload{Kind: events.TimelineNote, Message: "end of changes"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev := waitTimelineEvent(t, sub, run.ID, events.TimelineNote); ev.ID != marker.ID {
+		t.Fatalf("timeline note = %+v, want none for a change that set nothing", ev)
+	}
+}
+
+func TestAnOptionOfAPausedOrFrozenSessionIsRefusedUnasked(t *testing.T) {
+	t.Parallel()
+	fr := &frozenVMs{}
+	e, rt := newACPEnv(t, withMockClaude, func(cfg *Config) {
+		cfg.Runtime = struct {
+			*acpRuntime
+			*frozenVMs
+		}{cfg.Runtime.(*acpRuntime), fr}
+		cfg.hostMemory = func() (total, available uint64, err error) { return 32 << 30, 24 << 30, nil }
+	})
+	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "say pong", "claude", domain.LaunchACP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	exec := rt.all()[0]
+	fr.mu.Lock()
+	fr.frozen = []runtime.ID{exec.identity.ContainerID}
+	fr.mu.Unlock()
+	if _, _, err = e.sched.ACPSetModelEffort(t.Context(), run, e.member.ID, "opus", ""); !errors.Is(err, ErrInvalidTransition) || !strings.Contains(err.Error(), "froze the session's VM") {
+		t.Fatalf("a model for a session whose VM the memory brake froze = %v, want it refused as frozen", err)
+	}
+	fr.mu.Lock()
+	fr.frozen = nil
+	fr.mu.Unlock()
+	if err = e.sched.Pause(t.Context(), run.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = e.sched.ACPSetOption(t.Context(), run.ID, "effort", "low"); !errors.Is(err, ErrInvalidTransition) || !strings.Contains(err.Error(), "cloudfield resume "+string(run.ID)) {
+		t.Fatalf("an effort for a paused session = %v, want it refused naming cloudfield resume", err)
+	}
+	if model, effort := exec.wire.setOption(t, "model"), exec.wire.setOption(t, "effort"); len(model)+len(effort) != 0 {
+		t.Fatalf("an agent that could not answer was sent model %v and effort %v, want neither", model, effort)
+	}
+	// A server that restarts while the session is paused has no agent session
+	// to ask until the resume.
+	s2 := e.restartACP(t)
+	if _, _, err = s2.ACPSetModelEffort(t.Context(), run, e.member.ID, "opus", ""); !errors.Is(err, ErrInvalidTransition) || !strings.Contains(err.Error(), "cloudfield resume "+string(run.ID)) {
+		t.Fatalf("a model for a session paused across a server restart = %v, want it refused naming cloudfield resume", err)
 	}
 }
 

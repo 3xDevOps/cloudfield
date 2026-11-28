@@ -60,6 +60,26 @@ func TestRenderChildrenStripsControlCharacters(t *testing.T) {
 	}
 }
 
+func TestSessionSetStripsControlCharacters(t *testing.T) {
+	c := fakeControlMethods(t, map[string]*fakeReply{protocol.MethodRunOptionSet: {
+		result: protocol.RunOptionSetResult{Model: "opus\x1b]52;c;eA==\x07", Effort: "high\x1b[2K"},
+	}})
+	var b bytes.Buffer
+	if err := setSessionOptions(c, &b, "r1", "opus", "high"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(b.String(), "\x1b\x07") {
+		t.Fatalf("control bytes reached the terminal output: %q", b.String())
+	}
+	c = fakeControlMethods(t, map[string]*fakeReply{protocol.MethodRunOptionSet: {err: &protocol.Error{
+		Code:    protocol.CodeInvalidParams,
+		Message: "scheduler: the session's agent offers no such option: effort; the session is now set to model opus\x1b]52;c;eA==\x07",
+	}}})
+	if err := setSessionOptions(c, &b, "r1", "opus", "high"); err == nil || strings.ContainsAny(err.Error(), "\x1b\x07") {
+		t.Fatalf("control bytes reached the error the terminal prints: %q", err)
+	}
+}
+
 // configTreeAt neutralizes every printed name, including ancestors of nested
 // entries, while still asking the server for the raw names.
 func TestConfigTreeAtPrintsSafeNamesButRequestsRawOnes(t *testing.T) {
