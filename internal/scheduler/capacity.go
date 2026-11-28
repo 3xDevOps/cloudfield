@@ -5,11 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"math"
 	"os"
-	"path/filepath"
 	goruntime "runtime"
 	"slices"
 	"sync"
@@ -18,7 +16,6 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/disk"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
-	"github.com/3xDevOps/cloudfield/internal/sysstats"
 )
 
 // Capacity refusals only affect new provisioning, never evict existing work.
@@ -383,12 +380,8 @@ func (s *Scheduler) tryReserveCapacity(ctx context.Context, claim *memoryClaim) 
 		// memory limit reclaims in its own cgroup and does not slow the server.
 		// A host without cgroup v2 pressure accounting is not refused, nor is
 		// a server in the root cgroup, whose file would be host-wide.
-		var pressure *float64
-		cgroup, err := cgroupPath(procRoot, os.Getpid())
-		if err == nil && cgroup != "/" {
-			pressure, err = sysstats.CgroupMemoryPressure(filepath.Join(cgroupRoot, cgroup))
-		}
-		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		pressure, err := serverMemoryPressure(os.Getpid())
+		if err != nil {
 			return nil, fmt.Errorf("%w: server memory pressure: %w", ErrCapacityUnknown, err)
 		}
 		if pressure == nil {

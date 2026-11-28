@@ -736,6 +736,10 @@ func (f *fakeRuns) Liveness(domain.RunID) (domain.RunLiveness, bool) {
 	return domain.RunLiveness{}, false
 }
 
+func (f *fakeRuns) Machine(context.Context) scheduler.MachineStatus { return scheduler.MachineStatus{} }
+
+func (f *fakeRuns) VMs() domain.VMCounts { return domain.VMCounts{} }
+
 func (f *fakeRuns) Paused(run domain.RunID) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()

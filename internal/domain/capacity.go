@@ -62,3 +62,63 @@ type CapacityCount struct {
 	LastRun   RunID
 	LastText  string
 }
+
+// VMCounts are the session VMs by what they hold of the host. Of open
+// sessions: awake (one a member paused too), awake and frozen by the memory
+// brake, asleep and paused in memory, asleep and saved to disk, and asleep
+// with neither: stopped, or still being saved. Closed are the VMs of closed
+// sessions that can still hold memory.
+type VMCounts struct {
+	Awake   int
+	Frozen  int
+	Paused  int
+	Saved   int
+	Stopped int
+	Closed  int
+}
+
+// SumCapacityCounts adds the hours of each counter together, in the order
+// each counter first appears.
+func SumCapacityCounts(hours []CapacityCount) []CapacityCount {
+	var out []CapacityCount
+	at := map[[3]string]int{}
+	for _, h := range hours {
+		key := [3]string{h.Kind, h.Op, h.Cause}
+		i, ok := at[key]
+		if !ok {
+			i = len(out)
+			at[key] = i
+			out = append(out, CapacityCount{Kind: h.Kind, Op: h.Op, Cause: h.Cause})
+		}
+		c := &out[i]
+		c.Count += h.Count
+		c.AvailableBytes += h.AvailableBytes
+		c.FloorBytes += h.FloorBytes
+		c.UsedBytes += h.UsedBytes
+		c.IdleHourBytes += h.IdleHourBytes
+		c.VMBytes += h.VMBytes
+		c.Waited += h.Waited
+		c.MaxWaited = max(c.MaxWaited, h.MaxWaited)
+		if !h.LastAt.Before(c.LastAt) {
+			c.LastAt, c.LastRun, c.LastText = h.LastAt, h.LastRun, h.LastText
+		}
+	}
+	return out
+}
+
+// LastCapacityRefusal is the latest refusal among counts of an admission
+// whose op is one of ops, nil when there is none.
+func LastCapacityRefusal(counts []CapacityCount, ops ...string) *CapacityCount {
+	var last *CapacityCount
+	for i, c := range counts {
+		if c.Kind != CapacityRefusal || (last != nil && !c.LastAt.After(last.LastAt)) {
+			continue
+		}
+		for _, op := range ops {
+			if c.Op == op {
+				last = &counts[i]
+			}
+		}
+	}
+	return last
+}

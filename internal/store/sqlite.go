@@ -65,6 +65,21 @@ func Open(path string) (*DB, error) {
 	return &DB{db: db}, nil
 }
 
+// OpenReadOnly opens the database at path for reading alone: it creates
+// nothing and applies no migration, so a command may read the database of a
+// running server of another version. A table that server has not created
+// is that query's error.
+func OpenReadOnly(path string) (*DB, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("store: open %s: %w", path, err)
+	}
+	db, err := sql.Open("sqlite", "file:"+url.PathEscape(path)+"?mode=ro&_pragma=busy_timeout(5000)")
+	if err != nil {
+		return nil, fmt.Errorf("store: open %s: %w", path, err)
+	}
+	return &DB{db: db}, nil
+}
+
 // Close closes the underlying database.
 func (d *DB) Close() error {
 	return d.db.Close()
