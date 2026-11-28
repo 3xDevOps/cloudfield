@@ -11,8 +11,7 @@ agent's he runs on the hosted edge's host. The retirement date is
 `2026-12-15`, which the owner chose on 2026-11-27; the edge only shows
 it. It follows
 [the retirement plan](2026-11-26-retire-address-pair.md) and the operator
-part of [edge-retire.md](../edge-retire.md#for-edge-operators). Sentences
-marked `TODO(after #1131)` describe a pull request that is not merged yet.
+part of [edge-retire.md](../edge-retire.md#for-edge-operators).
 
 ## Assumptions
 
@@ -65,7 +64,9 @@ Pull requests #1129 (records, `aether-edge retiring`), #1128
 edge follows `stable`, so this waits for a stable release that contains
 #1134 (`6b70f903c`) and its promotion
 ([edge.md](../edge.md#promoting-an-edge-release-to-stable)). In a clone,
-`git tag --contains 6b70f903c` lists the releases with it.
+`git tag --contains 6b70f903c` lists the releases with it. On 2026-11-28 those
+are `v0.10.0-nightly.6` and `v0.10.0-nightly.7`; `v0.10.0-beta.1` does not
+contain it, so the beta and the stable to wait for are later ones.
 
 ```sh
 sudo docker exec aether-edge aether-edge version --json | jq -r .version,.commit
@@ -455,8 +456,14 @@ before this step.
   ([edge-retire.md](../edge-retire.md#if-the-address-is-retired-before-the-server-moved)).
   With a CLI that has #1133, `cloudfield logout --edge
   https://edge.onaether.dev` deletes the dead local token and prints that
-  the edge did not confirm the sign-out. TODO(after #1131):
-  `cloudfield mcp` marks connectors at the retired address.
+  the edge did not confirm the sign-out. On a server whose build has #1131,
+  once it is connected at `https://edge.cloudfield.ai`, a `cloudfield mcp`
+  with #1131 prints under each connector added at
+  `https://edge.onaether.dev` `retired: add it again at <new URL> if you
+  still use it, remove the old one in the app, then: aether mcp revoke
+  <id>`, or `retired: remove it in the app, then: aether mcp revoke <id>`
+  while the server names no new URL
+  ([edge-retire.md](../edge-retire.md#moving-a-connector)).
 
 ## Phase 5: after
 
