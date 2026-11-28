@@ -79,13 +79,13 @@ func (s *Scheduler) brakeVMMemory(ctx context.Context, vms runtime.FreezeRuntime
 		}
 		if !s.vmMemoryBraked {
 			slog.Warn("scheduler: memory guard: the host is short of memory; froze the session VMs", "available", available, "floor", floor, "vms", len(froze))
-			// The brake must not wait for the database.
-			s.goMove(func() {
-				s.countCapacity(domain.CapacityEvent{Kind: domain.CapacityFreeze, AvailableBytes: available, FloorBytes: floor,
-					Text: fmt.Sprintf("froze %d session VMs", len(froze))})
-			})
 		}
 		s.vmMemoryBraked = true
+		if len(froze) > 0 && !s.vmFreezeCounted {
+			s.vmFreezeCounted = true
+			s.countCapacity(domain.CapacityEvent{Kind: domain.CapacityFreeze, AvailableBytes: available, FloorBytes: floor,
+				Text: fmt.Sprintf("froze %d session VMs", len(froze))}, false)
+		}
 	}
 	s.settleFrozen(ctx, vms, froze, available >= floor)
 }
@@ -143,7 +143,7 @@ func (s *Scheduler) settleFrozen(ctx context.Context, vms runtime.FreezeRuntime,
 	if thaw && s.vmMemoryBraked && !s.recovering.Load() {
 		frozen := slices.DeleteFunc(vms.Frozen(), func(id runtime.ID) bool { return slices.Contains(saving, id) })
 		if len(frozen) == 0 && len(saving) == 0 {
-			s.vmMemoryBraked = false
+			s.vmMemoryBraked, s.vmFreezeCounted = false, false
 			slog.Info("scheduler: memory guard: every session VM runs again")
 		}
 		for _, id := range frozen {

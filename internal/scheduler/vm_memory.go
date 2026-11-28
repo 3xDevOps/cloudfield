@@ -640,7 +640,7 @@ func (s *Scheduler) wakeSavedForMemory(ctx context.Context, room uint64) {
 			s.mu.Unlock()
 			s.wg.Done()
 		}()
-		err := s.WakeRun(ctx, next.runID, "")
+		err := s.WakeRun(context.WithValue(ctx, guardWake{}, true), next.runID, "")
 		switch {
 		case err == nil:
 			slog.Info("scheduler: memory guard: woke a session VM it saved", "run", next.runID)

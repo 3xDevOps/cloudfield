@@ -27,7 +27,12 @@ type Runs interface {
 	CloseRun(ctx context.Context, run domain.RunID, actor domain.MemberID, outcome domain.RunStatus) error
 	Review(ctx context.Context, run domain.RunID, actor domain.MemberID, action string, reportedOnly bool) (*domain.Run, error)
 	DefaultMode(ctx context.Context, member, account domain.MemberID, harnessName string) (domain.LaunchMode, error)
-	FallbackLaunchable(ctx context.Context, member, requested, account domain.MemberID, harnessName string, mode domain.LaunchMode) (bool, error)
+	// ChildLogin is the login a subsession of owner starts from on its
+	// parent's account.
+	ChildLogin(ctx context.Context, workspace domain.WorkspaceID, owner, account domain.MemberID, inherited domain.LoginID, harness string, mode domain.LaunchMode, permission domain.Permission) (domain.LoginID, error)
+	LoginPayer(ctx context.Context, workspace domain.WorkspaceID, home domain.MemberID, harness string, mode domain.LaunchMode) (string, error)
+	LoginUsageUnknown(ctx context.Context, home domain.MemberID, login domain.Account, harness string) (bool, error)
+	FallbackLaunchable(ctx context.Context, member, requested domain.MemberID, account domain.Account, harnessName string, mode domain.LaunchMode, permission domain.Permission) (bool, error)
 	AgentModels(ctx context.Context, member, account domain.MemberID, name string, refresh bool) (protocol.AgentModelsResult, error)
 	Paused(run domain.RunID) bool
 	// CapacityRefused reports whether a launch failed only because the

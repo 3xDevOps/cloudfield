@@ -186,6 +186,9 @@ func (s *Scheduler) holdAwake(ctx context.Context, run domain.RunID) (release fu
 // the same time: the first runs the wake and the others wait for its result.
 func (s *Scheduler) wake(ctx context.Context, entry *supervised) error {
 	timed := runtime.WithSteps(s.superCtx)
+	if ctx.Value(guardWake{}) != nil {
+		timed = context.WithValue(timed, guardWake{}, true)
+	}
 	for {
 		s.mu.Lock()
 		switch {

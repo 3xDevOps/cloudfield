@@ -15,13 +15,14 @@ import (
 type RunAccountSegment struct {
 	Seq             int
 	AccountMemberID domain.MemberID
+	AccountLogin    domain.LoginID
 	Reason          string
 	StartedAt       time.Time
 }
 
 // Account is the login the segment spent.
 func (s *RunAccountSegment) Account() domain.Account {
-	return domain.AccountOf(s.AccountMemberID)
+	return domain.Account{Member: s.AccountMemberID, Login: s.AccountLogin}
 }
 
 // RunAccountLaunchReason is segment 0's reason.
@@ -29,11 +30,13 @@ const RunAccountLaunchReason = "launch"
 
 // SetRunAccount moves a running run to account and appends the segment that
 // starts at, recording segment 0 for the account it leaves on its first
-// move. Earlier segments are never rewritten. The run keeps the account it
-// first asked for in requested_account_member_id, cleared when the run moves
-// back to it. A run already on account is left as it is. It returns the
-// run's current segment.
-func (d *DB) SetRunAccount(ctx context.Context, id domain.RunID, account domain.MemberID, reason string, at time.Time) (int, error) {
+// move. Earlier segments are never rewritten. The run keeps the member whose
+// account it first asked for in requested_account_member_id, cleared when
+// the run moves back to it; a move between two logins of one member leaves
+// it alone. perUse is whether account's login is billed per use. A run
+// already on account is left as it is. It returns the run's current
+// segment.
+func (d *DB) SetRunAccount(ctx context.Context, id domain.RunID, account domain.Account, perUse bool, reason string, at time.Time) (int, error) {
 	startedAt, err := encodeTime(at)
 	if err != nil {
 		return 0, fmt.Errorf("store: set session account: %w", err)
@@ -45,12 +48,13 @@ func (d *DB) SetRunAccount(ctx context.Context, id domain.RunID, account domain.
 	defer func() { _ = tx.Rollback() }()
 	var (
 		current, owner, requested string
+		currentLogin              domain.LoginID
 		launched                  int64
 		last                      int
 	)
 	err = tx.QueryRowContext(ctx,
-		`SELECT account_member_id, member_id, COALESCE(requested_account_member_id, ''), COALESCE(started_at, created_at)
-		 FROM runs WHERE id = ?`, id).Scan(&current, &owner, &requested, &launched)
+		`SELECT account_member_id, account_login, member_id, COALESCE(requested_account_member_id, ''), COALESCE(started_at, created_at)
+		 FROM runs WHERE id = ?`, id).Scan(&current, &currentLogin, &owner, &requested, &launched)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, ErrNotFound
 	}
@@ -64,28 +68,30 @@ func (d *DB) SetRunAccount(ctx context.Context, id domain.RunID, account domain.
 		`SELECT COALESCE(MAX(seq), -1) FROM run_account_segments WHERE run_id = ?`, id).Scan(&last); err != nil {
 		return 0, fmt.Errorf("store: set session account: %w", err)
 	}
-	if domain.MemberID(current) == account {
+	if (domain.Account{Member: domain.MemberID(current), Login: currentLogin}) == account {
 		return max(last, 0), nil
 	}
-	insert := `INSERT INTO run_account_segments (run_id, seq, account_member_id, reason, started_at) VALUES (?, ?, ?, ?, ?)`
+	insert := `INSERT INTO run_account_segments (run_id, seq, account_member_id, account_login, reason, started_at) VALUES (?, ?, ?, ?, ?, ?)`
 	if last < 0 {
-		if _, err := tx.ExecContext(ctx, insert, id, 0, current, RunAccountLaunchReason, launched); err != nil {
+		if _, err := tx.ExecContext(ctx, insert, id, 0, current, currentLogin, RunAccountLaunchReason, launched); err != nil {
 			return 0, fmt.Errorf("store: set session account: %w", err)
 		}
 		last = 0
 	}
-	if _, err := tx.ExecContext(ctx, insert, id, last+1, account, reason, startedAt); err != nil {
+	if _, err := tx.ExecContext(ctx, insert, id, last+1, account.Member, account.Login, reason, startedAt); err != nil {
 		return 0, fmt.Errorf("store: set session account: %w", mapConstraint(err, ErrNotFound))
 	}
 	switch domain.MemberID(requested) {
-	case "":
-		requested = current
-	case account:
+	case account.Member:
 		requested = ""
+	case "":
+		if domain.MemberID(current) != account.Member {
+			requested = current
+		}
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE runs SET account_member_id = ?, requested_account_member_id = NULLIF(?, '') WHERE id = ?`,
-		account, requested, id); err != nil {
+		`UPDATE runs SET account_member_id = ?, account_login = ?, account_login_per_use = ?, requested_account_member_id = NULLIF(?, '') WHERE id = ?`,
+		account.Member, account.Login, perUse, requested, id); err != nil {
 		return 0, fmt.Errorf("store: set session account: %w", mapConstraint(err, ErrNotFound))
 	}
 	if err := tx.Commit(); err != nil {
@@ -98,7 +104,7 @@ func (d *DB) SetRunAccount(ctx context.Context, id domain.RunID, account domain.
 // a run that never moved.
 func (d *DB) ListRunAccountSegments(ctx context.Context, id domain.RunID) ([]*RunAccountSegment, error) {
 	rows, err := d.db.QueryContext(ctx,
-		`SELECT seq, account_member_id, reason, started_at FROM run_account_segments WHERE run_id = ? ORDER BY seq`, id)
+		`SELECT seq, account_member_id, account_login, reason, started_at FROM run_account_segments WHERE run_id = ? ORDER BY seq`, id)
 	if err != nil {
 		return nil, fmt.Errorf("store: list session account segments: %w", err)
 	}
@@ -107,7 +113,7 @@ func (d *DB) ListRunAccountSegments(ctx context.Context, id domain.RunID) ([]*Ru
 			s         RunAccountSegment
 			startedAt int64
 		)
-		if err := row.Scan(&s.Seq, &s.AccountMemberID, &s.Reason, &startedAt); err != nil {
+		if err := row.Scan(&s.Seq, &s.AccountMemberID, &s.AccountLogin, &s.Reason, &startedAt); err != nil {
 			return nil, err
 		}
 		s.StartedAt = decodeTime(startedAt)

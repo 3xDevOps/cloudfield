@@ -92,7 +92,7 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 			slog.Warn("subsessions: refuse subsession", "child", c.RunID, "error", err)
 			return
 		}
-		s.countWaitEnd(ctx, c, "refused", reason)
+		s.countWaitEnd(ctx, c, "refused", s.cfg.Now())
 		s.publish(ctx, c.ParentRunID, "")
 		// A child that never started has no run to send from.
 		_ = s.notify(ctx, c.ParentRunID, c.ParentRunID,
@@ -101,15 +101,17 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 	p, err := s.resolve(ctx, c.ParentRunID)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		_ = s.cfg.Store.SetChildState(ctx, c.RunID, domain.ChildCancelled, "the parent session was deleted", domain.ChildLaunching)
-		s.countWaitEnd(ctx, c, "cancelled", "the parent session was deleted")
+		if s.cfg.Store.SetChildState(ctx, c.RunID, domain.ChildCancelled, "the parent session was deleted", domain.ChildLaunching) == nil {
+			s.countWaitEnd(ctx, c, "cancelled", s.cfg.Now())
+		}
 		return
 	case err != nil:
 		refuse(err.Error())
 		return
 	case p.parent.Status.Terminal() && !c.Detached:
-		_ = s.cfg.Store.SetChildState(ctx, c.RunID, domain.ChildCancelled, "the parent session ended before it started", domain.ChildLaunching)
-		s.countWaitEnd(ctx, c, "cancelled", "the parent session ended before it started")
+		if s.cfg.Store.SetChildState(ctx, c.RunID, domain.ChildCancelled, "the parent session ended before it started", domain.ChildLaunching) == nil {
+			s.countWaitEnd(ctx, c, "cancelled", s.cfg.Now())
+		}
 		return
 	case p.refusal != "":
 		refuse(p.refusal)
@@ -129,7 +131,35 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 			}
 		}
 	}
-	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Usage, c.OwnerID, string(c.AccountID), c.Harness, c.Fallback)
+	// The parent's login is checked again here: its owner may have turned
+	// it off for shares, or it may have stopped signing in, since the
+	// subsession was queued.
+	login, err := s.cfg.Runs.ChildLogin(ctx, c.WorkspaceID, c.OwnerID, c.AccountID, c.AccountLogin, c.Harness, c.Mode, p.parent.Permission)
+	if err != nil {
+		refuse(err.Error())
+		return
+	}
+	payer := sync.OnceValues(func() (string, error) {
+		return s.cfg.Runs.LoginPayer(ctx, c.WorkspaceID, c.OwnerID, c.Harness, c.Mode)
+	})
+	// A subsession names no login, so one billed per use, or whose kind
+	// cannot be read, serves it only when no login with readable usage left
+	// can, unless something else signs the agent in: that pays on every
+	// account.
+	unknown, err := s.cfg.Runs.LoginUsageUnknown(ctx, c.OwnerID, domain.Account{Member: c.AccountID, Login: login}, c.Harness)
+	if err != nil {
+		refuse(err.Error())
+		return
+	}
+	if unknown {
+		paidBy, payerErr := payer()
+		if payerErr != nil {
+			refuse(payerErr.Error())
+			return
+		}
+		unknown = paidBy == ""
+	}
+	measured, err := fallback.MeasureStart(ctx, s.cfg.Store, s.cfg.Usage, c.OwnerID, domain.Account{Member: c.AccountID, Login: login}, c.Harness, c.Fallback, unknown)
 	if err != nil {
 		refuse(err.Error())
 		return
@@ -152,24 +182,30 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 		refuse(err.Error())
 		return
 	}
-	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, c.OwnerID, domain.AccountOf(requested), workspaces, c.Fallback, func(ctx context.Context, account domain.Account) (bool, error) {
+	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, c.OwnerID, domain.Account{Member: requested, Login: login}, c.Harness, workspaces, c.Fallback, func(ctx context.Context, account domain.Account) (bool, error) {
 		if p.settings.Off.Covers(c.Harness, account.Member) {
 			return false, nil
 		}
-		return s.cfg.Runs.FallbackLaunchable(ctx, c.OwnerID, requested, account.Member, c.Harness, c.Mode)
+		if account.Login.Added() {
+			if paidBy, payerErr := payer(); payerErr != nil || paidBy != "" {
+				return false, payerErr
+			}
+		}
+		return s.cfg.Runs.FallbackLaunchable(ctx, c.OwnerID, requested, account, c.Harness, c.Mode, parent.Permission)
 	})
 	account := chosen.Member
 	if excluded != nil {
 		slog.Warn("subsessions: fallback accounts left out of a subsession launch", "child", c.RunID, "error", excluded)
 	}
 	created := false
+	var startedAt time.Time
 	_, err = s.cfg.Runs.LaunchWithOptions(ctx, c.WorkspaceID, c.OwnerID, account, c.Task, c.Harness, c.Mode, domain.LaunchOptions{
-		Model: c.Model, Permission: parent.Permission, RequestedAccount: requested, Fallback: c.Fallback, ReservedRunID: c.RunID,
+		Model: c.Model, Permission: parent.Permission, RequestedAccount: requested, AccountLogin: chosen.Login, Fallback: c.Fallback, ReservedRunID: c.RunID,
 		Retry:      c.Error != "",
 		FromCommit: c.BaseCommit, FromBranch: c.BaseBranch, ExtraWorkspaces: workspaces[1:], Admitted: unlock,
 		LinearIssueURL: cmp.Or(linear.FindIssueURL(c.Task), parent.LinearIssueURL),
 		Created: func(domain.RunID) {
-			created = true
+			created, startedAt = true, s.cfg.Now()
 			if stateErr := s.cfg.Store.SetChildState(ctx, c.RunID, domain.ChildStarted, "", domain.ChildLaunching); stateErr != nil {
 				slog.Warn("subsessions: mark subsession started", "child", c.RunID, "error", stateErr)
 			}
@@ -187,7 +223,10 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 		refuse(err.Error())
 		return
 	}
-	s.countWaitEnd(ctx, c, "started", "")
+	if created {
+		// Counted here and not in Created, which runs under the launch lock.
+		s.countWaitEnd(ctx, c, "started", startedAt)
+	}
 	s.Kick()
 }
 
@@ -212,36 +251,46 @@ func (s *Service) wait(ctx context.Context, c *domain.ChildReservation, reason s
 		return false
 	}
 	slog.Info("subsessions: no room to start a subsession; it waits", "child", c.RunID, "parent", c.ParentRunID, "reason", reason)
-	if c.Error == "" {
-		s.count(ctx, domain.CapacityEvent{Kind: domain.CapacityWait, Op: waitOp, Run: c.RunID, Text: reason})
-	}
 	return true
 }
 
 // waitOp names subsessions in the capacity counters.
 const waitOp = "subsession"
 
-// countWaitEnd counts how the wait for room of c ended, if it waited, with
-// the time since it was asked for.
-func (s *Service) countWaitEnd(ctx context.Context, c *domain.ChildReservation, cause, text string) {
+// countWaitEnd counts how the wait for room of c ended at the time at, if
+// it waited, with how long: since the parent was told it waits, or since it
+// was asked for when that notice was never sent.
+func (s *Service) countWaitEnd(ctx context.Context, c *domain.ChildReservation, cause string, at time.Time) {
 	if c.Error == "" {
 		return
 	}
-	s.count(ctx, domain.CapacityEvent{Kind: domain.CapacityWaitEnd, Op: waitOp, Cause: cause, Run: c.RunID, Text: text, Waited: s.cfg.Now().Sub(c.CreatedAt)})
+	since := c.CreatedAt
+	if notice, err := s.cfg.Store.GetRunMessageByIdempotency(ctx, c.ParentRunID, waitingNoticeKey+string(c.RunID)); err == nil {
+		since = notice.CreatedAt
+	}
+	s.count(ctx, domain.CapacityEvent{Kind: domain.CapacityWaitEnd, Op: waitOp, Cause: cause, Run: c.RunID, Waited: at.Sub(since)})
 }
 
+// count logs e as the scheduler logs its capacity events and adds it to
+// its counter. Never called under the launch lock.
 func (s *Service) count(ctx context.Context, e domain.CapacityEvent) {
 	e.At = s.cfg.Now()
+	slog.Info("subsessions: capacity: "+e.Kind, "op", e.Op, "cause", e.Cause, "run", e.Run, "waited", e.Waited, "text", e.Text)
 	if err := s.cfg.Store.CountCapacityEvent(ctx, e); err != nil {
-		slog.Warn("subsessions: count a wait for room", "child", e.Run, "error", err)
+		slog.Warn("subsessions: capacity: count "+e.Kind, "child", e.Run, "error", err)
 	}
 }
+
+const waitingNoticeKey = "child-waiting:"
 
 // toldWaiting tells subscribers a subsession waits for room, and its parent
 // the first time it does.
 func (s *Service) toldWaiting(ctx context.Context, c *domain.ChildReservation, reason string) {
+	if c.Error == "" {
+		s.count(ctx, domain.CapacityEvent{Kind: domain.CapacityWait, Op: waitOp, Run: c.RunID, Text: reason})
+	}
 	s.publish(ctx, c.ParentRunID, "")
-	key := "child-waiting:" + string(c.RunID)
+	key := waitingNoticeKey + string(c.RunID)
 	if _, err := s.cfg.Store.GetRunMessageByIdempotency(ctx, c.ParentRunID, key); !errors.Is(err, store.ErrNotFound) {
 		return
 	}

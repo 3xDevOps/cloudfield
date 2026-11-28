@@ -2691,7 +2691,17 @@ CREATE UNIQUE INDEX idx_agent_logins_id ON agent_logins (agent, id) WHERE id <> 
 	`
 ALTER TABLE coord_reports ADD COLUMN body TEXT NOT NULL DEFAULT '';
 `,
-	// v117: what the server did for want of memory or disk, counted per
+	// v117: the added login of its account a run, an account segment and a
+	// queued subsession spend, empty for the default login, so every
+	// existing row keeps meaning what it meant; and whether the run's login
+	// is billed per use.
+	`
+ALTER TABLE runs ADD COLUMN account_login TEXT NOT NULL DEFAULT '';
+ALTER TABLE run_account_segments ADD COLUMN account_login TEXT NOT NULL DEFAULT '';
+ALTER TABLE run_children ADD COLUMN account_login TEXT NOT NULL DEFAULT '';
+ALTER TABLE runs ADD COLUMN account_login_per_use INTEGER NOT NULL DEFAULT 0;
+`,
+	// v118: what the server did for want of memory or disk, counted per
 	// hour and counter (store/capacity.go).
 	`
 CREATE TABLE capacity_counts (
@@ -2713,7 +2723,7 @@ CREATE TABLE capacity_counts (
 	PRIMARY KEY (hour, kind, op, cause)
 ) WITHOUT ROWID;
 `,
-	// v118: the server's latest count of its session VMs, one row.
+	// v119: the server's latest count of its session VMs, one row.
 	`
 CREATE TABLE capacity_vms (
 	id     INTEGER PRIMARY KEY CHECK (id = 1),

@@ -105,7 +105,7 @@ func TestCapacityDiskAdmissionBoundaries(t *testing.T) {
 					} else {
 						host.Filesystems = append(host.Filesystems, runtime.FilesystemCapacity{Name: resource, TotalBytes: tc.total, FreeBytes: free})
 					}
-					s := &Scheduler{cfg: Config{Store: &capacityCounts{}, Runtime: &admissionRuntime{host: host}, MinFreeBytes: tc.override, filesystemCapacity: measure}, capacityGate: make(chan struct{}, 1)}
+					s := &Scheduler{cfg: Config{Runtime: &admissionRuntime{host: host}, MinFreeBytes: tc.override, filesystemCapacity: measure}, capacityGate: make(chan struct{}, 1)}
 					release, err := s.tryReserveCapacity(t.Context(), &memoryClaim{bytes: startupMemoryBytes})
 					if delta != 0 {
 						if !errors.Is(err, ErrDiskFull) || !strings.Contains(err.Error(), resource) {
@@ -132,7 +132,7 @@ func TestCapacityMemoryAdmissionBoundaries(t *testing.T) {
 		t.Run(fmt.Sprint(total), func(t *testing.T) {
 			floor := max(uint64(2<<30), total/10)
 			rt := &admissionRuntime{host: healthyAdmissionHost()}
-			s := &Scheduler{cfg: Config{Store: &capacityCounts{}, Runtime: rt, MinFreeBytes: -1}, capacityGate: make(chan struct{}, 1)}
+			s := &Scheduler{cfg: Config{Runtime: rt, MinFreeBytes: -1}, capacityGate: make(chan struct{}, 1)}
 			host := rt.host
 			host.MemoryTotalBytes = total
 			host.MemoryAvailableBytes = floor + startupMemoryBytes - 1
@@ -155,7 +155,7 @@ func TestCapacityUnknownRefusesWithoutReservations(t *testing.T) {
 	for _, resource := range []string{"data", "runtime", "memory", "missing storage"} {
 		t.Run(resource, func(t *testing.T) {
 			rt := &admissionRuntime{host: healthyAdmissionHost()}
-			s := &Scheduler{cfg: Config{Store: &capacityCounts{}, Runtime: rt, filesystemCapacity: healthyAdmissionData}, capacityGate: make(chan struct{}, 1)}
+			s := &Scheduler{cfg: Config{Runtime: rt, filesystemCapacity: healthyAdmissionData}, capacityGate: make(chan struct{}, 1)}
 			switch resource {
 			case "data":
 				s.cfg.filesystemCapacity = func(string) (disk.Usage, error) { return disk.Usage{}, errors.New("statfs failed") }
@@ -177,7 +177,7 @@ func TestCapacityUnknownRefusesWithoutReservations(t *testing.T) {
 }
 
 func TestCapacityRuntimeWithoutProbeStillChecksData(t *testing.T) {
-	s := &Scheduler{cfg: Config{Store: &capacityCounts{}, Runtime: newFakeRuntime(), DataDir: "data-volume", StateDir: "scheduler-volume", filesystemCapacity: func(path string) (disk.Usage, error) {
+	s := &Scheduler{cfg: Config{Runtime: newFakeRuntime(), DataDir: "data-volume", StateDir: "scheduler-volume", filesystemCapacity: func(path string) (disk.Usage, error) {
 		if path == "data-volume" {
 			return disk.Usage{TotalBytes: 50 << 30, FreeBytes: 1 << 30}, nil
 		}
@@ -515,7 +515,7 @@ func TestCapacityCanceledBeforeProbe(t *testing.T) {
 				probes.Add(1)
 				return nil
 			}}
-			s := &Scheduler{cfg: Config{Store: &capacityCounts{}, Runtime: rt, MinFreeBytes: -1}, capacityGate: make(chan struct{}, 1)}
+			s := &Scheduler{cfg: Config{Runtime: rt, MinFreeBytes: -1}, capacityGate: make(chan struct{}, 1)}
 			if busy {
 				s.capacityGate <- struct{}{}
 			}
@@ -609,7 +609,7 @@ func TestCapacityMemoryPressureAdmission(t *testing.T) {
 	psi := func(avg10, avg60 string) string {
 		return "some avg10=" + avg10 + " avg60=" + avg60 + " avg300=1.00 total=1\nfull avg10=0 avg60=0 avg300=0 total=0\n"
 	}
-	s := &Scheduler{cfg: Config{Store: &capacityCounts{}, Runtime: &admissionRuntime{host: healthyAdmissionHost()}, MinFreeBytes: -1}, capacityGate: make(chan struct{}, 1)}
+	s := &Scheduler{cfg: Config{Runtime: &admissionRuntime{host: healthyAdmissionHost()}, MinFreeBytes: -1}, capacityGate: make(chan struct{}, 1)}
 
 	writeFile(serverPressure, psi("99.00", "10.00"))
 	_, err := s.tryReserveCapacity(t.Context(), &memoryClaim{bytes: startupMemoryBytes})
@@ -670,18 +670,4 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
-}
-
-// capacityCounts is a store that keeps the capacity events counted.
-type capacityCounts struct {
-	store.Store
-	mu     sync.Mutex
-	events []domain.CapacityEvent
-}
-
-func (c *capacityCounts) CountCapacityEvent(_ context.Context, e domain.CapacityEvent) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.events = append(c.events, e)
-	return nil
 }

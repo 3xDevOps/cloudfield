@@ -318,7 +318,10 @@ type LaunchOptions struct {
 	// RequestedAccount is the account the launcher asked for, recorded on the
 	// run when a fallback launched it on another one.
 	RequestedAccount MemberID
-	Fallback         AccountFallback
+	// AccountLogin is the added login of the account the run spends; empty
+	// for its default login.
+	AccountLogin LoginID
+	Fallback     AccountFallback
 	// Admitted is called once the run's row is durable and a Kill of the run
 	// stops its provisioning, before any provisioning work. A launcher that
 	// holds an admission lock releases it here; a replayed or refused launch
@@ -843,9 +846,11 @@ type Run struct {
 	// exhausted; empty otherwise.
 	RequestedAccountMemberID MemberID
 	// AccountLogin is the added login of AccountMemberID the run spends;
-	// empty for their default login.
-	AccountLogin LoginID
-	Fallback     AccountFallback
+	// empty for their default login. AccountLoginPerUse: that login is
+	// billed per use, decided when the run's account is set.
+	AccountLogin       LoginID
+	AccountLoginPerUse bool
+	Fallback           AccountFallback
 	// HomeMemberID is whose home the container mounts: the launcher. A
 	// handoff changes MemberID, never this. Empty on rows created before
 	// account shares were narrowed.

@@ -107,6 +107,32 @@ func TestLaunchRefusesASignedOutLoginAndSaysHowToSignIn(t *testing.T) {
 	}
 }
 
+// For a member who keeps no added login, a workspace variable lifts the
+// signed-out refusal exactly as before logins existed: any value of
+// CLAUDE_CODE_USE_BEDROCK does, and CLAUDE_CODE_USE_FOUNDRY does not.
+func TestASignedOutLaunchReadsWorkspaceVariablesAsBefore(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		variable, value string
+		refused         bool
+	}{
+		{"CLAUDE_CODE_USE_BEDROCK", "0", false},
+		{"CLAUDE_CODE_USE_VERTEX", "off", false},
+		{"CLAUDE_CODE_USE_FOUNDRY", "1", true},
+	} {
+		e := newTestEnv(t, nil)
+		writeClaudeLogin(t, e, fixtureNoToken)
+		e.ws.Environment.Variables[tc.variable] = tc.value
+		if err := e.db.UpdateWorkspace(t.Context(), e.ws); err != nil {
+			t.Fatal(err)
+		}
+		_, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "task", "claude", domain.LaunchTUI)
+		if refused := errors.Is(err, ErrSignedOut); refused != tc.refused || (err != nil && !refused) {
+			t.Errorf("%s=%s: Launch = %v; want refused %v", tc.variable, tc.value, err, tc.refused)
+		}
+	}
+}
+
 func TestLoginProblemReadsTheLoginFile(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t, nil)
@@ -336,7 +362,7 @@ func TestAnUnreadableConsoleSignInLeavesTheLoginFileInCharge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loginStamp beside an unreadable configuration file = %v", err)
 	}
-	e.sched.loginRefused(e.member.ID, "claude", stamp, acp.NewAuthRequired(nil))
+	e.sched.loginRefused(domain.AccountOf(e.member.ID), "claude", stamp, acp.NewAuthRequired(nil))
 	if problem, blocks := loginProblem(t, e); problem != refusedProblem || blocks {
 		t.Fatalf("after the refusal = %q, %v, want %q", problem, blocks, refusedProblem)
 	}
@@ -379,7 +405,7 @@ func TestRememberedRefusalKeepsOnlyTheAgentsMessage(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t, nil)
 	cause := fmt.Errorf("open the agent conversation: %w; stderr: fixture stderr tail", acp.NewAuthRequired(map[string]string{"detail": "fixture data"}))
-	e.sched.loginRefused(e.member.ID, "claude", "", cause)
+	e.sched.loginRefused(domain.AccountOf(e.member.ID), "claude", "", cause)
 	if problem, blocks := loginProblem(t, e); problem != refusedProblem || blocks {
 		t.Fatalf("LoginProblem = %q, %v, want %q", problem, blocks, refusedProblem)
 	}
@@ -470,12 +496,12 @@ func TestClearingARefusalLeavesALaterOne(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t, nil)
 	key := loginKey{domain.AccountOf(e.member.ID), "claude"}
-	e.sched.loginRefused(e.member.ID, "claude", "", acp.NewAuthRequired(nil))
+	e.sched.loginRefused(domain.AccountOf(e.member.ID), "claude", "", acp.NewAuthRequired(nil))
 	e.sched.mu.Lock()
 	seen := e.sched.loginRefusals[key]
 	e.sched.mu.Unlock()
 	time.Sleep(time.Millisecond)
-	e.sched.loginRefused(e.member.ID, "claude", "", acp.NewAuthRequired(nil))
+	e.sched.loginRefused(domain.AccountOf(e.member.ID), "claude", "", acp.NewAuthRequired(nil))
 	e.sched.mu.Lock()
 	later := e.sched.loginRefusals[key]
 	e.sched.mu.Unlock()
