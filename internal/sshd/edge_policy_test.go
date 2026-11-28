@@ -581,6 +581,8 @@ type fakeEdgeOwner struct {
 
 func (f *fakeEdgeOwner) Notices() (edgeagent.StoredNotices, error) { return f.notices, f.noticesErr }
 
+func (f *fakeEdgeOwner) ConnectorOrigins() []string { return nil }
+
 func (f *fakeEdgeOwner) IssueClaimCode(admin domain.MemberID) (string, time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
