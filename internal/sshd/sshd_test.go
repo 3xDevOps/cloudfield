@@ -371,6 +371,7 @@ type fakeRuns struct {
 	terminalAddr    string
 	terminalAddrErr error
 	terminalStopErr error
+	interruptAnswer func() error
 	calls           []string
 	// revokes lists each RevokeAccount as owner:grantee.
 	revokes []string
