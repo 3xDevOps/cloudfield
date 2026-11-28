@@ -7265,7 +7265,7 @@ while one of its entries is visible, so the nav and search never disagree.
 | You | Usage (`usage`) | Subscription usage (`subscription-usage`) |
 | This computer | This computer (`this-computer`) | Link (`link`); Syncing: Sync daemon (`sync-daemon`), Mirror session files (`mirror`); Danger zone (`danger-zone`) |
 | Server | Server (`server`) | Status: Version (`version`), Tailnet dashboard, Disk and performance (`disk`); Admin: Docker inside sessions (`docker`), Retained sandboxes (`retained-containers`) |
-| Server | Machines (`machines`) | This machine (`machine`), Last refusals, Counted |
+| Server | Machines (`machines`) | The server's machine (`machine`), Last refusals, Last 24 hours and 14 days |
 | Server | Remote access (`remote-access`) | Edge (`edge`) |
 
 **Addressing.** The route is `{name: "settings", params: {section}}`, and
@@ -7458,36 +7458,42 @@ Categories:
   history retain their existing lifecycle.
 - **Machines**, when the server answers `server.capacity`
   (`machines.tsx`): one section per machine, today the one the server runs
-  on, with figures in GiB as the server's own text prints them. **Can a
-  session launch now?** says when the figures were read and whether a launch would start or be refused, and why: what could
-  not be measured, memory or a disk under its launch line (what the server
-  keeps free plus the least a launch needs), or the server's memory stall
-  at its limit. **Memory** and each **Disk** show free against total as a meter
-  marked at the launch line, and a `Launch fits` or `Launch refused` badge.
-  **Memory stall** shows the server's figure over 60 seconds against the
-  limit that refuses launches and the host's over 10 seconds against the
-  limit that saves session VMs, or `Not measured` with the reason.
-  With the disk check off (`disk_unchecked`) **Disk** says so instead of
-  listing none, and a runtime that could not be asked still shows its
-  error. **Memory stall** carries the same badge from the server's figure. `memory_error`, `stall_error` and `disk_error` show
-  verbatim. **Session VMs** counts awake, frozen by the memory brake,
-  asleep in memory, asleep on disk and asleep with nothing kept, then how
-  many VMs of closed sessions still hold memory. **Last refusals** gives the last launch and wake refused in
-  14 days: when, in local time with its zone, the cause in words, `A wake
-  the server tried by itself` for
-  `wake-auto`, the server's text verbatim with a copy button,
-  and, for a super admin, the session as a link. **Counted** answers, in whole UTC
-  hours over 24 hours and 14 days: launches refused (a waiting subsession's retries
-  included), subsessions that waited for room, the mean and the longest wait
-  that ended in a start, the share of the memory in use at memory and stall
-  refusals that sessions idle over an hour or closed held, wakes
-  refused (`wake` and `wake-auto`), and how many of those the server tried
-  by itself; **All N
-  counters** opens the raw counters. Nothing counted reads `Nothing counted
-  in 14 days`. The page reads `server.capacity` again every 5 seconds while
-  it is open, the tab is visible and the connection is live, and has
-  **Refresh**. A failed read shows the error verbatim with **Try again** and
-  keeps the last figures, saying they are from the last good read. [failure-handling.md](failure-handling.md#what-the-server-did-for-want-of-memory-or-disk)
+  on, with figures in GiB as the server's own text prints them.
+  - **Can a session launch now?** says when the figures were read and
+    whether a launch would start or be refused, and why: what could not be
+    measured, memory or a disk under its launch line (what the server keeps
+    free plus the least a launch needs), or the server's memory stall at
+    its limit.
+  - **Memory** and each **Disk** show free against total as a meter marked
+    at the launch line. **Memory stall** shows the server's figure over 60
+    seconds against the limit that refuses launches and the host's over 10
+    seconds against the limit that saves session VMs, or `Not measured`
+    with the reason. Each carries a `Launch fits` or `Launch refused` badge;
+    a row that could not be measured reads `Launch refused`, a stall that
+    could not be measured `Not measured`. `memory_error`, `stall_error` and
+    `disk_error` show verbatim. With the disk check off (`disk_unchecked`)
+    **Disk** says so instead of listing none, and a runtime that could not
+    be asked still shows its error.
+  - **Session VMs** counts awake, frozen by the memory brake, asleep in
+    memory, asleep on disk and asleep with nothing kept, then how many VMs
+    of closed sessions still hold memory.
+  - **Last refusals** gives the last launch and wake refused in 14 days:
+    when, in local time with its zone; the cause in words; `A wake the
+    server tried by itself` for `wake-auto`; the server's text verbatim
+    with a copy button; and, for a super admin, the session as a link.
+  - **Last 24 hours and 14 days**, in whole UTC hours: launches refused (a
+    waiting subsession's retries included), subsessions that waited for
+    room, the mean and the longest wait that ended in a start, the share of
+    the memory in use at memory and stall refusals that sessions idle over
+    an hour or closed held, wakes refused (`wake` and `wake-auto`) and how
+    many of those the server tried by itself. **All N counters** opens the
+    raw counters. Nothing counted reads `Nothing counted in 14 days`.
+  - The page reads `server.capacity` again every 5 seconds while it is
+    open, the tab is visible and the connection is live, and has
+    **Refresh**. A failed read shows the error verbatim with **Try again**
+    and keeps the last figures, saying they are from the last good read.
+
+  [failure-handling.md](failure-handling.md#what-the-server-did-for-want-of-memory-or-disk)
   defines the counters.
 - **Session limits**, a row in **Server › Admin**, for admins when the server
   answers `server.run_limits`: CPUs, memory in GiB and processes, empty
