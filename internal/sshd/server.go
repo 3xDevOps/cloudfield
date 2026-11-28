@@ -123,6 +123,9 @@ type Config struct {
 	// and admitted; under PolicyApprovedDevices, which empty selects, it
 	// waits until a person approves it.
 	EdgeAccess edgeproto.AccessPolicy
+	// ConfigPath is the server's options file, read again by server.edge
+	// for an edge-url set since the start; empty reads none.
+	ConfigPath string
 	// EdgeReviewer lets an admin bind the edge's reviewer account to a
 	// member who is no admin, and a connector authorized by signing in
 	// with it act as that member. False refuses both.
@@ -181,6 +184,11 @@ type Server struct {
 	// edgeOwner records ownership at the edge; nil while no edge agent
 	// runs. Guarded by mu.
 	edgeOwner EdgeOwner
+	// noticesErr is the last error reading the edge's stored notices,
+	// empty after a read that succeeded, so server.edge logs each once.
+	noticesErr atomic.Pointer[string]
+	// configErr is the same for reading the options file's edge-url.
+	configErr atomic.Pointer[string]
 	// tailnetDashboardURL and tailnetDashboardErr are what server.info
 	// reports as dashboard_url and tailnet_dashboard_error. Guarded by mu.
 	tailnetDashboardURL string

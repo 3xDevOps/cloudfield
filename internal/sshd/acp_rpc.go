@@ -183,7 +183,7 @@ func acpError(err error) *protocol.Error {
 		return &protocol.Error{Code: protocol.CodeNotFound, Message: err.Error()}
 	case errors.Is(err, acphost.ErrUnknownOption):
 		return invalidParams(err.Error())
-	case errors.Is(err, scheduler.ErrACPNotRunning), errors.Is(err, acphost.ErrClosed):
+	case errors.Is(err, scheduler.ErrACPNotRunning), errors.Is(err, scheduler.ErrAppServerUnavailable), errors.Is(err, acphost.ErrClosed):
 		return &protocol.Error{Code: protocol.CodeUnavailable, Message: err.Error()}
 	case errors.Is(err, control.ErrStale), errors.Is(err, control.ErrOccupied), errors.Is(err, control.ErrInvalidSession):
 		code, message := attachControlError(err)

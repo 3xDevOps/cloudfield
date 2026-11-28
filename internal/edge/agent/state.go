@@ -514,22 +514,24 @@ type StoredNotices struct {
 // pinned, they were verified for another server id, which is this server
 // before its host key changed, or they were stored under another pin
 // file, as when any build pinned a key since: notices.pin, the hard link
-// made when they were stored, must be the current pin file.
+// made when they were stored, must be the current pin file, before and
+// after the read. It takes no lock and creates nothing: notices are stored
+// only beside a link to the pin file that verified them, each by a rename.
 func (s *State) Notices(serverID string) (StoredNotices, error) {
-	unlock, err := s.lock()
-	if err != nil {
-		return StoredNotices{}, err
-	}
-	defer unlock()
-	cur, err := s.pinned()
+	// Held open, the pin file's inode cannot be reused between the checks.
+	cur, err := openPin(s.path(pinFile))
+	defer cur.close()
 	if err != nil || cur.Key == nil {
 		return StoredNotices{}, err
 	}
-	if !sameRegular(s.path(pinFile), cur.file) || !sameRegular(s.path(keyDirFile(cur.Key, noticesPinFile)), cur.file) {
+	bound := func() bool {
+		return sameRegular(s.path(pinFile), cur.file) && sameRegular(s.path(keyDirFile(cur.Key, noticesPinFile)), cur.file)
+	}
+	if !bound() {
 		return StoredNotices{}, nil
 	}
 	var n StoredNotices
-	if _, err = s.read(keyDirFile(cur.Key, noticesFile), &n); err != nil || n.ServerID != serverID {
+	if _, err = s.read(keyDirFile(cur.Key, noticesFile), &n); err != nil || n.ServerID != serverID || !bound() {
 		return StoredNotices{}, err
 	}
 	return n, nil
@@ -553,9 +555,6 @@ func (s *State) writeNotices(p pin, n StoredNotices) error {
 		return nil
 	}
 	name, link := keyDirFile(p.Key, noticesFile), keyDirFile(p.Key, noticesPinFile)
-	if err = s.forgetNotices(p.Key); err != nil {
-		return err
-	}
 	// Only this build writes them, under the lock: any left is a crash's.
 	dir := filepath.Dir(s.path(name))
 	entries, _ := os.ReadDir(dir)
@@ -563,6 +562,14 @@ func (s *State) writeNotices(p pin, n StoredNotices) error {
 		if e.Type().IsRegular() && noticesTemp.MatchString(e.Name()) {
 			_ = os.Remove(filepath.Join(dir, e.Name()))
 		}
+	}
+	// With the link already naming this pin file, replacing the list alone
+	// keeps a lock-free reader from seeing no notices in between.
+	if len(n.Notices) > 0 && sameRegular(s.path(link), p.file) {
+		return s.write(name, n)
+	}
+	if err = s.forgetNotices(p.Key); err != nil {
+		return err
 	}
 	if len(n.Notices) == 0 {
 		return nil

@@ -3,14 +3,20 @@ package edgetest
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	edgeagent "github.com/3xDevOps/cloudfield/internal/edge/agent"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	edge "github.com/3xDevOps/cloudfield/internal/edge/service"
 	"github.com/3xDevOps/cloudfield/internal/sshd"
 )
 
@@ -39,12 +45,12 @@ func TestEdgeMove(t *testing.T) {
 	}
 
 	unserved := "http://127.0.0.3:9"
-	_, err = moveAgent(t, s, relayA).Move(t.Context(), unserved)
+	_, err = moveHeld(t, s, relayA, unserved)
 	if want := fmt.Sprintf("the edge at %s announces the relay addresses %s; moving needs both %s and %s among them: the edge's operator adds the address first",
 		relayA, relayA, relayA, unserved); err == nil || err.Error() != want {
 		t.Errorf("move to an address the edge does not serve: %v, want %q", err, want)
 	}
-	_, err = moveAgent(t, s, relayA).Move(t.Context(), relayA)
+	_, err = moveHeld(t, s, relayA, relayA)
 	if want := "edge-url already is " + relayA; err == nil || err.Error() != want {
 		t.Errorf("move to the address in use: %v, want %q", err, want)
 	}
@@ -68,9 +74,9 @@ func TestEdgeMove(t *testing.T) {
 	// URL at the address the server is leaving.
 	universalA := universalAt(t, h, client, al, s, policy, h.signinURL, relayA)
 
-	to, err := moveAgent(t, s, relayA).Move(t.Context(), relayB)
-	if err != nil || to != relayB {
-		t.Fatalf("move to %s: %q, %v", relayB, to, err)
+	moved, err := moveHeld(t, s, relayA, relayB)
+	if err != nil || moved.To != relayB || moved.Retired || moved.Retiring {
+		t.Fatalf("move to %s: %+v, %v", relayB, moved, err)
 	}
 	// The probes replaced the running server's control connection; it
 	// dials A again until restarted with the new edge-url.
@@ -109,9 +115,9 @@ func TestEdgeMove(t *testing.T) {
 	atB := connectAt(t, h, client, al, s, relayB+edgeproto.MCPPath(s.id))
 	mustCall(t, baseA, before.AccessToken)
 
-	to, err = moveAgent(t, s, relayB).Move(t.Context(), relayA)
-	if err != nil || to != relayA {
-		t.Fatalf("move back to %s: %q, %v", relayA, to, err)
+	moved, err = moveHeld(t, s, relayB, relayA)
+	if err != nil || moved.To != relayA {
+		t.Fatalf("move back to %s: %+v, %v", relayA, moved, err)
 	}
 	backOnline(t, h, s)
 	s.edge = relayA
@@ -134,7 +140,7 @@ func TestEdgeMoveKeepsAPendingClaimCode(t *testing.T) {
 	s := h.newServer(edgeproto.PolicyAccount)
 	relayA, relayB := h.relayURL, h.relayB
 	code := s.claimCode(t, time.Now())
-	if _, err := moveAgent(t, s, relayA).Move(t.Context(), relayB); err != nil {
+	if _, err := moveHeld(t, s, relayA, relayB); err != nil {
 		t.Fatalf("move to %s: %v", relayB, err)
 	}
 	s.edge = relayB
@@ -164,7 +170,7 @@ func TestEdgeMoveRefusesBelowProtocol6(t *testing.T) {
 	h.pairB = true
 	h.startEdge()
 	backOnline(t, h, s)
-	_, err := moveAgent(t, s, relayA).Move(t.Context(), h.relayB)
+	_, err := moveHeld(t, s, relayA, h.relayB)
 	if want := fmt.Sprintf("%s speaks edge protocol 5; a server moved to %s would accept connector tokens only for that address, "+
 		"so connectors registered at %s would stop working. Moving needs edge protocol 6 or later: the edge's operator upgrades it",
 		relayA, h.relayB, relayA); err == nil || err.Error() != want {
@@ -191,7 +197,7 @@ func TestEdgeMoveRefusesAnotherEdge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = moveAgent(t, s, relayA).Move(t.Context(), other.relayURL)
+	_, err = moveHeld(t, s, relayA, other.relayURL)
 	want := fmt.Sprintf("%s presents edge key %s, but this server pinned %s for its edge at %s, which announced it: another edge answers there. "+
 		"edge move only changes the address of one edge; changing edges is in docs/edge.md#turning-it-on",
 		other.relayURL, edgeproto.EdgeKeyFingerprint(other.edgeKey().Public().(ed25519.PublicKey)), edgeproto.EdgeKeyFingerprint(pinned), relayA)
@@ -234,7 +240,7 @@ func TestEdgeMoveRefusesAMissingOrUnreachableAddress(t *testing.T) {
 			}
 			return e.msg, true
 		})
-		_, err := moveAgent(t, s, relayA).Move(t.Context(), unreachable)
+		_, err := moveHeld(t, s, relayA, unreachable)
 		if tc.want != nil && !tc.want(err) || tc.want == nil && (err == nil || err.Error() != tc.wantText) {
 			t.Errorf("announced %v: %v, want %q", tc.announced, err, tc.wantText)
 		}
@@ -288,11 +294,30 @@ func TestEdgeMoveChecksTheTargetToo(t *testing.T) {
 			}
 			return tc.tamper(e.msg), true
 		})
-		if _, err := moveAgent(t, s, relayA).Move(t.Context(), relayB); err == nil || err.Error() != tc.want {
+		if _, err := moveHeld(t, s, relayA, relayB); err == nil || err.Error() != tc.want {
 			t.Errorf("%s: %v, want %q", tc.name, err, tc.want)
 		}
 		backOnline(t, h, s)
 	}
+}
+
+// moveHeld runs edge move's agent at from over s's data directory under
+// the pin in place, as edge move does.
+func moveHeld(t *testing.T, s *serverNode, from, target string) (edgeagent.Moved, error) {
+	t.Helper()
+	held, err := edgeagent.OpenState(s.dir).HoldPin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	return moveAgent(t, s, from).Move(t.Context(), target, held, moveCommands)
+}
+
+// moveCommands spell the commands as an admin types them under sudo with
+// the default config file.
+var moveCommands = edgeagent.Commands{
+	Server:  func(args string) string { return "sudo cloudfield-server " + args },
+	Restart: "sudo systemctl restart aether-server",
 }
 
 // moveAgent is the agent `aether-server edge move` builds over s's data
@@ -308,4 +333,100 @@ func moveAgent(t *testing.T, s *serverNode, from string) *edgeagent.Agent {
 		t.Fatal(err)
 	}
 	return a
+}
+
+// A server whose edge-url answers the control dial with 410 moves to an
+// address of its edge whose own ready signs, with the edge key and for
+// this probe's nonce, that the old address is retired in favour of it.
+// Until pull request 3 the edge sends no retired notice, so the proxy
+// signs one with the edge's key, as the edge will; a 410 from someone
+// who holds the old host name but not the key moves nothing.
+func TestEdgeMoveFromARetiredAddress(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	s := h.newServer(edgeproto.PolicyAccount)
+	h.claimServer(h.login(alice)[0], s)
+	relayA := h.relayURL
+	hostA := strings.TrimPrefix(relayA, "http://")
+	gone := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusGone)
+		_ = json.NewEncoder(w).Encode(edgeproto.ErrorBody{Error: "retired; this edge is at " + relayA})
+	}))
+	t.Cleanup(gone.Close)
+	from := gone.URL
+	_, wrongKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signWith := func(key ed25519.PrivateKey, replacement string) {
+		var mu sync.Mutex
+		nonces := map[*controlLink][]byte{}
+		h.proxy.setTamper(t, func(e logEntry) (edgeproto.Message, bool) {
+			mu.Lock()
+			defer mu.Unlock()
+			switch m := e.msg.(type) {
+			case edgeproto.Hello:
+				nonces[e.link] = m.NoticeNonce
+			case edgeproto.Ready:
+				if e.link.host == hostA {
+					m.Notices = edgeproto.Notices{{State: edgeproto.NoticeRetired, Origin: from, Replacement: replacement}}
+					m.NoticesSignature = edgeproto.SignNotices(key, m.ServerID, relayA, nonces[e.link], m.Notices)
+					return m, true
+				}
+			}
+			return e.msg, true
+		})
+	}
+	refused := fmt.Sprintf("dial %s/v1/server/control: 410 Gone: retired; this edge is at %s; the edge at %s sends no notice signed with the pinned key "+
+		"that %s is retired, and a refusal alone does not show it, so nothing changed. If %s no longer answers for this edge: confirm %s and the edge key's fingerprint "+
+		"with whoever runs the edge, then run sudo cloudfield-server config set edge-url %s and sudo systemctl restart aether-server", from, relayA, relayA, from, from, relayA, relayA)
+
+	if _, err = moveHeld(t, s, from, relayA); err == nil || err.Error() != refused {
+		t.Errorf("a 410 alone: %v\nwant: %s", err, refused)
+	}
+	backOnline(t, h, s)
+	signWith(wrongKey, relayA)
+	if _, err = moveHeld(t, s, from, relayA); err == nil || err.Error() != refused {
+		t.Errorf("a notice signed with another key: %v\nwant: %s", err, refused)
+	}
+	backOnline(t, h, s)
+	signWith(h.edgeKey(), "http://127.0.0.3:9")
+	want := fmt.Sprintf("the edge at %s says, signed with the pinned key, that %s is retired in favour of http://127.0.0.3:9; "+
+		"move there instead: sudo cloudfield-server edge move http://127.0.0.3:9", relayA, from)
+	if _, err = moveHeld(t, s, from, relayA); err == nil || err.Error() != want {
+		t.Errorf("a notice naming another replacement: %v\nwant: %s", err, want)
+	}
+	backOnline(t, h, s)
+	signWith(h.edgeKey(), relayA)
+	moved, err := moveHeld(t, s, from, relayA)
+	if err != nil || moved.To != relayA || !moved.Retired {
+		t.Fatalf("move off the retired address: %+v, %v", moved, err)
+	}
+	backOnline(t, h, s)
+}
+
+// A target the edge itself marks retiring is refused with its
+// replacement, from the edge's own signed notice.
+func TestEdgeMoveRefusesARetiringTarget(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.stopEdge()
+	h.pairB = true
+	h.startEdge()
+	relayA, relayB := h.relayURL, h.relayB
+	h.stopEdge()
+	h.retiring = []edge.Retiring{{RelayOrigin: relayB, Replacement: relayA, Date: "2027-03-01"}}
+	h.startEdge()
+	s := h.newServer(edgeproto.PolicyAccount)
+	h.claimServer(h.login(alice)[0], s)
+	_, err := moveHeld(t, s, relayA, relayB)
+	if want := fmt.Sprintf("the edge says, signed with the pinned key, that %s is retiring on 2027-03-01 and names %s, where this server already is; nothing changed",
+		relayB, relayA); err == nil || err.Error() != want {
+		t.Errorf("move to a retiring address: %v\nwant: %s", err, want)
+	}
+	backOnline(t, h, s)
+	if st, _, err := s.state().Status(); err != nil || st.Edge != relayA {
+		t.Errorf("status names edge %q (%v), want %s", st.Edge, err, relayA)
+	}
 }
