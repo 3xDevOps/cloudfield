@@ -1,11 +1,11 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { AppShell } from '@/components/shell/app-shell'
 import { api } from '@/lib/api'
 import type { AttentionItem, RoomPostResult } from '@/lib/types'
 import { useAttention } from '@/routes/needs-you/attention'
 import { useStore } from '@/store'
 import { hydrate } from '@/store/sync'
-import { fakeApi, roomMessage, run, workspace } from '@/test/fixtures'
+import { fakeApi, roomMessage, run, serverInfo, workspace } from '@/test/fixtures'
 import { atViewport } from '@/test/viewport'
 
 Element.prototype.scrollIntoView = vi.fn()
@@ -118,5 +118,100 @@ describe('Needs you cards', () => {
     // A second tap could only be refused, so the answered card offers none.
     expect(await cards.findByText('Answered')).toBeDefined()
     expect(cards.queryByRole('button', { name: 'Decline' })).toBeNull()
+  })
+})
+
+describe('a retiring edge address', () => {
+  const edge = {
+    edge_url: 'https://edge-old.example.test', server_id: 'wqc4lsjvzdzrwq3k5dabdtajwj', access_policy: 'approved-devices' as const,
+    owner: null, connected: true, claimed: true,
+  }
+  const replacement = 'https://edge-new.example.test'
+
+  type Notice = { state: 'retiring' | 'retired'; replacement: string; date?: string; restart_pending?: boolean; moved_to?: string }
+  /** `later`, when given, is what the read on entering Needs you answers; a rejected promise is a failed read. */
+  async function show(role: 'super_admin' | 'collaborator', notice?: Notice, later?: () => Promise<typeof edge & { notice?: Notice }>) {
+    atViewport(390, { pointer: 'coarse' })
+    useStore.getState().setOnboarded(true)
+    await hydrate(useStore, fakeApi({
+      workspaceListFull: vi.fn(async () => [workspace]),
+      serverInfo: vi.fn(async () => ({ ...serverInfo, member: { ...serverInfo.member, role } })),
+      serverEdge: vi.fn(async () => ({ ...edge, notice })),
+    }))
+    expect(useStore.getState().edge?.notice).toEqual(notice)
+    const read = vi.spyOn(api, 'serverEdge').mockImplementation(later ?? (async () => ({ ...edge, notice })))
+    onTestFinished(() => read.mockRestore())
+    useStore.setState({ runs: {}, route: { name: 'needs-you', params: {} }, capabilities: { gateway: 'local', methods: ['*'], ws: ['events'], local: [] } })
+    const list = vi.spyOn(api, 'attentionList').mockResolvedValue({ items: [] })
+    onTestFinished(() => {
+      list.mockRestore()
+      useAttention.setState({ items: null })
+    })
+    render(<AppShell />)
+  }
+
+  it('asks a super admin to move the server, with the command', async () => {
+    await show('super_admin', { state: 'retiring', replacement, date: '2027-03-01' })
+    const card = (await screen.findByText('https://edge-old.example.test is retiring on 2027-03-01')).closest('[data-edge-notice]') as HTMLElement
+    expect(within(card).getByText(`sudo cloudfield-server edge move ${replacement}`)).toBeTruthy()
+    expect(within(card).getByText(`Move this server to ${replacement}, another address of the same edge. Run on the server's host, adding the service's --config <file> if it has one.`)).toBeTruthy()
+    expect(screen.queryByText('Nothing needs you')).toBeNull()
+    fireEvent.click(within(card).getByRole('button', { name: 'Remote access' }))
+    expect(useStore.getState().route).toEqual({ name: 'settings', params: { section: 'edge' } })
+  })
+
+  it('reads server.edge again on entering, so a notice that arrived since shows', async () => {
+    await show('super_admin', undefined, async () => ({ ...edge, notice: { state: 'retiring', replacement } }))
+    await screen.findByText('https://edge-old.example.test is retiring')
+    expect(api.serverEdge).toHaveBeenCalled()
+  })
+
+  it('keeps the last notice and offers Retry when the read on entering fails', async () => {
+    await show('super_admin', { state: 'retiring', replacement }, async () => {
+      throw new Error('server.edge: connection reset')
+    })
+    const alert = await screen.findByRole('alert')
+    expect(within(alert).getByText("Showing the last answer: reading the server's edge again failed")).toBeTruthy()
+    expect(within(alert).getByText('server.edge: connection reset')).toBeTruthy()
+    expect(screen.getByText('https://edge-old.example.test is retiring')).toBeTruthy()
+    expect(screen.queryByText('Nothing needs you')).toBeNull()
+    vi.mocked(api.serverEdge).mockResolvedValue({ ...edge })
+    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
+    await screen.findByText('Nothing needs you')
+    expect(document.querySelector('[data-edge-notice]')).toBeNull()
+  })
+
+  it('leaves a failed edge read to the banner while saved state shows', async () => {
+    await show('super_admin', { state: 'retiring', replacement }, async () => {
+      throw new Error('server.edge: connection reset')
+    })
+    await screen.findByRole('alert')
+    act(() => useStore.setState({ staleSince: 1 }))
+    expect(screen.queryByText("Showing the last answer: reading the server's edge again failed")).toBeNull()
+    expect(screen.getAllByRole('button', { name: 'Retry' })).toHaveLength(1)
+    expect(screen.getByText('https://edge-old.example.test is retiring')).toBeTruthy()
+  })
+
+  it('says to restart once the options file names the new address', async () => {
+    await show('super_admin', { state: 'retired', replacement, restart_pending: true, moved_to: replacement })
+    const card = (await screen.findByText('https://edge-old.example.test is retired')).closest('[data-edge-notice]') as HTMLElement
+    expect(within(card).getByText('sudo systemctl restart aether-server')).toBeTruthy()
+    expect(within(card).queryByText(/edge move/)).toBeNull()
+  })
+
+  it('shows a retired address the same way', async () => {
+    await show('super_admin', { state: 'retired', replacement })
+    const card = (await screen.findByText('https://edge-old.example.test is retired')).closest('[data-edge-notice]') as HTMLElement
+    expect(within(card).getByText(`sudo cloudfield-server edge move ${replacement}`)).toBeTruthy()
+  })
+
+  it.each([
+    ['a super admin with no notice', 'super_admin', undefined],
+    ['another member', 'collaborator', { state: 'retiring' as const, replacement }],
+  ] as const)('shows nothing to %s', async (_, role, notice) => {
+    await show(role, notice)
+    await screen.findByText('Nothing needs you')
+    expect(document.querySelector('[data-edge-notice]')).toBeNull()
+    expect(screen.queryByText(/cloudfield-server/)).toBeNull()
   })
 })

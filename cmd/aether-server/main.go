@@ -254,6 +254,8 @@ run "cloudfield-server serve -h" for what each one does, or keep them in %s
 }
 
 type serveOptions struct {
+	// config is the config file as loadOptions read it, before flags.
+	config               map[string]string
 	dataDir              *string
 	addr                 *string
 	webPort              *int
@@ -363,7 +365,7 @@ func serve(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	from, configErr := applyConfigFile(fs, *configPath, *configPath == serversetup.DefaultConfigPath)
+	_, from, configErr := applyConfigFile(fs, *configPath, *configPath == serversetup.DefaultConfigPath)
 	if configErr != nil {
 		return configErr
 	}
@@ -415,6 +417,7 @@ func serve(args []string) error {
 		EdgeURL:      string(*o.edgeURL),
 		EdgeAccess:   edgeproto.AccessPolicy(*o.edgeAccess),
 		EdgeReviewer: *o.edgeReviewer,
+		ConfigPath:   *configPath,
 
 		CoordinationDisabled: !*o.conflictCoordination,
 
@@ -524,21 +527,21 @@ func commitWhenServing(ctx context.Context, srv *server.Server, trial *serverupd
 // flag always wins. optional tolerates a missing file, which is the case for
 // the default path - the shipped unit names it, and an install that never
 // wrote a config runs on the flag defaults. Anywhere else a missing file is
-// a typo worth stopping for. It returns the suffix the startup line uses to
-// name the file that is live.
-func applyConfigFile(fs *flag.FlagSet, path string, optional bool) (string, error) {
+// a typo worth stopping for. It returns the values it read and the suffix
+// the startup line uses to name the file that is live.
+func applyConfigFile(fs *flag.FlagSet, path string, optional bool) (map[string]string, string, error) {
 	if !optional {
 		if _, err := os.Stat(path); err != nil {
-			return "", fmt.Errorf("--config: %w", err)
+			return nil, "", fmt.Errorf("--config: %w", err)
 		}
 	}
 	values, err := serversetup.Load(path)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	retired, err := serversetup.Apply(fs, values)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	// A key left over from a removed feature is worth saying out loud once
 	// - the operator set it deliberately and it is no longer doing
@@ -547,9 +550,9 @@ func applyConfigFile(fs *flag.FlagSet, path string, optional bool) (string, erro
 		slog.Warn("config: option no longer exists and is ignored", "option", key, "file", path)
 	}
 	if len(values) == 0 {
-		return "", nil
+		return values, "", nil
 	}
-	return " from " + path, nil
+	return values, " from " + path, nil
 }
 
 // linkSecondNames gives this binary, the aether beside it and, as root,
