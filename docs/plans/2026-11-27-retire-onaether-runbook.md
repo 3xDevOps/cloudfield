@@ -104,7 +104,7 @@ edge_settings() {
     | ("SIGNIN_ORIGIN RELAY_ORIGIN GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET_FILE ORIGIN_PAIRS RETIRING_PAIRS RETIRED_PAIRS DATA METRICS_LISTEN" / " ") as $allow
     | ($allow[] | . as $n | ($e["CLOUDFIELD_EDGE_" + $n] // "") as $new | ($e["AETHER_EDGE_" + $n] // "") as $old
        | "\($n) = \(if $new != "" then $new else $old end)"
-         + (if $new != "" and $new != $old then "  (from CLOUDFIELD_EDGE_\($n); AETHER_EDGE_\($n) = \($old))" else "" end)),
+         + (if $new != "" then "  (from CLOUDFIELD_EDGE_\($n); AETHER_EDGE_\($n) = \($old))" else "" end)),
       "other edge variables set, names only: \([$e | keys[] | select(test("^(CLOUDFIELD|AETHER)_EDGE_")) | select(sub("^(CLOUDFIELD|AETHER)_EDGE_"; "") as $n | $allow | index($n) | not)] | join(" "))"'
 }
 
@@ -153,8 +153,8 @@ The edge's variables can hold one secret inline,
 which is a secret, and only the name of any other. For each option the
 edge uses the `CLOUDFIELD_EDGE_<NAME>` variable when it is not empty, else
 `AETHER_EDGE_<NAME>`, without a warning when both are set
-(`internal/envname`); the helper prints the value in effect and marks one
-that comes from a `CLOUDFIELD_EDGE_` name. `healthcheck --ready --json`
+(`internal/envname`); the helper prints the value in effect and marks
+every one that comes from a `CLOUDFIELD_EDGE_` name, equal or not. `healthcheck --ready --json`
 prints its report also when the edge is not ready, so `ready` prints a
 count only when the command exits 0 and the report says `ready`, as the
 updater checks it.
@@ -162,7 +162,9 @@ updater checks it.
 **Change the settings.** Steps 5, 16 and 17 run this in an open window,
 with `<n>` the step's number:
 
-1. Note the count before: `before=$(ready); echo "$before"`.
+1. Note the count before: `before=$(ready) && echo "$before"`. It must
+   print a number. If it prints nothing the edge is not ready: stop and
+   find out why before changing anything.
 2. Copy the file and edit the copy, never `compose.yaml` itself:
    `cp -a "$EDGE_FILE" "$EDGE_NEXT"`, then the step's lines in
    `$EDGE_NEXT`.
@@ -178,13 +180,15 @@ with `<n>` the step's number:
 4. Install the file and start it, keeping the old file as the undo:
 
    ```sh
-   cp -a "$EDGE_FILE" "$EDGE_FILE.before-step-<n>"
-   mv "$EDGE_NEXT" "$EDGE_FILE"
+   [ -e "$EDGE_FILE.before-step-<n>" ] || cp -a "$EDGE_FILE" "$EDGE_FILE.before-step-<n>"
+   sync "$EDGE_NEXT" && mv "$EDGE_NEXT" "$EDGE_FILE"
    dc "$EDGE_FILE" up -d --wait --wait-timeout 180 aether-edge; echo "up exited $?"
    docker inspect aether-edge --format '{{.Created}} {{.State.Status}} {{.RestartCount}}'
    ```
 
-   Expect `up exited 0` and `<a time after the mv> running 0`. Compose made
+   The first line keeps the file from before the step's first attempt: a
+   second attempt after a refused start does not overwrite it. Expect
+   `up exited 0` and `<a time after the mv> running 0`. Compose made
    a new container for the changed settings, so `docker logs aether-edge`
    holds this start only, and `0` says it started once. `--wait` waits for
    the image's health check, which is liveness only.
@@ -210,8 +214,9 @@ container again as it was last created, whatever `compose.yaml` holds;
 `Persistent=true`, runs the updater for a 04:00 UTC window missed while
 the host was off, after up to an hour's random delay. That run starts
 whatever `compose.yaml` holds, but only if `stable` has a new release.
-Because step 4 of the procedure installs the file with one `mv`, the file
-is the old one or the new one, never half of an edit. After a reboot, open
+Because step 4 of the procedure syncs the new file and installs it with
+one `mv`, as the updater does, the file is the old one or the new one,
+never half of an edit. After a reboot, open
 a window at once and run `diff <(running) <(proposed "$EDGE_FILE")`: if it
 is not empty, the new file was installed and not started; go on from the
 `dc ... up` line, or restore the old file.
@@ -356,7 +361,8 @@ not apply as written.
 
   Expect `no origin pairs recorded: the edge records them from its first
   start with an option that retires a pair`, or `nothing is recorded yet:
-  ...` on a release without the code. Step 5 is then the first recording.
+  ...`. Step 5 is then the first recording. `aether-edge: unknown command
+  "retiring"` is a release from before the report: step 1 is not done.
 
 Close the window.
 
