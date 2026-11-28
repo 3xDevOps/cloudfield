@@ -87,8 +87,10 @@ export function ScheduleEditor({
               const repeat = value as Repeat
               const typed = readRule(plan.rule, plan.zone)
               // A rule typed in Cron carries into the fields when they can show it; one only Cron can show stays there.
-              if (plan.repeat === 'cron' && typedCron && plan.rule.trim() && typed.repeat !== 'cron') setPlan({ ...typed, repeat, rule: plan.rule })
-              else set(repeat === 'cron' && ready && typed.repeat !== 'cron' ? { repeat, rule } : { repeat })
+              if (plan.repeat === 'cron' && typedCron && plan.rule.trim() && typed.repeat !== 'cron') {
+                setPlan({ ...typed, repeat, rule: plan.rule })
+                setZoneLeft(true)
+              } else set(repeat === 'cron' && ready && typed.repeat !== 'cron' ? { repeat, rule } : { repeat })
               setTypedCron(false)
             }}
           >
@@ -153,7 +155,15 @@ export function ScheduleEditor({
               <FormField
                 label="Time zone"
                 help="An IANA zone, such as Europe/Berlin."
-                error={zoneLeft && !zone ? (plan.zone.trim() ? 'Not an IANA zone name. Check the spelling.' : 'Enter a time zone.') : undefined}
+                error={
+                  zoneLeft && !zone
+                    ? !plan.zone.trim()
+                      ? 'Enter a time zone.'
+                      : plan.zone.includes('/')
+                        ? 'Not an IANA zone name. Check the spelling.'
+                        : 'Use a full zone name such as America/Los_Angeles, not an abbreviation.'
+                    : undefined
+                }
                 className="min-w-0 flex-1 basis-40"
               >
                 <Input required value={plan.zone} spellCheck={false} list={`${id}-zones`} onBlur={() => setZoneLeft(true)} onKeyDown={(e) => e.key === 'Enter' && setZoneLeft(true)} onChange={(e) => set({ zone: e.target.value })} />

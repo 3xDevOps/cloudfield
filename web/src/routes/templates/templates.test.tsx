@@ -296,6 +296,27 @@ describe('templates view', () => {
     expect(dialog.getByRole('checkbox', { name: 'Thursday' }).getAttribute('aria-checked')).toBe('true')
   })
 
+  it('keeps the fields when the cron box was cleared, and says why an abbreviation carried from cron is refused', async () => {
+    const client = fakeApi({ scheduleList: vi.fn(async () => []) })
+    seed()
+    render(<Templates client={client} />)
+
+    await rowAction('Schedule')
+    const dialog = within(await screen.findByRole('dialog', { name: `Schedule ${template.name}` }))
+    fireEvent.click(dialog.getByRole('radio', { name: 'Weekly' }))
+    fireEvent.click(dialog.getByRole('checkbox', { name: 'Thursday' }))
+    fireEvent.click(dialog.getByRole('radio', { name: 'Cron' }))
+    fireEvent.change(dialog.getByLabelText('Cron rule'), { target: { value: '' } })
+    fireEvent.click(dialog.getByRole('radio', { name: 'Weekly' }))
+    expect(dialog.getByRole('checkbox', { name: 'Thursday' }).getAttribute('aria-checked')).toBe('true')
+
+    fireEvent.click(dialog.getByRole('radio', { name: 'Cron' }))
+    fireEvent.change(dialog.getByLabelText('Cron rule'), { target: { value: 'CRON_TZ=EST 0 9 * * 1-5' } })
+    fireEvent.click(dialog.getByRole('radio', { name: 'Weekly' }))
+    expect(dialog.getByText('Use a full zone name such as America/Los_Angeles, not an abbreviation.')).toBeDefined()
+    expect(dialog.getByRole('button', { name: 'Schedule' }).hasAttribute('disabled')).toBe(true)
+  })
+
   it('fills cron with the rule the picker makes', async () => {
     const client = fakeApi({ scheduleList: vi.fn(async () => []) })
     seed()

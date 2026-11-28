@@ -6509,9 +6509,12 @@ has no prefix. The rule keeps the zone the server already took; any other
 Area/Location name is saved in the browser's canonical spelling, which
 Go's zone database loads (`europe/berlin` saves as `Europe/Berlin`).
 Abbreviations such as `BST` are refused, since `Intl` maps them to
-surprising zones, and so is a name `Intl` does not take: Save is disabled
-and, once the field is left, it says "Not an IANA zone name. Check the
-spelling." Cron takes the rule as text and is where a rule the fields
+surprising zones ("Use a full zone name such as America/Los_Angeles, not
+an abbreviation."), and so is a name `Intl` does not take ("Not an IANA
+zone name. Check the spelling."). Save is disabled at once; the message
+shows when the field is left or Enter is pressed in it, when the editor
+opens with a refused zone, and when a rule carried from Cron brings one.
+Cron takes the rule as text and is where a rule the fields
 cannot show exactly opens. Switching to Cron fills in the rule the fields
 made, unless Cron holds a rule only it can show, and a rule typed in Cron
 carries back into the fields when they can show it. While the

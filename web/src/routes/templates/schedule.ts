@@ -36,7 +36,7 @@ function weekdays(field: string): number[] | null {
 }
 
 // Intl lists canonical zones only, which leaves out UTC.
-export const zones = ['UTC', ...Intl.supportedValuesOf('timeZone')]
+export const zones = ['UTC', ...Intl.supportedValuesOf('timeZone').filter((zone) => zone.includes('/'))]
 
 /**
  * The zone to save: `kept`, the zone the server already took, as is;

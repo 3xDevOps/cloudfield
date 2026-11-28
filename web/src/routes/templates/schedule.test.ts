@@ -35,6 +35,7 @@ describe('schedule rules', () => {
 
   it('keeps the zone the server took, saves any other Area/Location name in the browser spelling, and refuses abbreviations', () => {
     expect(zoneName('Asia/Kolkata', 'Asia/Kolkata')).toBe('Asia/Kolkata')
+    expect(zoneName('EST', 'EST')).toBe('EST')
     expect(zoneName(' europe/berlin ', '')).toBe('Europe/Berlin')
     expect(zoneName('utc', '')).toBe('UTC')
     expect(zoneName('PST', '')).toBeNull()
