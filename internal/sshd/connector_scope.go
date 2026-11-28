@@ -129,7 +129,7 @@ func scopeRefusal(id connIdentity, method string, scopes []string) *protocol.Err
 		boxes[i] = scopeBox[s]
 	}
 	return &protocol.Error{Code: protocol.CodeDenied, Message: fmt.Sprintf(
-		"%s needs the %s scope, which %s was not granted; select Reconnect next to it in Settings → ChatGPT and Claude and check %s on the consent page",
+		"%s needs the %s scope, which %s was not granted; select Reconnect next to it in Settings → Connections → ChatGPT and Claude and check %s on the consent page",
 		method, strings.Join(scopes, " or "), ConnectorLabel(id.connectorClient, id.connector), strings.Join(boxes, " or "))}
 }
 

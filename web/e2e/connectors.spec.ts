@@ -1,6 +1,5 @@
 // A server with no edge cannot mint a connector code; Settings, reached from
-// the palette, says so before a code and then shows the server's own error,
-// as aether mcp prints it.
+// the palette, links to the edge setup guide before offering connector setup.
 
 import { expect, test } from './fixtures'
 
@@ -14,13 +13,10 @@ test('Settings shows why this server cannot connect ChatGPT or Claude', async ({
   const section = page.locator('#connectors')
   await expect(section).toBeInViewport()
   await expect(section.getByText('No connectors yet')).toBeVisible()
-  await expect(section.getByText('This server has no edge')).toBeVisible()
-  await section.getByRole('tab', { name: 'Claude' }).click()
-  await expect(section.getByRole('link', { name: 'Claude connectors' })).toBeVisible()
-  await section.getByRole('button', { name: 'Get a code' }).click()
-  const alert = section.getByRole('alert')
-  await expect(alert).toContainText('this server has no edge (edge-url is empty)')
-  await expect(alert.getByRole('link', { name: 'Edge guide' })).toBeVisible()
+  const unavailable = section.locator('[data-slot=callout]').filter({ hasText: 'This server has no edge' })
+  await expect(unavailable.getByRole('link', { name: 'Edge guide' })).toBeVisible()
+  await expect(section.getByRole('button', { name: 'Get a code' })).toHaveCount(0)
+  await expect(section.getByRole('link', { name: 'ChatGPT Plugins' })).toHaveCount(0)
 })
 
 // Under edge-access account with a GitHub account linked, connector.list
@@ -46,16 +42,21 @@ test('Settings shows the universal URL without a code and offers to move an olde
     minted.push(route.request().url())
     return route.fallback()
   })
-  await page.goto(`${alice.url}&page=settings&id=connectors`)
+  await page.goto(`${alice.url}&page=settings`)
+  await page.getByRole('navigation', { name: 'Settings' }).getByRole('button', { name: 'Connections' }).click()
   const section = page.locator('#connectors')
-  await expect(section.getByText(universal, { exact: true })).toBeVisible()
-  await expect(section.getByText(/Install Aether from the ChatGPT directory where it is listed/)).toBeVisible()
+  await expect(section.getByRole('button', { name: `Copy ${universal}` })).toBeVisible()
+  await expect(section.getByText('Server URL', { exact: true })).toBeVisible()
+  await expect(section.getByText('Cloudfield', { exact: true }).first()).toBeVisible()
+  await expect(section.getByRole('link', { name: 'ChatGPT Plugins' })).toHaveAttribute('href', 'https://chatgpt.com/plugins')
+  await expect(section.getByText('Create as a plugin', { exact: true })).toBeVisible()
+  await expect(section.getByText('Work', { exact: true })).toBeVisible()
   await expect(section.getByText(/No code is needed/)).toBeVisible()
   await expect(section.getByRole('button', { name: 'Get a code' })).toHaveCount(0)
   await expect(section.getByText(own)).toBeVisible()
   await section.getByRole('button', { name: 'Move ChatGPT (chatgpt.com) to the universal URL' }).click()
   const dialog = page.getByRole('alertdialog')
-  await expect(dialog).toContainText(`Add Aether again in ChatGPT with ${universal} and sign in. Once the new connection calls Cloudfield, this connector is revoked`)
+  await expect(dialog).toContainText(`Add Cloudfield again in ChatGPT with ${universal} and sign in. Once the new connection calls Cloudfield, this connector is revoked`)
   await dialog.getByRole('button', { name: 'Move' }).click()
   await expect(section.getByText('Waiting for ChatGPT to connect…')).toBeVisible()
   expect(minted).toEqual([])

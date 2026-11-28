@@ -35,11 +35,12 @@ server hosts the connector endpoint and signs you in.
 
 ## Get the URL
 
-In the app, open **Settings → ChatGPT and Claude**, or pick **Connect ChatGPT
-or Claude** in the command palette (Ctrl+K or ⌘K). The link
+In the app, open **Settings → Connections → ChatGPT and Claude**, or pick
+**Connect ChatGPT or Claude** in the command palette (Ctrl+K or ⌘K). The link
 `?page=settings&id=connectors` opens the same section, and the last onboarding
-step links to it. Pick **ChatGPT** or **Claude** for that app's steps. The
-section shows the URL at once. What the third step asks depends on the server's
+step links to it. If the server has no edge, the section links to the edge
+setup guide. Otherwise pick **ChatGPT** or **Claude** for that app's steps.
+How you sign in depends on the server's
 [`edge-access`](edge.md#access-policies) policy:
 
 - `account`, with a GitHub account linked to you: no code. The page that opens
@@ -121,24 +122,26 @@ then `sudo systemctl restart aether-server`
 
 ## Add it in ChatGPT
 
-Custom MCP servers are added on the web only, at chatgpt.com
-([OpenAI: custom MCP servers](https://developers.openai.com/api/docs/guides/custom-mcp-server)):
+Use ChatGPT on the web. Your account and workspace must allow custom MCP servers
+([OpenAI: add a custom MCP server](https://developers.openai.com/api/docs/guides/custom-mcp-server)).
 
-1. Open [ChatGPT Plugins](https://chatgpt.com/plugins).
-2. Select the plus button, then **Add custom MCP server**.
-3. Name it `Aether`, paste the URL from `cloudfield mcp` as the server URL
-   (if it starts with `https://edge.onaether.dev`, apply
-   [Older edge address](#older-edge-address) first), and choose **OAuth**.
-4. Select **Create as a plugin**, then install it.
-5. On the [universal URL](#the-universal-url), the edge's page opens: sign in
-   with GitHub and select **Continue with <server>**. A page from your server
-   opens: **Connect ChatGPT (chatgpt.com) to <server>**. Paste the code if it
-   asks for one, choose its [scopes](#scopes) and select **Allow**.
-
-As of October 2026, OpenAI says write tools need ChatGPT Business or
-Enterprise/Edu. Pro gets the read tools only
-([OpenAI help center](https://help.openai.com/en/articles/12584461)). The
-plugin then works in ChatGPT on the web, desktop and mobile.
+1. Open [ChatGPT Plugins](https://chatgpt.com/plugins). Select the plus button,
+   then **Add custom MCP server**.
+2. Name it `Cloudfield`. Under **Connection**, paste the URL from
+   **Settings → Connections → ChatGPT and Claude** or `cloudfield mcp` into
+   **Server URL** (see [Older edge address](#older-edge-address) if it starts with
+   `https://edge.onaether.dev`). Select **OAuth** for authentication. If ChatGPT
+   asks how to register the OAuth client, choose the client ID metadata
+   document (CIMD) option.
+   Review the risk warning, select **I understand and want to continue**, then
+   select **Create as a plugin**. Open the plugin and select the plus button
+   to install it.
+3. Switch to **Work** in ChatGPT and start a new chat. Type `@`, select
+   **Cloudfield** and ask “What needs me in Cloudfield?”
+4. When ChatGPT asks you to connect, follow the prompt to Cloudfield. At the
+   [universal URL](#the-universal-url), sign in with GitHub and select
+   **Continue with <server>**. On the server's consent page, paste a pairing
+   code if prompted, choose its [scopes](#scopes) and select **Allow**.
 
 ## Add it in Claude
 
@@ -146,7 +149,7 @@ On claude.ai
 ([Anthropic: add a custom connector](https://claude.com/docs/connectors/custom/add-unlisted)):
 
 1. Free, Pro and Max: open **Customize → Connectors**, select **Add custom
-   connector**, name it `Aether`, paste the URL from `cloudfield mcp` (if it
+   connector**, name it `Cloudfield`, paste the URL from `cloudfield mcp` (if it
    starts with `https://edge.onaether.dev`, apply
    [Older edge address](#older-edge-address) first), leave **Advanced
    settings** empty and select **Add**. Free allows one custom connector.
@@ -182,7 +185,7 @@ the server's [`edge-access`](edge.md#access-policies) policy:
   with the [scopes](#scopes) and no code. Signing in at the edge already
   admits you there.
 - `approved-devices`: the page asks for the code. Paste the code from
-  **Settings → ChatGPT and Claude** in the app, or `cloudfield mcp`.
+  **Settings → Connections → ChatGPT and Claude** in the app, or `cloudfield mcp`.
 
 **Continue** posts the edge's signed statement that your GitHub account chose
 this server to the edge, never in a URL. The server binds it to the first
@@ -217,7 +220,7 @@ starts a new connection: add Cloudfield again in the app with the universal URL
 Settings revokes the old connector once a new one from the same client, such as
 ChatGPT or Claude, connects at the universal URL and calls Cloudfield. If none
 calls within 10 minutes, it leaves the old one and says so. Remove the old
-Aether connector in ChatGPT or Claude yourself. From a terminal, connect again at the
+connector in ChatGPT or Claude. From a terminal, connect again at the
 universal URL, then run `cloudfield mcp revoke <old id>`.
 
 ### Self-hosted and custom edges
@@ -282,7 +285,7 @@ completing any other live session ends it. Every other method, such as
 connector:
 
 ```
-run.kill needs the control scope, which ChatGPT connector con-7k2m9q4xbd was not granted; select Reconnect next to it in Settings → ChatGPT and Claude and check Stop and approve on the consent page
+run.kill needs the control scope, which ChatGPT connector con-7k2m9q4xbd was not granted; select Reconnect next to it in Settings → Connections → ChatGPT and Claude and check Stop and approve on the consent page
 member.role: ChatGPT connector con-7k2m9q4xbd cannot call this method; no connector can, so use the Cloudfield app or the aether CLI
 ```
 
@@ -827,7 +830,8 @@ keep their id, so only super admins see them.
 
 ## Revoke a connector
 
-Select **Revoke** next to it in **Settings → ChatGPT and Claude**, or run:
+Select **Revoke** next to it in **Settings → Connections → ChatGPT and Claude**,
+or run:
 
 ```sh
 cloudfield mcp revoke con-7k2m9q4xbd
@@ -881,7 +885,7 @@ On the page that opens when you connect:
 
 | Message | Cause |
 | --- | --- |
-| `That code is wrong, expired or already used. Get a new one from Settings → ChatGPT and Claude in the Cloudfield app, or aether mcp, and paste it here.` | The code is not live. A server restart also forgets codes |
+| `That code is wrong, expired or already used. Get a new one from Settings → Connections → ChatGPT and Claude in the Cloudfield app, or aether mcp, and paste it here.` | The code is not live. A server restart also forgets codes |
 | `10 wrong codes came from your address in the last minute. Wait a minute, then paste the code again.` | 10 wrong codes in a minute from your address (your IPv6 /64). Other addresses are not affected |
 | `300 wrong codes came to this server from all addresses in the last minute. Wait a minute, then paste the code again.` | Someone is guessing codes from many addresses. Pairing resumes a minute after the guessing stops |
 | `Cloudfield connectors work with ChatGPT and Claude; <host> is not one of them.` | Only `chatgpt.com` and `claude.ai` can connect |

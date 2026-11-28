@@ -80,7 +80,7 @@ func TestConnectorScopesGateEachMethod(t *testing.T) {
 	}{
 		{"read scope reads", connector(read), protocol.MethodRunGet, run, ""},
 		{"read scope cannot write", connector(read), protocol.MethodRunPause, run,
-			"run.pause needs the write scope, which ChatGPT connector con-test was not granted; select Reconnect next to it in Settings → ChatGPT and Claude and check Launch and message on the consent page"},
+			"run.pause needs the write scope, which ChatGPT connector con-test was not granted; select Reconnect next to it in Settings → Connections → ChatGPT and Claude and check Launch and message on the consent page"},
 		{"read scope cannot launch", connector(read), protocol.MethodRunLaunch, json.RawMessage(`{}`), "run.launch needs the write scope"},
 		{"read scope cannot stop", connector(read), protocol.MethodRunKill, run, "run.kill needs the control scope"},
 		{"write scope writes", connector(write), protocol.MethodRunPause, run, ""},
@@ -150,7 +150,7 @@ func TestConnectorAnswerNeedsTheRequestsScope(t *testing.T) {
 		{"read cannot answer", connector(), "ask", "run.input.respond needs the write or control scope"},
 		{"write answers a question", connector(ConnectorScopeWrite), "ask", ""},
 		{"write cannot decide a permission", connector(ConnectorScopeWrite), "perm",
-			"run.input.respond needs the control scope, which ChatGPT connector con-test was not granted; select Reconnect next to it in Settings → ChatGPT and Claude and check Stop and approve on the consent page"},
+			"run.input.respond needs the control scope, which ChatGPT connector con-test was not granted; select Reconnect next to it in Settings → Connections → ChatGPT and Claude and check Stop and approve on the consent page"},
 		{"control decides a permission", connector(ConnectorScopeControl), "perm", ""},
 		{"control cannot answer a question", connector(ConnectorScopeControl), "ask", "run.input.respond needs the write scope"},
 		{"dashboard decides a permission", e.srv.Local(e.member.ID), "perm", ""},
