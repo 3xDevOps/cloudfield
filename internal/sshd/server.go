@@ -220,8 +220,10 @@ type Server struct {
 	// cannot acquire a replacement lock and recreate removed resources.
 	workspaceLocksMu sync.Mutex
 	workspaceLocks   map[domain.WorkspaceID]*sync.RWMutex
-	launchKeysMu     sync.Mutex
-	launchKeys       map[launchKey]*launchKeyLock
+	// launchRoom carries RoomAppeared to dispatchLaunchIntents.
+	launchRoom   chan struct{}
+	launchKeysMu sync.Mutex
+	launchKeys   map[launchKey]*launchKeyLock
 
 	// environmentMu makes workspace.environment.set's read, merge and write
 	// of the workspace row and its secret file one step, also for
@@ -324,6 +326,7 @@ func New(cfg Config) (*Server, error) {
 		controlAttaches:  make(map[string]map[string]controlAttach),
 		runSSHConns:      make(map[domain.RunID]map[domain.MemberID]int),
 		baseCtx:          context.Background(),
+		launchRoom:       make(chan struct{}, 1),
 	}
 	sc := &ssh.ServerConfig{PublicKeyCallback: s.authenticate}
 	if cfg.WhoIs != nil {

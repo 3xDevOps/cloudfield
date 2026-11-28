@@ -43,8 +43,11 @@ type LaunchIntent struct {
 	// Base is the workspace base captured when the launch began to wait;
 	// the session starts from it.
 	Base LaunchBase
-	// Via is the client the request came through.
-	Via   string
+	// Via is the client the request came through, and Connector the
+	// connector it came through, if one: a try runs as that connector, and
+	// one removed since ends the launch refused.
+	Via       string
+	Connector string
 	State LaunchIntentState
 	// Refusal is the last refusal, as the caller got it; for a final state
 	// that is not started, why it ended.

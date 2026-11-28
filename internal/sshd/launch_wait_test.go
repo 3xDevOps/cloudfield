@@ -257,3 +257,24 @@ func TestWaitingLaunchesAreCappedPerMember(t *testing.T) {
 		t.Fatalf("another member's launch = %+v, %v; want it waiting", w, perr)
 	}
 }
+
+// A launch asked for through a connector that was removed while it waited
+// does not start.
+func TestAWaitingLaunchOfARemovedConnectorDoesNotStart(t *testing.T) {
+	e := newWaitEnv(t)
+	in, _, err := e.db.CreateLaunchIntent(t.Context(), &domain.LaunchIntent{
+		MemberID: e.member.ID, WorkspaceID: e.ws.ID, Method: protocol.MethodRunLaunch,
+		Params: []byte(fmt.Sprintf(`{"workspace_id":%q,"harness":"claude","task":"from a connector"}`, e.ws.ID)),
+		Via:    "ChatGPT", Connector: "con-removed", Refusal: errTestNoRoom.Error(),
+	}, maxWaitingLaunches)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.setRoom(true)
+	tried := e.launches()
+	e.srv.startWaitingLaunches(t.Context(), time.Now().Add(launchRetryEvery))
+	got := e.intent(string(in.ID))
+	if got.State != domain.IntentRefused || !strings.Contains(got.Refusal, "connector") || e.launches() != tried {
+		t.Fatalf("a waiting launch whose connector was removed = %+v, tried %d times; want it refused untried", got, e.launches()-tried)
+	}
+}

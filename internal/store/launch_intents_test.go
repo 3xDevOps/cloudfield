@@ -14,7 +14,7 @@ func waitingIntent(t *testing.T, db *DB, w *domain.Workspace, m *domain.Member, 
 	in, existing, err := db.CreateLaunchIntent(context.Background(), &domain.LaunchIntent{
 		MemberID: m.ID, WorkspaceID: w.ID, IdempotencyKey: key, Method: "run.launch", Params: []byte(`{"task":"wait"}`),
 		Base: domain.LaunchBase{Commit: "0123456789abcdef0123456789abcdef01234567", Branch: "main", Source: "origin", CheckedAt: time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)},
-		Via: "chatgpt", Refusal: "no room",
+		Via:  "chatgpt", Refusal: "no room",
 	}, 8)
 	if err != nil || existing {
 		t.Fatalf("CreateLaunchIntent = %+v, existing %v, %v", in, existing, err)

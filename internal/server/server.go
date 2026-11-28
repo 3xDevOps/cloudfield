@@ -807,6 +807,11 @@ func (s *Server) Run(ctx context.Context) error {
 			s.edge.Run(runCtx)
 		}()
 	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.offerRoom(runCtx)
+	}()
 	if s.web != nil {
 		// Nor does the dashboard, and SSH does not wait on its
 		// certificate fetch.
@@ -926,4 +931,18 @@ func (s *Server) Close() error {
 		s.closeErr = errors.Join(errs...)
 	})
 	return s.closeErr
+}
+
+// offerRoom tells the SSH server, which starts the launches that wait for
+// room, whenever a session's status or sleep changes or one is deleted:
+// each can free memory or disk.
+func (s *Server) offerRoom(ctx context.Context) {
+	sub, err := s.bus.Subscribe(ctx, events.SubscribeOptions{Filter: events.Filter{Types: []events.Type{events.TypeRunStatus, events.TypeRunSleep, events.TypeRunDeleted}}})
+	if err != nil {
+		slog.Warn("server: subscribe to session status; waiting launches are tried on the clock only", "error", err)
+		return
+	}
+	for range sub.Events() {
+		s.ssh.RoomAppeared()
+	}
 }

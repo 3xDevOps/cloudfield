@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
-	"github.com/3xDevOps/cloudfield/internal/events"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 	"github.com/3xDevOps/cloudfield/internal/scheduler"
 	"github.com/3xDevOps/cloudfield/internal/store"
@@ -75,9 +74,10 @@ func (s *Server) waitForRoom(ctx context.Context, member domain.MemberID, key st
 	if err != nil {
 		return nil, rpcError(err)
 	}
+	id, _ := ctx.Value(connIdentityKey{}).(connIdentity)
 	in, existing, err := s.cfg.Store.CreateLaunchIntent(ctx, &domain.LaunchIntent{
 		MemberID: member, WorkspaceID: domain.WorkspaceID(p.WorkspaceID), IdempotencyKey: key, Method: protocol.MethodRunLaunch, Params: params,
-		Base: base, Via: domain.ViaFrom(ctx), Refusal: refusal.Error(),
+		Base: base, Via: domain.ViaFrom(ctx), Connector: id.connector, Refusal: refusal.Error(),
 	}, maxWaitingLaunches)
 	if errors.Is(err, store.ErrTooManyWaiting) {
 		return nil, rpcError(refusal)
@@ -212,9 +212,18 @@ func (s *Server) launchEnded(ctx context.Context, in *domain.LaunchIntent, to do
 	}()
 }
 
+// RoomAppeared tells the server a session ended or fell asleep: the waiting
+// launches are tried at the next launchRoomGap tick, before the clock would.
+func (s *Server) RoomAppeared() {
+	select {
+	case s.launchRoom <- struct{}{}:
+	default:
+	}
+}
+
 // dispatchLaunchIntents starts waiting launches until ctx ends: the oldest
-// every launchRetryEvery, and at once, launchRoomGap apart, when a session
-// ends or falls asleep, so room that appears is offered to them first.
+// every launchRetryEvery, and at once, launchRoomGap apart, after
+// RoomAppeared, so room that appears is offered to them first.
 func (s *Server) dispatchLaunchIntents(ctx context.Context) {
 	if s.cfg.Recovered != nil {
 		select {
@@ -226,12 +235,6 @@ func (s *Server) dispatchLaunchIntents(ctx context.Context) {
 	if err := s.cfg.Store.RecoverLaunchIntents(ctx); err != nil {
 		slog.Warn("launch: recover the launches a stopped server left starting", "error", err)
 	}
-	var room <-chan events.Event
-	if sub, err := s.cfg.Bus.Subscribe(ctx, events.SubscribeOptions{Filter: events.Filter{Types: []events.Type{events.TypeRunStatus, events.TypeRunSleep, events.TypeRunDeleted}}}); err != nil {
-		slog.Warn("launch: subscribe to session status; waiting launches are tried on the clock only", "error", err)
-	} else {
-		room = sub.Events()
-	}
 	tick := time.NewTicker(launchRoomGap)
 	defer tick.Stop()
 	var tried time.Time
@@ -240,10 +243,7 @@ func (s *Server) dispatchLaunchIntents(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case _, ok := <-room:
-			if !ok {
-				room = nil
-			}
+		case <-s.launchRoom:
 			signalled = true
 			continue
 		case now := <-tick.C:
@@ -309,8 +309,31 @@ func (s *Server) startWaitingLaunch(ctx context.Context, in *domain.LaunchIntent
 		s.endRefused(ctx, in, "the stored request cannot be written: "+err.Error(), now)
 		return true
 	}
+	// A launch asked for through a connector is tried as that connector,
+	// with the scopes it has now, and not at all once it was removed.
+	local := s.Local(in.MemberID)
+	if in.Connector != "" {
+		var c *store.Connector
+		connectors, ok := s.cfg.Store.(store.ConnectorStore)
+		err := error(store.ErrNotFound)
+		if ok {
+			c, err = connectors.GetConnector(ctx, in.Connector)
+		}
+		switch {
+		case errors.Is(err, store.ErrNotFound) || err == nil && c.Member != in.MemberID:
+			s.endRefused(ctx, in, fmt.Sprintf("the connector that asked for it (%s) was removed", in.Via), now)
+			return true
+		case err != nil:
+			slog.Warn("launch: read the connector of a waiting launch", "launch", in.ID, "error", err)
+			if err := s.cfg.Store.ReleaseLaunchIntent(ctx, in.ID, in.Refusal); err != nil && !errors.Is(err, store.ErrConflict) {
+				slog.Warn("launch: return a launch to waiting", "launch", in.ID, "error", err)
+			}
+			return true
+		}
+		local = s.ConnectorLocal(ConnectorGrant{Member: c.Member, Device: c.Device, Provider: c.Provider, Subject: c.Subject}, c.ID, c.ClientName, c.Scopes)
+	}
 	attempt := &launchAttempt{intent: in}
-	_, perr := s.Local(in.MemberID).Call(domain.WithVia(context.WithValue(ctx, launchAttemptKey{}, attempt), in.Via), in.Method, params)
+	_, perr := local.Call(domain.WithVia(context.WithValue(ctx, launchAttemptKey{}, attempt), in.Via), in.Method, params)
 	switch {
 	case perr == nil:
 		slog.Info("launch: a waiting launch started", "launch", in.ID, "member", in.MemberID, "waited", now.Sub(in.CreatedAt), "attempts", in.Attempts+1, "passed", in.Passed)

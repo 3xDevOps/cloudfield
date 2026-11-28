@@ -77,7 +77,7 @@ func TestALaunchQueuesBehindOrPassesTheWaitingOnes(t *testing.T) {
 	if got, _ := e.db.GetLaunchIntent(t.Context(), in.ID); got.Passed != 1 {
 		t.Fatalf("passed = %d, want 1: a launch was admitted ahead of it", got.Passed)
 	}
-	e.counted(t, domain.CapacityPass, opLaunch, "", 1)
+	e.counted(t, domain.CapacityPass, opLaunch, "")
 	if err := e.db.EndLaunchIntent(t.Context(), in.ID, domain.IntentCancelled, "done", time.Now()); err != nil {
 		t.Fatal(err)
 	}
