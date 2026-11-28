@@ -113,10 +113,10 @@ function ChildRow({ child }: { child: Child }) {
       {child.error && (waiting
         ? <p className="ml-4 max-h-28 overflow-auto rounded-control border border-seam bg-chrome px-2 py-1.5 font-code text-ui-sm whitespace-pre-wrap [overflow-wrap:anywhere] text-text">{child.error}</p>
         : <p className="pl-4 text-ui-sm break-words text-state-failed">{child.error}</p>)}
-      <div className="flex items-center gap-1 pl-3">
+      {waiting && <p className="pl-4 text-ui-sm text-muted">Starts on its own when the server has room.</p>}
+      <div className="flex gap-1 pl-3">
         {started && <Button size="sm" variant="ghost" onClick={() => navigate('run', { runId: child.run_id })}>Open</Button>}
         {waiting && machines && <Button size="sm" variant="ghost" onClick={() => navigate('settings', { section: 'machines' })}>Open Machines</Button>}
-        {waiting && <span className="text-ui-sm text-muted">Starts on its own when the server has room.</span>}
       </div>
     </li>
   )

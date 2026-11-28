@@ -2169,10 +2169,10 @@ export interface ServerCapacity {
   disks: ServerCapacityDisk[]
   start_disk_bytes: number
   disk_error?: string
-  /** The disk check is off: `disks` is empty and no launch is refused for disk. */
+  /** The disk check is off: `disks` is empty and no launch is refused for disk. `disk_error` can still say the runtime could not be asked. */
   disk_unchecked?: boolean
-  /** `awake` includes one a member paused; `stopped` is asleep with nothing kept: stopped, or still being saved. */
-  vms: { awake: number; frozen: number; paused: number; saved: number; stopped: number }
+  /** Of open sessions: `awake` includes one a member paused; `stopped` is asleep with nothing kept: stopped, or still being saved. `closed` are VMs of closed sessions that can still hold memory. */
+  vms: { awake: number; frozen: number; paused: number; saved: number; stopped: number; closed: number }
   last_launch_refusal?: ServerCapacityRefusal
   last_wake_refusal?: ServerCapacityRefusal
   day: ServerCapacityCount[]

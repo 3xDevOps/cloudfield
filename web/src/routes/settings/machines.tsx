@@ -3,6 +3,7 @@ import { RefreshCw } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Callout } from '@/components/ui/callout'
+import { Code } from '@/components/ui/code'
 import { CopyButton } from '@/components/ui/copy-button'
 import { ProgressBar } from '@/components/ui/progress-bar'
 import { RelativeTime } from '@/components/ui/relative-time'
@@ -104,18 +105,19 @@ function Machine({ result: r, readAt, failed, reading, refresh }: { result: Serv
           help={<>Read <RelativeTime at={readAt} />, and again every {readEveryMs / 1000} seconds while this page is open.</>}
           control={<Button size="sm" variant="secondary" disabled={reading} onClick={refresh}><RefreshCw />Refresh</Button>}
         >
-          <p className="flex flex-wrap items-center gap-2 text-ui">
-            {refused === null
-              ? <><Badge tone="done">Fits</Badge>Room for a launch: memory and every disk are above the launch line, and the server's memory stall is under its limit.</>
-              : <><Badge tone="failed">Refused</Badge>{refused}</>}
+          <p className="flex items-start gap-2 text-ui">
+            {refused === null ? <Badge tone="done">Fits</Badge> : <Badge tone="failed">Refused</Badge>}
+            <span className="min-w-0 flex-1">
+              {refused ?? `Memory${r.disk_unchecked ? '' : ' and every disk'} ${r.disk_unchecked ? 'is' : 'are'} above the launch line, and the server's memory stall is under its limit.${r.disk_unchecked ? ' Disk is not checked.' : ''}`}
+            </span>
           </p>
           {failed}
         </SettingRow>
         <MemoryRow r={r} />
         <StallRow r={r} />
-        {r.disk_unchecked && <SettingRow label="Disk" help="Not checked: the server was started with --min-free-disk negative, so no launch is refused for disk." />}
+        {r.disk_unchecked && <SettingRow label="Disk" help={<>Not checked: the server was started with <Code className="whitespace-nowrap">--min-free-disk</Code> negative, so no launch is refused for disk.</>} />}
         {r.disk_error && (
-          <SettingRow label="Disk" help="Not measured, so a launch is refused:">
+          <SettingRow label={r.disk_unchecked ? 'Container or VM runtime' : 'Disk'} help={r.disk_unchecked ? 'Could not be asked, so a launch is refused:' : 'Not measured, so a launch is refused:'}>
             <p className={cn(verbatim, 'max-h-48 text-state-failed')}>{r.disk_error}</p>
           </SettingRow>
         )}
@@ -133,14 +135,15 @@ function Machine({ result: r, readAt, failed, reading, refresh }: { result: Serv
 
 /** Why a launch would be refused now, as a sentence, or null when it would start. */
 function refusalNow(r: ServerCapacity): string | null {
-  const unmeasured = [r.memory_error && 'memory', r.disk_error && 'disk'].filter((w): w is string => Boolean(w))
+  const unmeasured = [r.memory_error && 'memory', r.disk_error && (r.disk_unchecked ? 'the container or VM runtime' : 'disk')].filter((w): w is string => Boolean(w))
   const short: string[] = []
   if (!r.memory_error && r.memory_available_bytes < r.memory_floor_bytes + r.start_memory_bytes) short.push('memory is under the launch line')
   if (r.server_stall !== undefined && r.server_stall >= r.server_stall_limit) short.push("the server's memory stall is at its limit")
   for (const d of r.disks) if (d.free_bytes < d.reserve_bytes + r.start_disk_bytes) short.push(`${d.name} is under the launch line`)
   if (unmeasured.length === 0 && short.length === 0) return null
   const lead = unmeasured.length ? `${joinWords(unmeasured)} could not be measured` : ''
-  return `A launch would be refused: ${[lead, joinWords(short)].filter(Boolean).join(', and ')}.`
+  const why = [lead, joinWords(short)].filter(Boolean).join(', and ')
+  return `${why.charAt(0).toUpperCase()}${why.slice(1)}.`
 }
 
 function joinWords(words: string[]): string {
@@ -196,6 +199,7 @@ function MemoryRow({ r }: { r: ServerCapacity }) {
 
 function StallRow({ r }: { r: ServerCapacity }) {
   const failed = r.stall_error ? 'the error is below' : ''
+  const refuses = r.server_stall !== undefined && r.server_stall >= r.server_stall_limit
   const line = (what: string, value: number | undefined, limit: number, acts: string, atLimit: string, missing: string) => (
     <li className="flex min-w-0 flex-wrap items-baseline gap-x-2">
       <span className="text-text">{what}</span>
@@ -203,16 +207,20 @@ function StallRow({ r }: { r: ServerCapacity }) {
         ? <span className="text-muted">Not measured: {failed || missing}.</span>
         : (
             <span className={cn('tabular-nums', value >= limit ? 'text-state-failed' : 'text-muted')}>
-              {value.toFixed(1)}% · {acts} at {limit.toFixed(0)}%{value >= limit && ` · ${atLimit}`}
+              {value.toFixed(1)}% · {acts}{value >= limit && ` · ${atLimit}`}
             </span>
           )}
     </li>
   )
   return (
-    <SettingRow label="Memory stall" help="The share of time tasks waited for memory. At its limit the server acts.">
+    <SettingRow
+      label="Memory stall"
+      help="The share of time tasks waited for memory. At its limit the server acts."
+      control={r.server_stall !== undefined && <Badge tone={refuses ? 'failed' : 'done'}>{refuses ? 'Launch refused' : 'Launch fits'}</Badge>}
+    >
       <ul className="flex flex-col gap-1 text-ui-sm">
-        {line('Server, last 60 s:', r.server_stall, r.server_stall_limit, 'launches refused', 'refusing launches now', "the server's own cgroup reports no memory pressure")}
-        {line('Host, last 10 s:', r.host_stall, r.host_stall_limit, 'session VMs saved once it lasts 30 s', 'VMs are saved if it lasts 30 s', 'the kernel reports no memory pressure')}
+        {line('Server, last 60 s:', r.server_stall, r.server_stall_limit, `at ${r.server_stall_limit.toFixed(0)}%, launches are refused`, 'refusing launches now', "the server's own cgroup reports no memory pressure")}
+        {line('Host, last 10 s:', r.host_stall, r.host_stall_limit, `at ${r.host_stall_limit.toFixed(0)}% for 30 s, the server saves session VMs to disk`, 'VMs are saved if it lasts 30 s', 'the kernel reports no memory pressure')}
       </ul>
       {r.stall_error && <p className={cn(verbatim, 'max-h-48 text-state-failed')}>{r.stall_error}</p>}
     </SettingRow>
@@ -250,9 +258,12 @@ function VMsRow({ vms }: { vms: ServerCapacity['vms'] }) {
           </div>
         ))}
       </dl>
+      {vms.closed > 0 && <p className="text-ui-sm text-muted">{vms.closed} {vms.closed === 1 ? 'VM of a closed session still holds' : 'VMs of closed sessions still hold'} memory.</p>}
     </SettingRow>
   )
 }
+
+const causeWords: Record<string, string> = { memory: 'Memory', stall: 'Memory stall', disk: 'Disk', unknown: 'Not measured' }
 
 const opWords: Record<string, string> = { 'launch-retry': 'A waiting subsession tried again', 'wake-auto': 'A wake the server tried by itself' }
 
@@ -269,8 +280,8 @@ function RefusalRow({ what, refusal }: { what: 'launch' | 'wake'; refusal?: Serv
       help={(
         <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <RelativeTime at={refusal.at} className="text-text" />
-          <span className="tabular-nums">{Number.isNaN(when.getTime()) ? refusal.at : when.toLocaleString()}</span>
-          {refusal.cause && <Badge>{refusal.cause}</Badge>}
+          <span className="tabular-nums">{Number.isNaN(when.getTime()) ? refusal.at : when.toLocaleString(undefined, { timeZoneName: 'short' })}</span>
+          {refusal.cause && <Badge>{causeWords[refusal.cause] ?? refusal.cause}</Badge>}
           {opWords[refusal.op] && <Badge>{opWords[refusal.op]}</Badge>}
         </span>
       )}
@@ -334,8 +345,8 @@ function Counts({ day, fortnight }: { day: ServerCapacityCount[]; fortnight: Ser
     ['Mean wait before a start', 'Waits that ended in a start.', (counts) => waits(counts, 'mean')],
     ['Longest wait before a start', null, (counts) => waits(counts, 'longest')],
     ['Share of used memory held by sessions idle over an hour or closed', 'At memory and stall refusals.', idleShare],
-    ['Wakes refused', null, (counts) => String(counted(counts, refusalOf('wake')))],
-    ['Wakes the server tried by itself, refused', null, (counts) => String(counted(counts, refusalOf('wake-auto')))],
+    ['Wakes refused', null, (counts) => String(counted(counts, (c) => refusalOf('wake')(c) || refusalOf('wake-auto')(c)))],
+    ['Of these, tried by the server itself', null, (counts) => String(counted(counts, refusalOf('wake-auto')))],
   ]
   const byName = new Map(day.map((c) => [counterName(c), c]))
   return (
