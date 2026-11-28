@@ -124,6 +124,13 @@ describe('a launched session whose agent failed to start', () => {
   })
 })
 
+// The dialog's button is there, disabled, until the close check answers.
+async function startStandard() {
+  const start = await screen.findByRole<HTMLButtonElement>('button', { name: 'Start a Standard session' })
+  await waitFor(() => expect(start.disabled).toBe(false))
+  fireEvent.click(start)
+}
+
 describe('open in Standard', () => {
   beforeEach(() => {
     vi.spyOn(api, 'runCloseCheck').mockResolvedValue([{ run_id: 'run_1', warnings: [] }])
@@ -142,7 +149,7 @@ describe('open in Standard', () => {
     const nav = { go: vi.fn(), reveal: vi.fn(), focusComposer: vi.fn(), focusRequest: vi.fn() }
     render(<SessionFailureCallout run={record} session={session} switchable={false} shells={{} as RunShells} nav={nav} />)
     fireEvent.click(screen.getByRole('button', { name: 'Open in Standard' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Start a Standard session' }))
+    await startStandard()
     await waitFor(() => expect(launch).toHaveBeenCalledWith({
       workspace_id: record.workspace_id, task: record.task, harness: 'claude', mode: 'tui', model: 'opus',
       account_member_id: 'mem-ada', fallback_account_member_ids: ['mem-me'], children: 'off', extra_workspace_ids: ['ws-2'],
@@ -160,7 +167,7 @@ describe('open in Standard', () => {
     const nav = { go: vi.fn(), reveal: vi.fn(), focusComposer: vi.fn(), focusRequest: vi.fn() }
     render(<SessionFailureCallout run={record} session={session} switchable shells={{} as RunShells} nav={nav} />)
     fireEvent.click(screen.getByRole('button', { name: 'Open in Standard' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Start a Standard session' }))
+    await startStandard()
     await waitFor(() => expect(launch).toHaveBeenCalledWith(expect.objectContaining({ mode: 'tui', task: record.task })))
     expect(nav.go).not.toHaveBeenCalled()
   })
@@ -193,7 +200,7 @@ describe('open in Standard', () => {
     const nav = { go: vi.fn(), reveal: vi.fn(), focusComposer: vi.fn(), focusRequest: vi.fn() }
     render(<SessionFailureCallout run={record} session={session} switchable={false} shells={{} as RunShells} nav={nav} />)
     fireEvent.click(screen.getByRole('button', { name: 'Open in Standard' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Start a Standard session' }))
+    await startStandard()
     await waitFor(() => expect(launch).toHaveBeenCalledWith({ workspace_id: record.workspace_id, task: record.task, harness: 'claude', mode: 'tui' }))
   })
 })
