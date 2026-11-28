@@ -47,7 +47,8 @@ export function ScheduleEditor({
   const late = usePastDeadline(busy || saving)
   const [error, setError] = useState<string | null>(null)
   const set = (fields: Partial<Plan>) => setPlan((current) => ({ ...current, ...fields }))
-  const zone = zoneName(plan.zone, schedule ? readRule(schedule.cron, '').zone : '')
+  const kept = schedule ? readRule(schedule.cron, '').zone : ''
+  const zone = zoneName(plan.zone, kept)
   // A zone refused on opening, such as a misspelled draft, says why at once.
   const [zoneLeft, setZoneLeft] = useState(!zone)
   const rule = writeRule(zone ? { ...plan, zone } : plan)
@@ -89,7 +90,7 @@ export function ScheduleEditor({
               // A rule typed in Cron carries into the fields when they can show it; one only Cron can show stays there.
               if (plan.repeat === 'cron' && typedCron && plan.rule.trim() && typed.repeat !== 'cron') {
                 setPlan({ ...typed, repeat, rule: plan.rule })
-                setZoneLeft(true)
+                if (!zoneName(typed.zone, kept)) setZoneLeft(true)
               } else set(repeat === 'cron' && ready && typed.repeat !== 'cron' ? { repeat, rule } : { repeat })
               setTypedCron(false)
             }}
@@ -161,7 +162,7 @@ export function ScheduleEditor({
                       ? 'Enter a time zone.'
                       : plan.zone.includes('/')
                         ? 'Not an IANA zone name. Check the spelling.'
-                        : 'Use a full zone name such as America/Los_Angeles, not an abbreviation.'
+                        : 'Use a full zone name such as America/Los_Angeles.'
                     : undefined
                 }
                 className="min-w-0 flex-1 basis-40"

@@ -35,7 +35,7 @@ function weekdays(field: string): number[] | null {
   return [...days].sort()
 }
 
-// Intl lists canonical zones only, which leaves out UTC.
+// UTC first, then the Area/Location names zoneName takes.
 export const zones = ['UTC', ...Intl.supportedValuesOf('timeZone').filter((zone) => zone.includes('/'))]
 
 /**

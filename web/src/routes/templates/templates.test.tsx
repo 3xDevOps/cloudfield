@@ -313,7 +313,7 @@ describe('templates view', () => {
     fireEvent.click(dialog.getByRole('radio', { name: 'Cron' }))
     fireEvent.change(dialog.getByLabelText('Cron rule'), { target: { value: 'CRON_TZ=EST 0 9 * * 1-5' } })
     fireEvent.click(dialog.getByRole('radio', { name: 'Weekly' }))
-    expect(dialog.getByText('Use a full zone name such as America/Los_Angeles, not an abbreviation.')).toBeDefined()
+    expect(dialog.getByText('Use a full zone name such as America/Los_Angeles.')).toBeDefined()
     expect(dialog.getByRole('button', { name: 'Schedule' }).hasAttribute('disabled')).toBe(true)
   })
 
