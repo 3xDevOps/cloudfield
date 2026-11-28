@@ -29,6 +29,12 @@ var (
 	ErrCapacityUnknown    = errors.New("scheduler: host capacity unavailable")
 )
 
+// CapacityRefused reports whether err is a refusal for want of disk or
+// memory, or a failed measurement of them: a later attempt can succeed.
+func (s *Scheduler) CapacityRefused(err error) bool {
+	return errors.Is(err, ErrDiskFull) || errors.Is(err, ErrMemoryPressure) || errors.Is(err, ErrCapacityUnknown)
+}
+
 const (
 	capacityProbeTimeout        = 5 * time.Second
 	startupDiskBytes     uint64 = 1 << 30
@@ -103,6 +109,8 @@ func memoryFloor(total uint64) uint64 {
 // show as used yet.
 type memoryClaim struct {
 	bytes uint64
+	// retry is a launch tried again unasked: it reclaims no disk.
+	retry bool
 	// wake starts a container whose disks exist, so it is not held to the
 	// disk reserve: refusing it would keep a saved VM's memory on disk.
 	wake bool
@@ -130,6 +138,13 @@ func (e *memoryShortage) Unwrap() error { return ErrMemoryPressure }
 // reserveCapacity admits a start that brings up a new container or VM.
 func (s *Scheduler) reserveCapacity(ctx context.Context) (func(), error) {
 	return s.reserve(ctx, &memoryClaim{bytes: startupMemoryBytes})
+}
+
+// reserveRetry admits a launch tried again unasked after a capacity
+// refusal. Disk reclaim removes what closed and sleeping sessions keep, so
+// only an attempt somebody asked for runs it.
+func (s *Scheduler) reserveRetry(ctx context.Context) (func(), error) {
+	return s.reserve(ctx, &memoryClaim{bytes: startupMemoryBytes, retry: true})
 }
 
 // reserveWake admits the wake of a sleeping container: a saved VM must fit
@@ -198,7 +213,7 @@ func (s *Scheduler) reserve(ctx context.Context, claim *memoryClaim) (func(), er
 	var short *memoryShortage
 	switch {
 	case ctx.Err() != nil:
-	case errors.Is(err, ErrDiskFull):
+	case errors.Is(err, ErrDiskFull) && !claim.retry:
 		s.reclaimDisk(ctx, "")
 		return s.tryReserveCapacity(ctx, claim)
 	case errors.As(err, &short) && s.saveIdleVMs(ctx, short.need+short.claimed):

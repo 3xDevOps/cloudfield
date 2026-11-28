@@ -476,6 +476,8 @@ func getRun(ctx context.Context, c calls, in getRunInput) (string, any, error) {
 type childRow struct {
 	RunID string `json:"run_id"`
 	State string `json:"state"`
+	// Waiting is the capacity refusal a queued subsession waits on.
+	Waiting string `json:"waiting,omitempty"`
 	choice
 	Report map[string]string `json:"report,omitempty"`
 	URL    string            `json:"url,omitempty"`
@@ -499,6 +501,9 @@ func addChildren(ctx context.Context, read Call, l links, book accountBook, id s
 	for _, ch := range res.Children[:min(len(res.Children), defaultRows)] {
 		row := childRow{RunID: ch.RunID, State: ch.State, choice: choiceOf(ch.Harness, ch.Mode, ch.Model, ch.AccountMemberID, book),
 			URL: l.run(ch.RunID)}
+		if ch.State == protocol.ChildQueued || ch.State == protocol.ChildStarting {
+			row.Waiting = ch.Error
+		}
 		if ch.Report != nil {
 			row.Report = map[string]string{"outcome": ch.Report.Outcome, "at": ch.Report.At}
 			summaries[ch.RunID] = clip(ch.Report.Summary, maxReport)
