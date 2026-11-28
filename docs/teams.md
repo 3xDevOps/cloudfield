@@ -550,8 +550,15 @@ cloudfield schedule set nightly-triage "0 6 * * *"
 `--mode` defaults to `background`, and `--budget` is an advisory per-session cost
 hint in USD. Use `{{name}}` in the task for a parameter. The dashboard's
 Templates page fills parameters inline before **Launch** and edits their
-defaults; any session's composer can insert a filled-in template as a draft. Cron is five-field
-syntax or an `@descriptor`, in UTC. A schedule that was due while the server was
+defaults; any session's composer can insert a filled-in template as a draft.
+
+A schedule is a cron rule: five fields or an `@descriptor`, evaluated in UTC
+unless it starts with `CRON_TZ=<IANA zone> `, as in `cloudfield schedule set
+standup "CRON_TZ=Europe/Berlin 30 9 * * 1-5"`. A zoned rule keeps its wall-clock
+time across daylight saving changes, and a time the clocks skip does not fire
+that day. On the Templates page, **Schedule** picks daily, weekly or monthly at
+a time in a zone, your browser's by default, and shows the rule it saves;
+**Cron** takes any rule. A schedule that was due while the server was
 down waits for its next occurrence. `cloudfield template list|delete` and `cloudfield
 schedule list|delete` manage the rest. A `--model` the agent has no flag for
 fails with `scheduler: agent "<agent>" has no model flag; launch it without a

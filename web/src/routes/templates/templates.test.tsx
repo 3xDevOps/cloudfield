@@ -6,10 +6,20 @@ import type { Schedule, Template } from '@/lib/types'
 import { reopen } from '@/components/failure'
 import { useStore } from '@/store'
 import { optimisticDeadlineMs } from '@/store/optimistic'
+import { clockTime } from '@/lib/format'
 import { agentInfo, fakeApi, otherWorkspace, template, workspace } from '@/test/fixtures'
 import { chooseModel } from '@/test/model'
 import { openSelect, pickOption } from '@/test/select'
 import { detail, rowAction, schedule, seed, Templates } from '@/test/templates'
+
+type Dialog = ReturnType<typeof within>
+
+function scheduleDaily(dialog: Dialog, at: string) {
+  fireEvent.change(dialog.getByLabelText('At'), { target: { value: at } })
+  fireEvent.change(dialog.getByLabelText('Time zone'), { target: { value: 'UTC' } })
+}
+
+const nextLaunch = `(${clockTime(schedule.next_fire_at!)} your time)`
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(() => 'toast'), dismiss: vi.fn() },
@@ -28,7 +38,7 @@ describe('templates view', () => {
     const shown = within(detail(template.name))
     expect(shown.getByText(/Claude Code/)).toBeDefined()
     expect(shown.getByText('agent default')).toBeDefined()
-    expect(detail(template.name).textContent).toContain('Scheduled 0 3 * * * UTC, next')
+    expect(detail(template.name).textContent).toContain('Scheduled every day at 03:00 UTC, next')
     expect(shown.getByText(template.task)).toBeDefined()
     expect(shown.getByText('~6 tokens')).toBeDefined()
     expect(shown.getByRole('button', { name: `Launch ${template.name}` })).toBeDefined()
@@ -178,18 +188,48 @@ describe('templates view', () => {
     await waitFor(() => expect(dialog.queryByRole('alert')).toBeNull())
   })
 
-  it('schedules from a dialog and shows the next launch the server returned', async () => {
-    const client = fakeApi({ scheduleList: vi.fn(async () => []), scheduleSave: vi.fn(async () => schedule) })
+  it('schedules days of the week at a time in a zone and shows the next launch the server returned', async () => {
+    const saved = { ...schedule, cron: 'CRON_TZ=Europe/Berlin 30 8 * * 1,3' }
+    const client = fakeApi({ scheduleList: vi.fn(async () => []), scheduleSave: vi.fn(async () => saved) })
     seed()
     render(<Templates client={client} />)
 
-    await rowAction('Schedule…')
+    await rowAction('Schedule')
     const dialog = within(await screen.findByRole('dialog', { name: `Schedule ${template.name}` }))
-    fireEvent.change(dialog.getByLabelText('Schedule (UTC)'), { target: { value: '0 3 * * *' } })
+    expect(dialog.getByRole('radio', { name: 'Daily' }).getAttribute('aria-checked')).toBe('true')
+    expect(dialog.getByLabelText('At')).toHaveProperty('value', '09:00')
+    fireEvent.click(dialog.getByRole('radio', { name: 'Weekly' }))
+    expect(dialog.getByRole('checkbox', { name: 'Monday' }).getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(dialog.getByRole('checkbox', { name: 'Monday' }))
+    expect(dialog.getByText('Pick at least one day.')).toBeDefined()
+    expect(dialog.getByRole('button', { name: 'Schedule' }).hasAttribute('disabled')).toBe(true)
+    fireEvent.click(dialog.getByRole('checkbox', { name: 'Wednesday' }))
+    fireEvent.click(dialog.getByRole('checkbox', { name: 'Monday' }))
+    fireEvent.change(dialog.getByLabelText('At'), { target: { value: '08:30' } })
+    fireEvent.change(dialog.getByLabelText('Time zone'), { target: { value: 'Europe/Berlin' } })
+    expect(dialog.getByText('CRON_TZ=Europe/Berlin 30 8 * * 1,3')).toBeDefined()
     fireEvent.click(dialog.getByRole('button', { name: 'Schedule' }))
 
-    expect(await dialog.findByText(/Sun, 23 Aug 2026 03:00:00 GMT/)).toBeDefined()
-    expect(client.scheduleSave).toHaveBeenCalledWith({ workspace_id: workspace.id, template: template.name, cron: '0 3 * * *' })
+    expect(await dialog.findByText(nextLaunch, { exact: false })).toBeDefined()
+    expect(client.scheduleSave).toHaveBeenCalledWith({ workspace_id: workspace.id, template: template.name, cron: 'CRON_TZ=Europe/Berlin 30 8 * * 1,3' })
+    expect(detail(template.name).textContent).toContain('Scheduled Mondays and Wednesdays at 08:30 Europe/Berlin, next')
+  })
+
+  it('keeps a rule the picker cannot show as cron text, and fills cron from the picker', async () => {
+    const custom = { ...schedule, cron: '*/15 9-17 * * 1-5' }
+    const client = fakeApi({ scheduleList: vi.fn(async () => [custom]), scheduleSave: vi.fn(async () => custom) })
+    seed()
+    render(<Templates client={client} />)
+
+    expect(await screen.findByText('*/15 9-17 * * 1-5')).toBeDefined()
+    expect(detail(template.name).textContent).toContain('Scheduled */15 9-17 * * 1-5 UTC, next')
+    await rowAction('Schedule')
+    const dialog = within(await screen.findByRole('dialog', { name: `Schedule ${template.name}` }))
+    expect(dialog.getByRole('radio', { name: 'Cron' }).getAttribute('aria-checked')).toBe('true')
+    expect(dialog.getByLabelText('Cron rule')).toHaveProperty('value', '*/15 9-17 * * 1-5')
+    fireEvent.click(dialog.getByRole('radio', { name: 'Monthly' }))
+    fireEvent.click(dialog.getByRole('radio', { name: 'Cron' }))
+    expect(dialog.getByLabelText('Cron rule')).toHaveProperty('value', '0 9 1 * *')
   })
 
   it('shows a saved schedule at once, holds Unschedule until the server answers, then shows its next launch', async () => {
@@ -201,15 +241,15 @@ describe('templates view', () => {
     seed()
     render(<Templates client={client} />)
 
-    await rowAction('Schedule…')
+    await rowAction('Schedule')
     const dialog = within(await screen.findByRole('dialog', { name: `Schedule ${template.name}` }))
-    fireEvent.change(dialog.getByLabelText('Schedule (UTC)'), { target: { value: '0 3 * * *' } })
+    scheduleDaily(dialog, '03:00')
     fireEvent.click(dialog.getByRole('button', { name: 'Schedule' }))
 
     expect(dialog.getByRole('button', { name: 'Update schedule' })).toBeDefined()
     expect(dialog.getByRole('button', { name: 'Saving…' }).hasAttribute('disabled')).toBe(true)
     await act(async () => answer(schedule))
-    expect(dialog.getByText(/Sun, 23 Aug 2026 03:00:00 GMT/)).toBeDefined()
+    expect(dialog.getByText(nextLaunch, { exact: false })).toBeDefined()
     expect(dialog.getByRole('button', { name: 'Unschedule' }).hasAttribute('disabled')).toBe(false)
     expect(client.scheduleList).toHaveBeenCalledTimes(1)
   })
@@ -223,22 +263,22 @@ describe('templates view', () => {
     seed()
     render(<Templates client={client} />)
 
-    await rowAction('Schedule…')
+    await rowAction('Schedule')
     const dialog = within(await screen.findByRole('dialog', { name: `Schedule ${template.name}` }))
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     try {
-      fireEvent.change(dialog.getByLabelText('Schedule (UTC)'), { target: { value: '0 3 * * *' } })
+      scheduleDaily(dialog, '03:00')
       fireEvent.click(dialog.getByRole('button', { name: 'Schedule' }))
       act(() => vi.advanceTimersByTime(optimisticDeadlineMs))
       await act(async () => {})
       expect(dialog.getByRole('alert').textContent).toContain('The server did not answer in 5 seconds.')
       expect(dialog.getByRole('button', { name: 'Retry' })).toBeDefined()
       expect(dialog.getByRole('button', { name: 'Schedule' })).toBeDefined()
-      expect(dialog.getByLabelText('Schedule (UTC)')).toHaveProperty('value', '0 3 * * *')
+      expect(dialog.getByLabelText('At')).toHaveProperty('value', '03:00')
 
       await act(async () => answer(schedule))
       expect(dialog.queryByRole('alert')).toBeNull()
-      expect(dialog.getByText(/Sun, 23 Aug 2026 03:00:00 GMT/)).toBeDefined()
+      expect(dialog.getByText(nextLaunch, { exact: false })).toBeDefined()
     } finally {
       vi.useRealTimers()
     }
@@ -306,9 +346,9 @@ describe('templates view', () => {
     fireEvent.change(form.getByLabelText(/^Task/), { target: { value: template.task } })
     fireEvent.click(form.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Template saved'))
-    await rowAction('Schedule…')
+    await rowAction('Schedule')
     const dialog = within(await screen.findByRole('dialog', { name: `Schedule ${template.name}` }))
-    fireEvent.change(dialog.getByLabelText('Schedule (UTC)'), { target: { value: '0 3 * * *' } })
+    scheduleDaily(dialog, '03:00')
     fireEvent.click(dialog.getByRole('button', { name: 'Schedule' }))
     await waitFor(() => expect(client.scheduleSave).toHaveBeenCalled())
     await act(async () => answer())
@@ -535,10 +575,10 @@ describe('templates view', () => {
     seed()
     render(<Templates client={client} />)
 
-    await rowAction('Schedule…')
+    await rowAction('Schedule')
     const dialog = within(await screen.findByRole('dialog', { name: `Schedule ${template.name}` }))
-    for (const cron of ['0 3 * * *', '0 4 * * *']) {
-      fireEvent.change(dialog.getByLabelText('Schedule (UTC)'), { target: { value: cron } })
+    for (const at of ['03:00', '04:00']) {
+      scheduleDaily(dialog, at)
       fireEvent.click(dialog.getByRole('button', { name: /^(Schedule|Update schedule)$/ }))
     }
     await act(async () => answers[0].resolve(schedule))
@@ -562,7 +602,7 @@ describe('templates view', () => {
 
     const menu = within(await screen.findByRole('menu'))
     expect(menu.getByRole('menuitem', { name: 'Delete' }).getAttribute('aria-disabled')).toBe('true')
-    expect(menu.getByRole('menuitem', { name: 'Schedule…' }).getAttribute('aria-disabled')).toBe('true')
+    expect(screen.getByRole('button', { name: 'Schedule', hidden: true }).hasAttribute('disabled')).toBe(true)
     expect(screen.getByRole('button', { name: 'Edit', hidden: true }).hasAttribute('disabled')).toBe(false)
   })
 
@@ -856,9 +896,9 @@ describe('templates view', () => {
     })
     seed()
     render(<Templates client={client} />)
-    await rowAction('Schedule…')
+    await rowAction('Schedule')
     const dialog = within(await screen.findByRole('dialog', { name: `Schedule ${template.name}` }))
-    fireEvent.change(dialog.getByLabelText('Schedule (UTC)'), { target: { value: '0 3 * * *' } })
+    scheduleDaily(dialog, '03:00')
     fireEvent.click(dialog.getByRole('button', { name: 'Schedule' }))
     await waitFor(() => expect(dialog.getByRole('button', { name: 'Unschedule' })).toBeDefined())
     await act(async () => list([]))
@@ -939,9 +979,9 @@ describe('templates view', () => {
     })
     seed()
     render(<Templates client={client} />)
-    await rowAction('Schedule…')
+    await rowAction('Schedule')
     const dialog = within(await screen.findByRole('dialog', { name: `Schedule ${template.name}` }))
-    fireEvent.change(dialog.getByLabelText('Schedule (UTC)'), { target: { value: '0 3 * * *' } })
+    scheduleDaily(dialog, '03:00')
     fireEvent.click(dialog.getByRole('button', { name: 'Schedule' }))
     expect(dialog.getByRole('button', { name: 'Saving…' })).toBeDefined()
 
@@ -954,8 +994,8 @@ describe('templates view', () => {
     const client = fakeApi({ scheduleList: vi.fn(async () => [schedule]), scheduleDelete: vi.fn(() => new Promise<unknown>(() => {})) })
     seed()
     render(<Templates client={client} />)
-    await screen.findByText(/^Scheduled .*UTC/)
-    await rowAction('Schedule…')
+    await screen.findByText(/^Scheduled every day/)
+    await rowAction('Schedule')
     const dialog = within(await screen.findByRole('dialog', { name: `Schedule ${template.name}` }))
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     try {
