@@ -682,22 +682,8 @@ func (s *Scheduler) Inject(ctx context.Context, run domain.RunID, actor domain.M
 	// The agent a move replaces would take the message, and the move would
 	// stop it mid-turn.
 	if entry != nil && entry.moving {
-		var to domain.MemberID
-		if entry.accountSwap != nil {
-			to = entry.accountSwap.To
-		}
 		s.mu.Unlock()
-		// Members of a move where nobody keeps added logins never see the word.
-		where := "another account"
-		if r, err := s.cfg.Store.GetRun(ctx, run); err == nil {
-			for _, member := range []domain.MemberID{r.MemberID, r.HomeMember(), r.AccountMember(), to} {
-				if logins, listErr := s.cfg.Store.ListAgentLogins(ctx, member, r.Harness); member != "" && listErr == nil && len(logins) > 0 {
-					where += " or login"
-					break
-				}
-			}
-		}
-		return "", fmt.Errorf("%w: %w to %s; send the message when it finishes", ptyhost.ErrNoSession, ErrMoving, where)
+		return "", s.movingError(ctx, run)
 	}
 	if entry != nil && (entry.status == domain.RunRunning || entry.status == domain.RunNeedsAttention) {
 		workspace := entry.workspaceID
@@ -711,6 +697,27 @@ func (s *Scheduler) Inject(ctx context.Context, run domain.RunID, actor domain.M
 		return "", err
 	}
 	return "", fmt.Errorf("%w: inject requires a running or needs-attention session", ptyhost.ErrNoSession)
+}
+
+// movingError refuses a message to run, which a move holds.
+func (s *Scheduler) movingError(ctx context.Context, run domain.RunID) error {
+	var to domain.MemberID
+	s.mu.Lock()
+	if entry := s.runs[run]; entry != nil && entry.accountSwap != nil {
+		to = entry.accountSwap.To
+	}
+	s.mu.Unlock()
+	// Members of a move where nobody keeps added logins never see the word.
+	where := "another account"
+	if r, err := s.cfg.Store.GetRun(ctx, run); err == nil {
+		for _, member := range []domain.MemberID{r.MemberID, r.HomeMember(), r.AccountMember(), to} {
+			if logins, listErr := s.cfg.Store.ListAgentLogins(ctx, member, r.Harness); member != "" && listErr == nil && len(logins) > 0 {
+				where += " or login"
+				break
+			}
+		}
+	}
+	return fmt.Errorf("%w: %w to %s; send the message when it finishes", ptyhost.ErrNoSession, ErrMoving, where)
 }
 
 const steerRecordTimeout = 10 * time.Second

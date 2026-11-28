@@ -140,3 +140,45 @@ func TestAShutdownDuringAMovesOpenLeavesItsContinuationOwed(t *testing.T) {
 		t.Fatalf("run = %+v, %v, %d continuations; want it live on the second login, continued once", row, err, continuations())
 	}
 }
+
+// A prompt held for a launch's agent that is still opening, and released
+// while a revoke moves the session, is refused as one sent during the move
+// is: the agent being left never gets it.
+func TestAPromptHeldForAnOpeningAgentIsRefusedDuringAMove(t *testing.T) {
+	t.Parallel()
+	e, rt, _ := newFallbackEnv(t, enhancedClaude)
+	e.share(t)
+	gate := make(chan error, 1)
+	var once sync.Once
+	rt.mu.Lock()
+	rt.onAttach = func() error {
+		err := error(nil)
+		once.Do(func() { err = <-gate })
+		return err
+	}
+	rt.mu.Unlock()
+	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.owner.ID, "", "claude", domain.LaunchACP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const held = "run a long tool"
+	delivered := e.holdPrompt(t, run.ID, held)
+	e.revoke(t)
+	waitFor(t, "the move holding the session", func() bool {
+		e.sched.mu.Lock()
+		defer e.sched.mu.Unlock()
+		return e.sched.runs[run.ID].moving
+	})
+	gate <- nil
+	if err = <-delivered; !errors.Is(err, ErrMoving) || !strings.HasSuffix(err.Error(), "the session is moving to another account; send the message when it finishes") {
+		t.Fatalf("the held prompt settled with %v; want it refused as moving", err)
+	}
+	waitFor(t, "the session on Ada's account", func() bool {
+		row, rowErr := e.db.GetRun(t.Context(), run.ID)
+		sc, scErr := e.sched.readSidecar(run.ID)
+		return rowErr == nil && scErr == nil && row.AccountMemberID == e.member.ID && sc.AccountSwap == nil && e.sched.acp.session(run.ID) != nil
+	})
+	if got := allPrompts(t, rt); slices.Contains(got, held) {
+		t.Fatalf("the agents were prompted %q; want the held prompt never sent", got)
+	}
+}
