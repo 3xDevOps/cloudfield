@@ -378,53 +378,6 @@ func TestClaimConnectionOutlivesAnOlderDirectory(t *testing.T) {
 	roundTrip(t, client, server, "claim connection after the older directory was stored")
 }
 
-// The owner may connect as soon as the claim returns. The directory the
-// server pushed before the claim does not name them, and storing it after
-// the claim does not end their connection; a later directory that does not
-// name an account still ends that account's.
-func TestOwnersConnectionOutlivesADirectoryOlderThanTheClaim(t *testing.T) {
-	e := newEnv(t)
-	e.r.directoryInterval = 50 * time.Millisecond
-	a := enroll(t, e, newSigner(t))
-	a.attach = true
-	go a.run()
-	acct := account("9")
-	_, token := e.addDevice(t, acct, "dev-9")
-	send(t, a.ws, edgeproto.Directory{})
-
-	e.connectPath(t, a, edgeproto.ClaimConnectPath(a.id), token)
-	open := next[edgeproto.Open](t, a)
-	storing, store := make(chan struct{}, 1), make(chan struct{})
-	e.dir.mu.Lock()
-	e.dir.replaceHook = func() {
-		storing <- struct{}{}
-		<-store
-	}
-	e.dir.mu.Unlock()
-	send(t, a.ws, edgeproto.Claimed{ConnID: open.ConnID, Owner: edgeproto.AccountPrincipal(acct)})
-	<-storing
-	e.dir.addMember(a.id, acct)
-	client, server := e.connect(t, a, token)
-	next[edgeproto.Open](t, a)
-	store <- struct{}{}
-
-	// The next store begins only once the first one has closed what it
-	// closes.
-	member := edgeproto.DirectoryEntry{Kind: edgeproto.EntryMember, Provider: acct.Provider, Subject: acct.Subject, Role: "admin"}
-	send(t, a.ws, edgeproto.Directory{Entries: []edgeproto.DirectoryEntry{member}})
-	<-storing
-	roundTrip(t, client, server, "the owner's connection after the older directory was stored")
-	store <- struct{}{}
-
-	send(t, a.ws, edgeproto.Directory{})
-	<-storing
-	store <- struct{}{}
-	_ = client.SetReadDeadline(time.Now().Add(10 * time.Second))
-	if _, err := client.Read(make([]byte, 1)); err == nil || !strings.Contains(err.Error(), string(edgeproto.RefusalNotMember)) {
-		t.Fatalf("a connection of an account the directory stopped naming read %v; want it ended as not a member", err)
-	}
-}
-
 func TestClaimConnectionRefusals(t *testing.T) {
 	e := newEnv(t)
 	a := enroll(t, e, newSigner(t))

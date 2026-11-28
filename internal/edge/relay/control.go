@@ -224,6 +224,14 @@ func (r *Relay) enroll(ws *websocket.Conn, addr netip.Prefix, origin string) (*r
 	if old != nil {
 		old.cancel(errReplaced)
 	}
+	if !claimed {
+		// `aether-edge servers remove` forgets a server without telling
+		// the relay, which learns it here.
+		if err := r.revoke(reg); err != nil {
+			r.unregister(reg, err)
+			return nil, err
+		}
+	}
 
 	state := edgeproto.StateUnclaimed
 	if claimed {
@@ -498,7 +506,7 @@ func (r *Relay) recordOwner(reg *registration, record func(ctx context.Context) 
 		// row that its earlier marks would keep unrecorded.
 		maps.DeleteFunc(r.connectorUsed, func(u connectorUse, _ time.Time) bool { return u.serverID == reg.id })
 		if reg.hasDirectory {
-			r.queueDirectoryLocked(reg, reg.directory, true)
+			r.queueDirectoryLocked(reg, reg.directory)
 			reg.directory, reg.hasDirectory = nil, false
 		}
 	}
@@ -509,6 +517,12 @@ func (r *Relay) recordOwner(reg *registration, record func(ctx context.Context) 
 		// The server enrolled again before this report was recorded and
 		// was told it is unclaimed.
 		cur.cancel(errClaimRecorded)
+	}
+	// The former owner's connections end here unless the directory names
+	// them, and so do those an earlier claim of the server left.
+	if err := r.revoke(reg); err != nil {
+		slog.Warn("relay: connections not revoked after an ownership report; closing the control channel", "server", reg.id, "error", err)
+		reg.cancel(err)
 	}
 	return nil
 }
@@ -554,28 +568,26 @@ type directoryWrite struct {
 	reg     *registration
 	entries []edgeproto.DirectoryEntry
 	pending bool
-	// beforeClaim marks a directory pushed while the server was unclaimed.
-	beforeClaim bool
 }
 
 func (r *Relay) replaceDirectory(reg *registration, m edgeproto.Directory) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if reg.claimed {
-		r.queueDirectoryLocked(reg, m.Entries, false)
+		r.queueDirectoryLocked(reg, m.Entries)
 		return
 	}
 	reg.directory, reg.hasDirectory = m.Entries, true
 }
 
-func (r *Relay) queueDirectoryLocked(reg *registration, entries []edgeproto.DirectoryEntry, beforeClaim bool) {
+func (r *Relay) queueDirectoryLocked(reg *registration, entries []edgeproto.DirectoryEntry) {
 	w := r.directories[reg.id]
 	if w == nil {
 		w = &directoryWrite{}
 		r.directories[reg.id] = w
 		go r.storeDirectories(reg.id, w)
 	}
-	w.reg, w.entries, w.pending, w.beforeClaim = reg, entries, true, beforeClaim
+	w.reg, w.entries, w.pending = reg, entries, true
 }
 
 // storeDirectories stores serverID's latest pushed directory at most once
@@ -590,10 +602,10 @@ func (r *Relay) storeDirectories(serverID string, w *directoryWrite) {
 			r.mu.Unlock()
 			return
 		}
-		reg, entries, beforeClaim := w.reg, w.entries, w.beforeClaim
+		reg, entries := w.reg, w.entries
 		w.pending, w.entries = false, nil
 		r.mu.Unlock()
-		if err := r.storeDirectory(reg, entries, beforeClaim); err != nil && reg.ctx.Err() == nil {
+		if err := r.storeDirectory(reg, entries); err != nil && reg.ctx.Err() == nil {
 			slog.Warn("relay: directory not stored; closing the control channel", "server", serverID, "error", err)
 			reg.cancel(err)
 		}
@@ -603,34 +615,42 @@ func (r *Relay) storeDirectories(serverID string, w *directoryWrite) {
 	}
 }
 
-// storeDirectory stores entries and closes the ssh connections of accounts
-// they no longer name. A directory pushed before the claim closes none: it
-// may not name the claimant yet, and until it is stored the edge admits
-// only the owner the claim made.
-func (r *Relay) storeDirectory(reg *registration, entries []edgeproto.DirectoryEntry, beforeClaim bool) error {
+func (r *Relay) storeDirectory(reg *registration, entries []edgeproto.DirectoryEntry) error {
 	ctx, cancel := context.WithTimeout(reg.ctx, directoryTimeout)
 	defer cancel()
 	if err := r.dir.ReplaceDirectory(ctx, reg.id, entries); err != nil {
 		return fmt.Errorf("relay: store directory of %s: %w", reg.id, err)
 	}
-	if beforeClaim {
-		return nil
+	return r.revoke(reg)
+}
+
+// revoke ends the ssh connections to reg's server of accounts the edge
+// would not admit now, by the test that admits a new one: a directory that
+// does not name the owner does not end the owner's, and a connection
+// admitted under an earlier claim of the server ends once its account is
+// neither named nor the owner. A claim connection is admitted by the
+// server's claim code and an http connection by nothing the edge holds.
+func (r *Relay) revoke(reg *registration) error {
+	r.mu.Lock()
+	var conns []*relayConn
+	for _, c := range r.conns {
+		if c.serverID == reg.id && c.kind == edgeproto.KindSSH {
+			conns = append(conns, c)
+		}
 	}
-	now := time.Now()
-	// A claim connection is admitted by the server's claim code, not by
-	// the directory, which may predate the claim it makes; an http
-	// connection by nothing the edge holds.
-	r.closeConns(func(c *relayConn) bool {
-		if c.serverID != reg.id || c.kind != edgeproto.KindSSH {
-			return false
+	r.mu.Unlock()
+	ctx, cancel := context.WithTimeout(reg.ctx, directoryTimeout)
+	defer cancel()
+	for _, c := range conns {
+		err := r.dir.Admit(ctx, reg.id, c.account)
+		var refusal edgeproto.Refusal
+		switch {
+		case errors.As(err, &refusal):
+			c.cancel(refusal)
+		case err != nil:
+			return fmt.Errorf("relay: revoke connections to %s: %w", reg.id, err)
 		}
-		for _, e := range entries {
-			if e.Matches(c.account, now) {
-				return false
-			}
-		}
-		return true
-	}, edgeproto.RefusalNotMember)
+	}
 	return nil
 }
 
