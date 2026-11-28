@@ -273,7 +273,7 @@ type Scheduler struct {
 	vmMemoryBraked bool
 	// vmFreezeCounted is set once that freeze was counted.
 	vmFreezeCounted bool
-	vmBrakeTargets []runtime.ID
+	vmBrakeTargets  []runtime.ID
 	// vmMemoryWaking holds, under mu, while a wake the guard started runs.
 	vmMemoryWaking bool
 
@@ -856,7 +856,7 @@ func New(cfg Config) (*Scheduler, error) {
 		slog.Warn("scheduler: remove the old one-VM-session records", "error", err)
 	}
 	s.useOMPBroker(cfg.OMPBrokers)
-	s.wg.Go(func() { s.countCapacityEvents(ctx) })
+	s.wg.Go(func() { s.countCapacityEvents(ctx, cfg.Store) })
 	return s, nil
 }
 
