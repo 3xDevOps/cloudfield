@@ -210,12 +210,22 @@ stdin.
 When the server has no memory or disk for the session, the command waits:
 the server keeps the launch and starts it when there is room
 ([A launch that waits for room](failure-handling.md#a-launch-that-waits-for-room)).
-It prints the server's refusal on stderr, again each time it changes, and
-then the same `session <session-id> running` line on stdout once the session
-exists, so a script that reads stdout or the exit status needs no change.
-Ctrl-C while it waits cancels the launch and exits 130: nothing starts later.
+It prints the server's refusal on stderr, again when the kind of refusal
+changes, and then the same `session <session-id> running` line on stdout
+once the session runs. The output and exit status of a launch that succeeds
+are unchanged; a script that relied on a full server failing at once now
+blocks for up to a day, and passes `--no-wait` to keep the old behaviour.
+
+Ctrl-C or SIGTERM while it waits cancels the launch on the server and exits
+130: nothing starts later. When the server does not confirm the cancel
+within 10 seconds, or the connection is lost while waiting, the launch may
+still be kept: the command says so and prints the command that follows the
+same launch, where Ctrl-C cancels it. A command killed with SIGKILL cancels
+nothing; the launch stays waiting and starts when there is room.
+
 `--no-wait` fails at once with the refusal instead, as the command did
-before, and so does a server that does not keep launches.
+before, and so do a server that does not keep launches and
+`cloudfield session --template`.
 
 `--linear-issue <url>` links the session to a Linear issue, for example
 `--linear-issue https://linear.app/acme/issue/ENG-123`. Without it, the first

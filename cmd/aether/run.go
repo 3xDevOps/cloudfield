@@ -110,8 +110,10 @@ func runRun(args []string) error {
 		if err != nil {
 			return err
 		}
+		// Only an option that needs a feature needs the answer: a plain
+		// launch goes ahead, without waiting, when it cannot be read.
 		var info protocol.ServerInfoResult
-		if err := c.Call(protocol.MethodServerInfo, struct{}{}, &info); err != nil {
+		if err := c.Call(protocol.MethodServerInfo, struct{}{}, &info); err != nil && (len(repos) > 0 || *permission != "") {
 			return err
 		}
 		if len(repos) > 0 && !slices.Contains(info.Features, protocol.FeatureMultiRepo) {
@@ -136,9 +138,9 @@ func runRun(args []string) error {
 		// A server that keeps a launch it has no room for is asked to,
 		// unless --no-wait.
 		params.Wait = !*noWait && slices.Contains(info.Features, protocol.FeatureLaunchWait)
-		res, err := launchWaiting(c, params, os.Stderr, waitingLaunchEvery)
-		if err != nil {
-			return launchError(err, params, fromStdin)
+		res, failed := launchWaiting(c, params, os.Stderr, waitingLaunchEvery, launchCommand(params, fromStdin))
+		if failed != nil {
+			return launchError(failed, params, fromStdin)
 		}
 		if res.Replayed {
 			_, _ = fmt.Fprintf(os.Stderr, "idempotency key %s already launched session %s; nothing new was launched\n", params.IdempotencyKey, res.Run.ID)
@@ -149,29 +151,58 @@ func runRun(args []string) error {
 }
 
 // waitingLaunchEvery is how often a launch the server keeps for want of
-// room is asked after.
-const waitingLaunchEvery = 5 * time.Second
+// room is asked after, and cancelWaitFor how long an interrupted command
+// waits for the server to cancel it.
+const (
+	waitingLaunchEvery = 5 * time.Second
+	cancelWaitFor      = 10 * time.Second
+)
 
-// errWaitCancelled ends a launch that was waiting for room when its command
-// was interrupted: the launch was cancelled and nothing started.
-var errWaitCancelled = errors.New("interrupted")
+// errWaitEnded ends a command whose launch waited for room and did not
+// become a running session: cancelled by an interrupt, left waiting, or
+// started and failed. Its text is the whole message.
+type errWaitEnded struct {
+	text string
+	code int
+}
+
+func (e *errWaitEnded) Error() string { return e.text }
 
 // launchWaiting launches params. While the server keeps the launch because
 // it has no room, it says why on w, each time the server's refusal changes,
-// and asks again every interval until the session exists or the wait ends.
-// An interrupt cancels a waiting launch: nobody watches for a session that
-// would start hours later.
-func launchWaiting(c *protocol.Client, params protocol.RunLaunchParams, w io.Writer, interval time.Duration) (protocol.RunLaunchResult, error) {
-	interrupt := make(chan os.Signal, 1)
+// and asks again every interval until the session has started or the wait
+// ends. An interrupt cancels a waiting launch: nobody watches for a session
+// that would start hours later. again is the command that follows the same
+// launch, for when this one cannot.
+func launchWaiting(c *protocol.Client, params protocol.RunLaunchParams, w io.Writer, interval time.Duration, again string) (protocol.RunLaunchResult, error) {
+	interrupt := make(chan os.Signal, 2)
 	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(interrupt)
 	waiting, said := "", ""
+	// left is how a command that stops watching says where the launch is.
+	left := func(why string, code int) error {
+		return &errWaitEnded{code: code, text: fmt.Sprintf("%s\nthe launch may still be waiting on the server and start later. To follow it, or cancel it with Ctrl-C, run:\n  %s", why, again)}
+	}
 	cancel := func() error {
 		var ended protocol.LaunchWaiting
-		if err := c.Call(protocol.MethodLaunchWaitingCancel, protocol.LaunchWaitingCancelParams{ID: waiting}, &ended); err != nil {
-			return fmt.Errorf("%w; cancelling the waiting launch %s failed, so it may still start: %w", errInterrupted, waiting, err)
+		done := make(chan error, 1)
+		// The call in flight, if any, holds the connection until it returns.
+		go func() {
+			done <- c.Call(protocol.MethodLaunchWaitingCancel, protocol.LaunchWaitingCancelParams{ID: waiting}, &ended)
+		}()
+		select {
+		case err := <-done:
+			switch {
+			case err != nil:
+				return &errWaitEnded{code: 130, text: fmt.Sprintf("interrupted; the waiting launch %s was not cancelled: %v", waiting, err)}
+			case ended.State != "cancelled":
+				return &errWaitEnded{code: 130, text: fmt.Sprintf("interrupted; the launch %s had already ended %s: %s", waiting, ended.State, ended.Refusal)}
+			}
+			return &errWaitEnded{code: 130, text: fmt.Sprintf("interrupted; the launch %s was waiting for room and is cancelled: nothing started", waiting)}
+		case <-interrupt:
+		case <-time.After(cancelWaitFor):
 		}
-		return fmt.Errorf("%w; the launch %s was waiting for room and is cancelled: nothing started", errWaitCancelled, waiting)
+		return left("interrupted; the server did not confirm the cancel", 130)
 	}
 	for {
 		var res protocol.RunLaunchResult
@@ -179,6 +210,14 @@ func launchWaiting(c *protocol.Client, params protocol.RunLaunchParams, w io.Wri
 		go func() { done <- c.Call(protocol.MethodRunLaunch, params, &res) }()
 		select {
 		case err := <-done:
+			if err != nil && waiting != "" {
+				var rpcErr *protocol.Error
+				if errors.As(err, &rpcErr) && (rpcErr.Code == protocol.CodeUnavailable || rpcErr.Code == protocol.CodeConflict) && strings.Contains(rpcErr.Message, "waited for room and ended") {
+					// The wait is over without a session: the server says how.
+					return protocol.RunLaunchResult{}, &errWaitEnded{code: 1, text: rpcErr.Message}
+				}
+				return protocol.RunLaunchResult{}, left(err.Error(), 1)
+			}
 			if err != nil {
 				return protocol.RunLaunchResult{}, err
 			}
@@ -186,22 +225,64 @@ func launchWaiting(c *protocol.Client, params protocol.RunLaunchParams, w io.Wri
 			if waiting != "" {
 				return protocol.RunLaunchResult{}, cancel()
 			}
-			return protocol.RunLaunchResult{}, errInterrupted
+			if !params.Wait {
+				return protocol.RunLaunchResult{}, errInterrupted
+			}
+			// The server may be keeping this launch already: only its
+			// answer names what to cancel.
+			select {
+			case err := <-done:
+				if err != nil {
+					return protocol.RunLaunchResult{}, errInterrupted
+				}
+				if res.Waiting == nil {
+					return res, nil
+				}
+				waiting = res.Waiting.ID
+				return protocol.RunLaunchResult{}, cancel()
+			case <-interrupt:
+			case <-time.After(cancelWaitFor):
+			}
+			return protocol.RunLaunchResult{}, left("interrupted before the server answered", 130)
 		}
-		if res.Waiting == nil {
+		switch {
+		case res.Waiting != nil:
+			waiting = res.Waiting.ID
+			// The figures in a refusal differ at every try; its kind rarely does.
+			if kind := strings.Map(dropDigits, res.Waiting.Refusal); kind != said {
+				said = kind
+				_, _ = fmt.Fprintf(w, "waiting for room on the server: launch %s, until %s (Ctrl-C cancels it; --no-wait fails at once): %s\n", waiting, res.Waiting.ExpiresAt, res.Waiting.Refusal)
+			}
+		case waiting == "":
 			return res, nil
-		}
-		waiting = res.Waiting.ID
-		if res.Waiting.Refusal != said {
-			said = res.Waiting.Refusal
-			_, _ = fmt.Fprintf(w, "waiting for room on the server, until %s (Ctrl-C cancels the launch; --no-wait fails at once): %s\n", res.Waiting.ExpiresAt, said)
+		// A launch that waited is answered as soon as its session exists,
+		// before it is provisioned: a launch that did not wait answers
+		// only then, and this command reports the same.
+		case res.Run.Status == "queued" || res.Run.Status == "provisioning":
+		case res.Run.Status == "failed":
+			return protocol.RunLaunchResult{}, &errWaitEnded{code: 1, text: fmt.Sprintf("session %s started once the server had room and failed: %s", res.Run.ID, res.Run.Reason)}
+		default:
+			// The replay is this command's own launch, not an earlier one.
+			res.Replayed = false
+			return res, nil
 		}
 		select {
 		case <-time.After(interval):
 		case <-interrupt:
+			if res.Waiting == nil {
+				// Its session exists: an interrupt leaves it, as it leaves any launch.
+				return protocol.RunLaunchResult{}, &errWaitEnded{code: 130, text: fmt.Sprintf("interrupted; session %s is starting: aether kill %s stops it", res.Run.ID, res.Run.ID)}
+			}
 			return protocol.RunLaunchResult{}, cancel()
 		}
 	}
+}
+
+func dropDigits(r rune) rune {
+	if r >= '0' && r <= '9' {
+		return -1
+	}
+	return r
 }
 
 var errInterrupted = errors.New("interrupted")
@@ -226,13 +307,17 @@ func callInterruptibly(c *protocol.Client, method string, params, result any) er
 // does launchError name the retry.
 func launchError(err error, params protocol.RunLaunchParams, fromStdin bool) error {
 	var rpcErr *protocol.Error
+	var ended *errWaitEnded
 	switch {
-	case errors.Is(err, errWaitCancelled):
-		return &exitStatusError{code: 130, err: err}
+	case errors.As(err, &ended):
+		return &exitStatusError{code: ended.code, err: err}
 	case errors.Is(err, errInterrupted):
 		return &exitStatusError{code: 130, err: fmt.Errorf("%w; a launch the server had already accepted keeps starting: aether sessions lists it, and aether kill <session-id> stops it once it is listed.\nto get its session id, or to launch it once if the server had not accepted it, run:\n  %s", errInterrupted, launchCommand(params, fromStdin))}
 	case errors.As(err, &rpcErr):
 		return cachedBaseLaunchError(err, params, fromStdin)
+	}
+	if params.Wait {
+		return fmt.Errorf("%w\nthe launch may still be starting, or waiting for room on the server; aether sessions lists it once it has started. To follow it without launching twice, run:\n  %s", err, launchCommand(params, fromStdin))
 	}
 	return fmt.Errorf("%w\nthe launch may still be starting; aether sessions lists it. To retry without launching twice, run:\n  %s", err, launchCommand(params, fromStdin))
 }
@@ -272,6 +357,12 @@ func launchCommand(params protocol.RunLaunchParams, fromStdin bool) string {
 	}
 	if params.Children != "" {
 		args = append(args, "--children", params.Children)
+	}
+	if params.LinearIssueURL != "" {
+		args = append(args, "--linear-issue", shellquote.Quote(params.LinearIssueURL))
+	}
+	if !params.Wait {
+		args = append(args, "--no-wait")
 	}
 	if params.IdempotencyKey != "" {
 		args = append(args, "--idempotency-key", shellquote.Quote(params.IdempotencyKey))
