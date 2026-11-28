@@ -52,8 +52,10 @@ type fakeRuntime struct {
 	// daemon does.
 	removedVolumes []string
 	volumeErr      error
-	commitErr      error
-	commits        []fakeCommitCall
+	// removeVolumeHook runs at the start of every RemoveSubpathVolume.
+	removeVolumeHook func()
+	commitErr        error
+	commits          []fakeCommitCall
 	// heldImages are tags the fake daemon refuses to remove, as Docker does
 	// while a container still uses them.
 	heldImages map[string]bool
@@ -292,6 +294,12 @@ func (r *fakeRuntime) Stop(_ context.Context, id runtime.ID, _ time.Duration) er
 }
 
 func (r *fakeRuntime) RemoveSubpathVolume(_ context.Context, hostPath string) error {
+	r.mu.Lock()
+	hook := r.removeVolumeHook
+	r.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.volumeErr != nil {

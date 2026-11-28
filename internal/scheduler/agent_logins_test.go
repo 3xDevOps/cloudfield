@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -204,43 +205,35 @@ func TestSignInAddsTheLoginItSavedAndTouchesNoOtherLogin(t *testing.T) {
 	}
 }
 
-// Close waits for a sign-in whose command ended and whose finish is still
-// removing its container, so the finish never works on a closed store.
-func TestCloseWaitsForASignInThatIsFinishing(t *testing.T) {
+// A sign-in's result comes after the reconcile that follows it, so nothing
+// of the sign-in works on the store or the login directories once its
+// caller has heard. The reconcile here removes a directory no login row
+// names, slowly.
+func TestSignInResultWaitsForItsReconcile(t *testing.T) {
 	e := newSignInEnv(t)
-	id, err := e.sched.BeginLoginSignIn(t.Context(), e.member.ID, "claude", "work")
-	if err != nil {
+	if _, err := e.logins.Add(e.member.ID, "claude", "lgn-orphan0000"); err != nil {
 		t.Fatal(err)
 	}
-	finishing, release := make(chan struct{}), make(chan struct{})
-	att := newSignInAttachment()
+	var reconciled atomic.Bool
 	e.rt.mu.Lock()
-	e.rt.destroyHook = func(runtime.ID) {
-		close(finishing)
-		<-release
-	}
-	e.rt.execTTYHook = func(context.Context, runtime.ID, []string, string, uint, uint) (runtime.Attachment, error) {
-		return att, att.Close()
+	e.rt.removeVolumeHook = func() {
+		time.Sleep(100 * time.Millisecond)
+		reconciled.Store(true)
 	}
 	e.rt.mu.Unlock()
-	if _, err = e.sched.StartLoginSignIn(t.Context(), e.member.ID, id, 80, 24); err != nil {
+	if _, _, err := e.signIn(t, "work", func(spec runtime.Spec) {
+		dir, pathErr := e.logins.Path(e.member.ID, "claude", domain.LoginID(strings.TrimPrefix(spec.Name, "aether-login-")))
+		if pathErr != nil {
+			t.Error(pathErr)
+			return
+		}
+		writeHomeFile(t, dir, memberhome.LoginCredentials, addedLoginFile)
+		writeHomeFile(t, dir, memberhome.LoginConfig, cachedAccount("ada@work.example.test", "org-work"))
+	}); err != nil {
 		t.Fatal(err)
 	}
-	<-finishing
-	closed := make(chan struct{})
-	go func() {
-		_ = e.sched.Close()
-		close(closed)
-	}()
-	select {
-	case <-closed:
-		t.Fatal("Close returned while the sign-in was finishing")
-	case <-time.After(200 * time.Millisecond):
-	}
-	close(release)
-	<-closed
-	if _, err = e.sched.LoginSignInResult(t.Context(), e.member.ID, "claude", id); err == nil || !strings.Contains(err.Error(), "before Claude Code saved a login") {
-		t.Fatalf("the sign-in Close waited for ended with %v; want it settled as one that saved nothing", err)
+	if !reconciled.Load() {
+		t.Fatal("the sign-in's result came while its reconcile was still removing a login directory")
 	}
 }
 

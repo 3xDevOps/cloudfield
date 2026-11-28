@@ -172,7 +172,7 @@ func (s *Scheduler) StartLoginSignIn(ctx context.Context, member domain.MemberID
 	s.mu.Unlock()
 	att, err := s.startSignInContainer(ctx, sign, cols, rows)
 	if err == nil {
-		ending := &endingAttachment{Attachment: att, end: func() { s.startLoginSignInFinish(sign) }}
+		ending := &endingAttachment{Attachment: att, end: func() { go s.finishLoginSignIn(sign) }}
 		if err = s.cfg.PTY.StartSession(ctx, key, ending); err != nil {
 			_ = att.Close()
 		}
@@ -311,23 +311,6 @@ func (s *Scheduler) cleanUpSignIn(ctx context.Context, sign *loginSignIn) error 
 	return nil
 }
 
-// startLoginSignInFinish finishes sign off the terminal's path. Close waits
-// for a finish that began before it.
-func (s *Scheduler) startLoginSignInFinish(sign *loginSignIn) {
-	s.mu.Lock()
-	tracked := s.superCtx.Err() == nil
-	if tracked {
-		s.wg.Add(1)
-	}
-	s.mu.Unlock()
-	go func() {
-		if tracked {
-			defer s.wg.Done()
-		}
-		s.finishLoginSignIn(sign)
-	}()
-}
-
 // finishLoginSignIn runs once the sign-in command ended: it removes the
 // container, then adds the login the agent saved or removes its directory.
 func (s *Scheduler) finishLoginSignIn(sign *loginSignIn) {
@@ -366,17 +349,21 @@ func (s *Scheduler) endLoginSignIn(sign *loginSignIn, login domain.AgentLogin, e
 			slog.Warn("scheduler: remove a login that was not added", "login", sign.id, "error", removeErr)
 		}
 	}
+	// A merge that committed while the login was added gave its row to the
+	// survivor and left the directory, which its reconcile skipped then.
+	// The result waits for this one, so nothing of the sign-in runs on
+	// after its caller has heard.
+	if err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		if reconcileErr := s.ReconcileLogins(ctx, sign.member); reconcileErr != nil {
+			slog.Warn("scheduler: reconcile the logins of a finished sign-in", "login", sign.id, "error", reconcileErr)
+		}
+		cancel()
+	}
 	s.mu.Lock()
 	sign.login, sign.err = login, err
 	close(sign.done)
 	s.mu.Unlock()
-	// A merge that committed while the login was added gave its row to the
-	// survivor and left the directory, which its reconcile skipped then.
-	if err == nil {
-		if reconcileErr := s.ReconcileLogins(context.Background(), sign.member); reconcileErr != nil {
-			slog.Warn("scheduler: reconcile the logins of a finished sign-in", "login", sign.id, "error", reconcileErr)
-		}
-	}
 	time.AfterFunc(loginSignInKept, func() {
 		s.mu.Lock()
 		if s.loginSignIns[sign.id] == sign {
