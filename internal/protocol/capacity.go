@@ -55,16 +55,18 @@ type ServerCapacityDisk struct {
 	ReserveBytes uint64 `json:"reserve_bytes"`
 }
 
-// ServerCapacityVMs counts the session VMs of open sessions: awake (one a
+// ServerCapacityVMs counts the session VMs. Of open sessions: awake (one a
 // member paused too), awake and frozen by the memory brake, asleep and
 // paused in memory, asleep and saved to disk, and asleep with neither
-// (stopped, or still being saved).
+// (stopped, or still being saved). Closed are the VMs of closed sessions
+// that can still hold memory.
 type ServerCapacityVMs struct {
 	Awake   int `json:"awake"`
 	Frozen  int `json:"frozen"`
 	Paused  int `json:"paused"`
 	Saved   int `json:"saved"`
 	Stopped int `json:"stopped"`
+	Closed  int `json:"closed"`
 }
 
 type ServerCapacityRefusal struct {

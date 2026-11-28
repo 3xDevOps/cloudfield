@@ -151,6 +151,16 @@ func TestSessionVMsAreCountedByWhatTheyHold(t *testing.T) {
 	if got, want := e.sched.VMs(), (domain.VMCounts{Frozen: 2, Paused: 1, Saved: 1, Stopped: 1}); got != want {
 		t.Fatalf("VMs = %+v, want %+v", got, want)
 	}
+	// A closed session's VM still in memory is counted as that.
+	e.sched.mu.Lock()
+	e.sched.runs[stoppedRun].retained, e.sched.runs[stoppedRun].asleepResident = true, true
+	e.sched.mu.Unlock()
+	if got, want := e.sched.VMs(), (domain.VMCounts{Frozen: 2, Paused: 1, Saved: 1, Closed: 1}); got != want {
+		t.Fatalf("VMs with a closed session's VM in memory = %+v, want %+v", got, want)
+	}
+	e.sched.mu.Lock()
+	e.sched.runs[stoppedRun].retained, e.sched.runs[stoppedRun].asleepResident = false, false
+	e.sched.mu.Unlock()
 	m := e.sched.Machine(t.Context())
 	if m.MemoryAvailableBytes != floor-1 || m.MemoryFloorBytes != floor || m.MemoryTotalBytes != 32<<30 || m.StartMemoryBytes != startupMemoryBytes {
 		t.Fatalf("machine memory = %+v, want what admission reads", m)
