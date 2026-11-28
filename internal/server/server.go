@@ -943,9 +943,9 @@ func (s *Server) offerRoom(ctx context.Context) {
 		return
 	}
 	for e := range sub.Events() {
-		// A session getting under way takes room; one ending, asleep or
-		// gone can give some back.
-		if status, ok := e.Payload.(events.RunStatusPayload); ok && !status.To.Terminal() {
+		// One ending, asleep or gone can give room back, and one that
+		// has started gives back what its start had claimed.
+		if status, ok := e.Payload.(events.RunStatusPayload); ok && !status.To.Terminal() && status.To != domain.RunRunning {
 			continue
 		}
 		s.ssh.RoomAppeared()

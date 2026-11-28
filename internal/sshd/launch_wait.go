@@ -106,7 +106,9 @@ func (s *Server) waitForRoom(ctx context.Context, member domain.MemberID, key st
 	}
 	base, err := s.cfg.Runs.CaptureLaunchBase(ctx, domain.WorkspaceID(p.WorkspaceID), p.CachedBase)
 	if err != nil {
-		return nil, notKept("its base could not be captured: " + err.Error())
+		// The launch could not start with room either: its own error,
+		// with its code, is the answer.
+		return nil, rpcError(err)
 	}
 	id, _ := ctx.Value(connIdentityKey{}).(connIdentity)
 	in, existing, err := s.cfg.Store.CreateLaunchIntent(ctx, &domain.LaunchIntent{
@@ -379,7 +381,7 @@ func (s *Server) startWaitingLaunch(ctx context.Context, in *domain.LaunchIntent
 			return true
 		}
 		c, err := connectors.GetConnector(ctx, in.Connector)
-		if err != nil && !errors.Is(err, store.ErrNotFound) {
+		if err != nil && !errors.Is(err, store.ErrNotFound) && in.Failures+1 < maxLaunchFailures {
 			// The read failed; whether the connector stands is not known.
 			s.release(ctx, in, "the connector that asked for it could not be read: "+err.Error(), true)
 			return true
@@ -415,6 +417,7 @@ func (s *Server) startWaitingLaunch(ctx context.Context, in *domain.LaunchIntent
 		done <- perr
 	}()
 	started := func() bool {
+		s.spendReclaim(attempt, now)
 		slog.Info("launch: a waiting launch started", "launch", in.ID, "member", in.MemberID, "waited", now.Sub(in.CreatedAt), "attempts", in.Attempts+1, "passed", in.Passed)
 		s.countLaunchWait(ctx, domain.CapacityEvent{Kind: domain.CapacityWaitEnd, Op: waitingLaunchOp, Cause: "started", Run: in.ID, Waited: now.Sub(in.CreatedAt)})
 		return true
@@ -435,10 +438,6 @@ func (s *Server) startWaitingLaunch(ctx context.Context, in *domain.LaunchIntent
 		return started()
 	default:
 	}
-	// The allowance to free disk is spent by a try that needed it.
-	if attempt.reclaim && errors.Is(attempt.refused, scheduler.ErrDiskFull) {
-		s.launchReclaimed.Store(now.UnixNano())
-	}
 	switch {
 	case perr == nil:
 		if _, err := s.cfg.Store.GetRun(ctx, in.ID); err == nil {
@@ -452,16 +451,25 @@ func (s *Server) startWaitingLaunch(ctx context.Context, in *domain.LaunchIntent
 		// A server stopping: the next one returns it to waiting.
 		return false
 	case scheduler.IsCapacityRefusal(attempt.refused):
+		s.spendReclaim(attempt, now)
 		s.release(ctx, in, attempt.refused.Error(), false)
 		return false
-	case perr.Code == protocol.CodeInternal && in.Failures+1 < maxLaunchFailures:
-		// Not a refusal: a read or write that failed. It is tried again,
-		// a few times.
+	case (perr.Code == protocol.CodeInternal || perr.Code == protocol.CodeUnavailable) && in.Failures+1 < maxLaunchFailures:
+		// Not a refusal: a read or write that failed, or something that
+		// could not be reached. It is tried again, a few times.
 		s.release(ctx, in, perr.Message, true)
 		return true
 	}
 	s.endRefused(ctx, in, perr.Message, now)
 	return true
+}
+
+// spendReclaim uses up the allowance to free disk for a try that had it
+// and reached admission: it started, or was refused for room.
+func (s *Server) spendReclaim(attempt *launchAttempt, now time.Time) {
+	if attempt.reclaim {
+		s.launchReclaimed.Store(now.UnixNano())
+	}
 }
 
 // release returns a claimed launch to waiting with the reason its try did

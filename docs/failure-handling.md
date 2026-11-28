@@ -879,7 +879,8 @@ the assistant's turn, could not be checked again when it started.
   It is not a session: nothing can message, wake or report to that ID, and
   it holds no slot, until it has started.
 - **When it is tried.** The oldest waiting launch is tried every 30 seconds,
-  and within 5 seconds of a session ending, falling asleep or being deleted,
+  and within 5 seconds of a session starting, ending, falling asleep or
+  being deleted,
   so room that appears is offered to waiting launches first. When one's session exists,
   the next is tried in the same pass, without waiting for the first to
   finish provisioning. One try in ten minutes may free disk as a launch
@@ -893,8 +894,8 @@ the assistant's turn, could not be checked again when it started.
   edge device is tried only while that device is admitted, and one asked
   for through a connector as that connector, with the grant and scopes it
   has then. A launch that fails a check ends `refused` with that error. A
-  try that fails on anything else, such as a database read or a
-  repository that cannot be fetched, leaves it waiting; the fifth such try
+  try that fails on something that may pass, such as a database read or a
+  repository that cannot be reached, leaves it waiting; the fifth such try
   in a row ends it `refused` with that error.
 - **Order.** Oldest first. Every launch needs the same room, so the oldest
   never holds up one that would fit. A launch that asks to wait while others
