@@ -98,6 +98,7 @@ import {
   ZoomIn as LucideZoomIn,
   PackageX as LucidePackageX,
   Rocket as LucideRocket,
+  Server as LucideServer,
   ServerCog as LucideServerCog,
   ServerOff as LucideServerOff,
   ShieldOff as LucideShieldOff,
@@ -277,6 +278,7 @@ export const Moon = icon(LucideMoon)
 export const ZoomIn = icon(LucideZoomIn)
 export const PackageX = icon(LucidePackageX)
 export const Rocket = icon(LucideRocket)
+export const Server = icon(LucideServer)
 export const ServerCog = icon(LucideServerCog)
 export const ServerOff = icon(LucideServerOff)
 export const ShieldOff = icon(LucideShieldOff)

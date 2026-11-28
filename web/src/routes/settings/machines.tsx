@@ -1,0 +1,436 @@
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import { RefreshCw } from '@/components/icons'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Callout } from '@/components/ui/callout'
+import { Code } from '@/components/ui/code'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { CopyButton } from '@/components/ui/copy-button'
+import { ProgressBar } from '@/components/ui/progress-bar'
+import { RelativeTime } from '@/components/ui/relative-time'
+import { verbatim } from '@/components/update-banner-shared'
+import { api, type Api } from '@/lib/api'
+import { formatDuration, message } from '@/lib/format'
+import { runLabel } from '@/lib/status'
+import type { ServerCapacity, ServerCapacityCount, ServerCapacityDisk, ServerCapacityRefusal } from '@/lib/types'
+import { cn } from '@/lib/utils'
+import { SettingRow, SettingsSection, TryAgain } from '@/routes/settings/layout'
+import { useStore } from '@/store'
+
+/** GiB, as `cloudfield-server status` prints it. */
+const gib = (bytes: number) => `${(bytes / 2 ** 30).toFixed(1)} GiB`
+
+/** The same pace as Insights › System, which polls system.stats every 5 seconds. */
+const readEveryMs = 5000
+
+type CapacityClient = Pick<Api, 'serverCapacity'>
+
+function useCapacity(client: CapacityClient) {
+  const connection = useStore((s) => s.connection)
+  const identity = useStore((s) => s.identityKey)
+  // A super admin's answer names sessions and server errors a demoted member must not keep seeing.
+  const role = useStore((s) => s.info?.member.role)
+  const [result, setResult] = useState<ServerCapacity | null>(null)
+  const [readAt, setReadAt] = useState('')
+  const [error, setError] = useState('')
+  const [asked, setAsked] = useState(false)
+  const [shown, setShown] = useState(() => document.visibilityState === 'visible')
+  const [reads, setReads] = useState(0)
+
+  useEffect(() => {
+    setResult(null)
+    setError('')
+  }, [identity, role])
+
+  useEffect(() => {
+    const onChange = () => setShown(document.visibilityState === 'visible')
+    document.addEventListener('visibilitychange', onChange)
+    return () => document.removeEventListener('visibilitychange', onChange)
+  }, [])
+
+  useEffect(() => {
+    if (connection !== 'live' || !shown) return
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const abort = new AbortController()
+    let failures = 0
+    const read = async () => {
+      try {
+        const next = await client.serverCapacity(abort.signal)
+        if (stopped) return
+        failures = 0
+        setResult(next)
+        setReadAt(new Date().toISOString())
+        setError('')
+      } catch (err) {
+        if (stopped) return
+        failures++
+        setError(message(err))
+        // A server that does not know the method never will: Try again asks once more.
+        if (message(err).includes('method not found')) return
+      } finally {
+        if (!stopped) setAsked(false)
+      }
+      // A failing server is asked less often, up to once a minute.
+      timer = setTimeout(() => void read(), Math.min(readEveryMs * 2 ** failures, 60_000))
+    }
+    void read()
+    return () => {
+      stopped = true
+      abort.abort()
+      clearTimeout(timer)
+    }
+  }, [client, connection, shown, identity, role, reads])
+
+  const refresh = useCallback(() => {
+    setAsked(true)
+    setReads((n) => n + 1)
+  }, [])
+  return { result, readAt, error, reading: asked, refresh, live: connection === 'live' || connection === 'connecting' }
+}
+
+export function MachinesSection({ client = api }: { client?: CapacityClient }) {
+  const { result, readAt, error, reading, refresh, live } = useCapacity(client)
+  const failed = error && (
+    <Callout tone="failed" role="alert" title={result ? 'Could not read the machine; the figures below are from the last good read' : 'Could not read the machine'} actions={<TryAgain onClick={refresh} />}>
+      <p className="font-code text-ui-sm whitespace-pre-wrap [overflow-wrap:anywhere]">{error}</p>
+    </Callout>
+  )
+  if (!result) {
+    return (
+      <SettingsSection title="The server's machine" id="machine">
+        <SettingRow label="Machine capacity" help={error ? null : live ? 'Reading the machine…' : 'Not connected to the server, so the machine is not read.'}>{failed}</SettingRow>
+      </SettingsSection>
+    )
+  }
+  return <Machine result={result} readAt={readAt} failed={failed} reading={reading} refresh={refresh} live={live} />
+}
+
+function Machine({ result: r, readAt, failed, reading, refresh, live }: { result: ServerCapacity; readAt: string; failed: ReactNode; reading: boolean; refresh: () => void; live: boolean }) {
+  const refused = refusalNow(r)
+  // stall_error joins the server's own read, whose failure refuses a launch, with the host's, which does not.
+  const unknown = refused === null && r.stall_error !== undefined && r.stall_error !== '' && r.server_stall === undefined
+  return (
+    <>
+      <SettingsSection title="The server's machine" id="machine">
+        <SettingRow
+          label="Can a session launch now?"
+          help={live
+            ? <>Read <RelativeTime at={readAt} />, and again every {readEveryMs / 1000} seconds while this page is open, less often after a read fails. The lines below are the least a launch needs: starts under way need more, and the server can free room for one.</>
+            : <>Last read <RelativeTime at={readAt} />. Not connected to the server, so this is not read again until it is.</>}
+          control={<Button size="sm" variant="secondary" disabled={reading || !live} onClick={refresh}><RefreshCw />Refresh</Button>}
+        >
+          <p className="flex items-start gap-2 text-ui">
+            {unknown ? <Badge>Not known</Badge> : refused === null ? <Badge tone="done">Fits</Badge> : <Badge tone="failed">Refused</Badge>}
+            <span className="min-w-0 flex-1">
+              {unknown ? 'A memory stall could not be read. If it is the server\u2019s own, every launch is refused; the error is below.' : refused ?? fits(r)}
+            </span>
+          </p>
+          {failed}
+        </SettingRow>
+        <MemoryRow r={r} />
+        <StallRow r={r} />
+        {r.disk_unchecked && <SettingRow label="Disk" help={<>Not checked: the server was started with <Code className="whitespace-nowrap">--min-free-disk</Code> negative, so no launch is refused for disk.</>} />}
+        {r.disk_error && (
+          <SettingRow label={r.disk_unchecked ? 'Container or VM runtime' : 'Disk and runtime'} help={r.disk_unchecked ? 'Could not be asked, so a launch is refused:' : 'A disk could not be measured or the container or VM runtime could not be asked, so a launch is refused:'} control={<Badge tone="failed">Launch refused</Badge>}>
+            <p className={cn(verbatim, 'max-h-48 text-state-failed')}>{r.disk_error}</p>
+          </SettingRow>
+        )}
+        {r.disks.map((d) => <DiskRow key={d.name} disk={d} need={r.start_disk_bytes} />)}
+        <VMsRow vms={r.vms} />
+      </SettingsSection>
+      <SettingsSection title="Last refusals">
+        <RefusalRow what="launch" refusal={r.last_launch_refusal} />
+        <RefusalRow what="wake" refusal={r.last_wake_refusal} />
+      </SettingsSection>
+      <Counts day={r.day} fortnight={r.fortnight} />
+    </>
+  )
+}
+
+/** What a launch that fits was checked against. A stall the server does not measure is not claimed. */
+function fits(r: ServerCapacity): string {
+  const room = r.disk_unchecked ? 'Memory is above the launch line' : 'Memory and every disk are above the launch line'
+  const stall = r.server_stall === undefined ? ". The server's memory stall is not measured here, so it is not checked." : ", and the server's memory stall is under its limit."
+  return `${room}${stall}${r.disk_unchecked ? ' Disk is not checked.' : ''}`
+}
+
+/** Why a launch would be refused now, as a sentence, or null when it would start. */
+function refusalNow(r: ServerCapacity): string | null {
+  const unmeasured = [r.memory_error && 'memory', r.disk_error && !r.disk_unchecked && 'disk or the runtime'].filter((w): w is string => Boolean(w))
+  const short: string[] = []
+  if (!r.memory_error && r.memory_available_bytes < r.memory_floor_bytes + r.start_memory_bytes) short.push('memory is under the launch line')
+  if (r.server_stall !== undefined && r.server_stall >= r.server_stall_limit) short.push("the server's memory stall is at its limit")
+  for (const d of r.disks) if (d.free_bytes < d.reserve_bytes + r.start_disk_bytes) short.push(`${d.name} is under the launch line`)
+  if (unmeasured.length === 0 && short.length === 0 && !r.disk_error) return null
+  const lead = [unmeasured.length && `${joinWords(unmeasured)} could not be measured`, r.disk_error && r.disk_unchecked && 'the container or VM runtime could not be asked'].filter(Boolean).join(', and ')
+  const why = [lead, joinWords(short)].filter(Boolean).join(', and ')
+  return `${why.charAt(0).toUpperCase()}${why.slice(1)}.`
+}
+
+function joinWords(words: string[]): string {
+  return words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`
+}
+
+/** Free space on a track of the total, marked at the launch line: what the server keeps free plus what a launch needs. */
+function Room({ label, free, total, keep, need }: { label: string; free: number; total: number; keep: number; need: number }) {
+  const line = keep + need
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <div className="relative">
+        <ProgressBar
+          role="meter"
+          aria-label={label}
+          aria-valuetext={`${gib(free)} free of ${gib(total)}; the launch line is ${gib(line)}`}
+          value={free}
+          max={total}
+          className="h-2"
+          fillClassName={free >= line ? 'bg-state-done' : 'bg-state-failed'}
+        />
+        <span aria-hidden className="absolute -top-1 h-4 w-0.5 -translate-x-1/2 rounded-full bg-text ring-1 ring-canvas" style={{ left: `${Math.min(100, (line / Math.max(total, 1)) * 100)}%` }} />
+      </div>
+      <p className="flex items-center gap-1 text-ui-xs text-muted tabular-nums">
+        <span aria-hidden className="h-3 w-0.5 shrink-0 rounded-full bg-text" />
+        Launch line {gib(line)}: {gib(keep)} kept free plus at least {gib(need)} for the launch
+      </p>
+    </div>
+  )
+}
+
+function MemoryRow({ r }: { r: ServerCapacity }) {
+  if (r.memory_error) {
+    return (
+      <SettingRow label="Memory" help="Not measured, so a launch is refused:" control={<Badge tone="failed">Launch refused</Badge>}>
+        <p className={cn(verbatim, 'max-h-48 text-state-failed')}>{r.memory_error}</p>
+      </SettingRow>
+    )
+  }
+  const available = r.memory_available_bytes
+  const floor = r.memory_floor_bytes
+  const fits = available >= floor + r.start_memory_bytes
+  return (
+    <SettingRow
+      label="Memory"
+      help={`${gib(available)} available of ${gib(r.memory_total_bytes)}. Starts still taking their memory raise the line, and waking a VM saved to disk needs the memory it saved.${available < floor ? ` Under the ${gib(floor)} the server keeps free, it freezes session VMs and saves them to disk.` : ''}`}
+      control={<Badge tone={fits ? 'done' : 'failed'}>{fits ? 'Launch fits' : 'Launch refused'}</Badge>}
+    >
+      <Room label="Memory available" free={available} total={r.memory_total_bytes} keep={floor} need={r.start_memory_bytes} />
+    </SettingRow>
+  )
+}
+
+function StallRow({ r }: { r: ServerCapacity }) {
+  const failed = r.stall_error ? 'the error is below' : ''
+  const refuses = r.server_stall !== undefined && r.server_stall >= r.server_stall_limit
+  const line = (what: string, value: number | undefined, limit: number, acts: string, missing: string) => (
+    <li className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+      <span className="text-text">{what}</span>
+      {value === undefined
+        ? <span className="text-muted">Not measured: {failed || missing}.</span>
+        : (
+            <span className={cn('tabular-nums', value >= limit ? 'text-state-failed' : 'text-muted')}>
+              {/* Rounded down, so a figure under its limit never reads as at it. */}
+              {(Math.floor(value * 10) / 10).toFixed(1)}% · {acts}
+            </span>
+          )}
+    </li>
+  )
+  return (
+    <SettingRow
+      label="Memory stall"
+      help="The share of time tasks waited for memory. At its limit the server acts."
+      control={r.server_stall !== undefined ? <Badge tone={refuses ? 'failed' : 'done'}>{refuses ? 'Launch refused' : 'Launch fits'}</Badge> : r.stall_error && <Badge>Not measured</Badge>}
+    >
+      <ul className="flex flex-col gap-1 text-ui-sm">
+        {line('Server, last 60 s:', r.server_stall, r.server_stall_limit, `at ${r.server_stall_limit.toFixed(0)}%, launches are refused`, "the server's own cgroup reports no memory pressure")}
+        {line('Host, last 10 s:', r.host_stall, r.host_stall_limit, `at ${r.host_stall_limit.toFixed(0)}% for 30 s, the server saves session VMs to disk`, 'the kernel reports no memory pressure')}
+      </ul>
+      {r.stall_error && <p className={cn(verbatim, 'max-h-48 text-state-failed')}>{r.stall_error}</p>}
+    </SettingRow>
+  )
+}
+
+function DiskRow({ disk: d, need }: { disk: ServerCapacityDisk; need: number }) {
+  const fits = d.free_bytes >= d.reserve_bytes + need
+  return (
+    <SettingRow
+      label={`Disk: ${d.name}`}
+      help={`${gib(d.free_bytes)} free of ${gib(d.total_bytes)}.`}
+      control={<Badge tone={fits ? 'done' : 'failed'}>{fits ? 'Launch fits' : 'Launch refused'}</Badge>}
+    >
+      <Room label={`${d.name} free`} free={d.free_bytes} total={d.total_bytes} keep={d.reserve_bytes} need={need} />
+    </SettingRow>
+  )
+}
+
+function VMsRow({ vms }: { vms: ServerCapacity['vms'] }) {
+  const cells: [number, string][] = [
+    [vms.awake, 'Awake'],
+    [vms.frozen, 'Frozen by the memory brake'],
+    [vms.paused, 'Asleep in memory'],
+    [vms.saved, 'Asleep on disk'],
+    [vms.stopped, 'Asleep with nothing kept'],
+  ]
+  return (
+    <SettingRow label="Session VMs" help="The VMs of open sessions. Awake includes VMs a member paused, which still hold their memory. The memory brake freezes awake VMs when memory runs short. Nothing kept means stopped, or still being saved.">
+      <dl className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+        {cells.map(([count, what]) => (
+          <div key={what} className="flex min-w-0 flex-col rounded-control border border-seam px-3 py-2">
+            <dt className="order-last text-ui-sm text-muted">{what}</dt>
+            <dd className="text-prose font-medium tabular-nums">{count}</dd>
+          </div>
+        ))}
+      </dl>
+      {vms.closed > 0 && <p className="text-ui-sm text-muted">{vms.closed} {vms.closed === 1 ? 'VM of a closed session still holds' : 'VMs of closed sessions still hold'} memory.</p>}
+    </SettingRow>
+  )
+}
+
+const causeWords: Record<string, string> = { memory: 'Memory', stall: 'Memory stall', disk: 'Disk', unknown: 'Not measured' }
+
+const opWords: Record<string, string> = { 'launch-retry': 'A waiting launch tried again', 'wake-auto': 'A wake the server tried by itself' }
+
+function RefusalRow({ what, refusal }: { what: 'launch' | 'wake'; refusal?: ServerCapacityRefusal }) {
+  const text = useRef<HTMLParagraphElement>(null)
+  const navigate = useStore((s) => s.navigate)
+  const session = useStore((s) => (refusal?.run_id && s.runs[refusal.run_id] ? runLabel(s.runs[refusal.run_id]) : refusal?.run_id))
+  const known = useStore((s) => Boolean(refusal?.run_id && s.runs[refusal.run_id]))
+  const label = `Last ${what} refused`
+  if (!refusal) return <SettingRow label={label} help="None in 14 days." />
+  const when = new Date(refusal.at)
+  return (
+    <SettingRow
+      label={label}
+      help={(
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <RelativeTime at={refusal.at} className="text-text" />
+          <span className="tabular-nums">{Number.isNaN(when.getTime()) ? refusal.at : when.toLocaleString(undefined, { timeZoneName: 'short' })}</span>
+          {refusal.cause && <Badge>{causeWords[refusal.cause] ?? refusal.cause}</Badge>}
+          {opWords[refusal.op] && <Badge>{opWords[refusal.op]}</Badge>}
+        </span>
+      )}
+      control={<CopyButton text={refusal.text} label={`Copy why the last ${what} was refused`} source={text} />}
+    >
+      <p ref={text} className="max-h-48 min-w-0 overflow-auto rounded-control border border-seam bg-chrome px-2 py-1.5 font-code text-ui-sm leading-5 whitespace-pre-wrap [overflow-wrap:anywhere] select-text">
+        {refusal.text}
+      </p>
+      {refusal.run_id && (
+        <p className="flex min-w-0 items-center gap-1 text-ui-sm text-muted">
+          Session
+          {known ? (
+            <Button variant="link" size="sm" className="h-auto min-w-0 p-0" onClick={() => navigate('run', { runId: refusal.run_id! })}>
+              <span className="truncate">{session}</span>
+            </Button>
+          ) : (
+            // One refused before it existed, or outside this workspace, has no page to open.
+            <span className="truncate font-code">{refusal.run_id}</span>
+          )}
+        </p>
+      )}
+    </SettingRow>
+  )
+}
+
+const counted = (counts: ServerCapacityCount[], match: (c: ServerCapacityCount) => boolean) =>
+  counts.filter(match).reduce((n, c) => n + c.count, 0)
+
+const launchRefusal = (c: ServerCapacityCount) => c.kind === 'refusal' && (c.op === 'launch' || c.op === 'launch-retry')
+const refusalOf = (op: string) => (c: ServerCapacityCount) => c.kind === 'refusal' && c.op === op
+const memoryRefusal = (c: ServerCapacityCount) => c.kind === 'refusal' && (c.cause === 'memory' || c.cause === 'stall')
+
+function waits(counts: ServerCapacityCount[], which: 'mean' | 'longest'): string {
+  const started = counts.filter((c) => c.kind === 'wait-end' && c.cause === 'started')
+  const n = started.reduce((sum, c) => sum + c.count, 0)
+  if (n === 0) return '–'
+  const seconds = which === 'mean'
+    ? started.reduce((sum, c) => sum + (c.waited_seconds ?? 0), 0) / n
+    : Math.max(...started.map((c) => c.max_waited_seconds ?? 0))
+  return formatDuration(seconds * 1000)
+}
+
+function idleShare(counts: ServerCapacityCount[]): string {
+  const refusals = counts.filter(memoryRefusal)
+  const used = refusals.reduce((sum, c) => sum + (c.used_bytes ?? 0), 0)
+  if (used === 0) return '–'
+  // A counter whose refusals were counted while memory could not be read has idle bytes and no used ones: it is left out.
+  const idle = refusals.filter((c) => (c.used_bytes ?? 0) > 0).reduce((sum, c) => sum + (c.idle_hour_bytes ?? 0), 0)
+  return idle > used ? '–' : `${Math.round((100 * idle) / used)}%`
+}
+
+/** The figure columns of both Counted tables, one width so their figures line up. */
+const number = 'w-20 px-3 text-right whitespace-nowrap tabular-nums'
+
+const counterName = (c: ServerCapacityCount) => [c.kind, c.op, c.cause].filter(Boolean).join(' ')
+
+function Counts({ day, fortnight }: { day: ServerCapacityCount[]; fortnight: ServerCapacityCount[] }) {
+  if (fortnight.length === 0) {
+    return (
+      <SettingsSection title="Last 24 hours and 14 days, in whole UTC hours">
+        <SettingRow label="Nothing counted in 14 days" help="No launch or wake was refused, nothing waited for room, and no session VM was frozen or saved for memory." />
+      </SettingsSection>
+    )
+  }
+  const rows: [string, string | null, (counts: ServerCapacityCount[]) => string][] = [
+    ['Launches refused', "A waiting subsession's retries count each time.", (counts) => String(counted(counts, launchRefusal))],
+    ['Subsessions that waited for room', null, (counts) => String(counted(counts, (c) => c.kind === 'wait'))],
+    ['Mean wait before a start', 'Waits that ended in a start.', (counts) => waits(counts, 'mean')],
+    ['Longest wait before a start', null, (counts) => waits(counts, 'longest')],
+    ['Share of used memory held by sessions idle over an hour or closed', 'At memory and stall refusals.', idleShare],
+    ['Wakes refused', null, (counts) => String(counted(counts, (c) => refusalOf('wake')(c) || refusalOf('wake-auto')(c)))],
+    ['Of these, tried by the server itself', null, (counts) => String(counted(counts, refusalOf('wake-auto')))],
+  ]
+  const byName = new Map(day.map((c) => [counterName(c), c]))
+  return (
+    <SettingsSection title="Last 24 hours and 14 days, in whole UTC hours">
+      <div className="min-w-0 overflow-x-auto">
+        <table className="w-full text-ui">
+          <caption className="sr-only">Refusals and waits over the last 24 hours and 14 days</caption>
+          <thead className="text-ui-sm">
+            <tr className="border-b border-seam">
+              <th className="px-4 py-1.5 text-left font-normal text-muted" scope="col"><span className="sr-only">What</span></th>
+              <th className={cn(number, 'py-1.5 font-normal text-muted')} scope="col">24 hours</th>
+              <th className={cn(number, 'py-1.5 pr-4 font-normal text-muted')} scope="col">14 days</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-seam">
+            {rows.map(([label, help, value]) => (
+              <tr key={label}>
+                <th scope="row" className="px-4 py-2 text-left align-top font-normal">
+                  <span className="text-text">{label}</span>
+                  {help && <span className="block text-ui-sm text-muted">{help}</span>}
+                </th>
+                <td className={cn(number, 'py-2 align-top')}>{value(day)}</td>
+                <td className={cn(number, 'py-2 pr-4 align-top')}>{value(fortnight)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <Collapsible className="min-w-0 border-t border-seam px-3 py-1 text-ui-sm">
+        <CollapsibleTrigger className="text-ui-sm text-muted">All {fortnight.length} counters</CollapsibleTrigger>
+        <CollapsibleContent className="min-w-0 overflow-x-auto px-1 pb-1">
+          <table className="w-full">
+            <thead>
+              <tr className="text-muted">
+                <th className="py-1 pr-3 text-left font-normal" scope="col">Counter</th>
+                <th className="px-3 py-1 text-right font-normal" scope="col">Last</th>
+                <th className={cn(number, 'py-1 font-normal')} scope="col">24 h</th>
+                <th className={cn(number, 'py-1 pr-0 font-normal')} scope="col">14 d</th>
+              </tr>
+            </thead>
+            <tbody>
+              {fortnight.map((c) => (
+                <tr key={counterName(c)}>
+                  <th scope="row" className="py-0.5 pr-3 text-left font-code font-normal [overflow-wrap:anywhere]">{counterName(c)}</th>
+                  <td className="px-3 py-0.5 text-right whitespace-nowrap text-muted"><RelativeTime at={c.last_at} compact /></td>
+                  <td className={cn(number, 'py-0.5')}>{byName.get(counterName(c))?.count ?? 0}</td>
+                  <td className={cn(number, 'py-0.5 pr-0')}>{c.count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </CollapsibleContent>
+      </Collapsible>
+    </SettingsSection>
+  )
+}

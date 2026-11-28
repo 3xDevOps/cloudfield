@@ -126,6 +126,7 @@ import type {
   ServerUpdateResult,
   ServerUpdateStatus,
   RunLimits,
+  ServerCapacity,
   ServerRunLimits,
   SysboxStatus,
   ServerUpdateWhen,
@@ -815,6 +816,9 @@ export const api = {
    * next idle moment, or to cancel the pending one. */
   serverUpdate: (when: ServerUpdateWhen) =>
     call<ServerUpdateResult>('server.update', { when }),
+  /** What the server measures before it starts or wakes a session, its
+   * session VMs and what it did for want of memory or disk. */
+  serverCapacity: (signal?: AbortSignal) => call<ServerCapacity>('server.capacity', undefined, signal),
   /** Reads the server-wide run limits; with a field set, an admin changes
    * them. Zero clears a field. */
   serverRunLimits: (params: { cpus?: number; memory_bytes?: number; pids?: number } = {}) =>

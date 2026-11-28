@@ -94,7 +94,10 @@ function Account({ child }: { child: Child }) {
 
 function ChildRow({ child }: { child: Child }) {
   const navigate = useStore((s) => s.navigate)
-  const { label, tone } = childState[child.state]
+  const machines = useCapability().hasMethod('server.capacity')
+  // A queued or starting subsession with an error was refused for room on the server and is tried again.
+  const waiting = (child.state === 'queued' || child.state === 'starting') && Boolean(child.error)
+  const { label, tone } = waiting ? { label: 'Waiting to start', tone: 'waiting' as const } : childState[child.state]
   const started = child.state !== 'queued' && child.state !== 'cancelled' && child.state !== 'refused'
   return (
     <li className="flex min-w-0 flex-col gap-1 py-2 first:pt-0 last:pb-0">
@@ -107,9 +110,13 @@ function ChildRow({ child }: { child: Child }) {
         {[label, [child.harness, child.model].filter(Boolean).join(' · ')].join(' · ')} · <Account child={child} /> · {child.cost_usd === undefined ? 'Cost not reported' : money.format(child.cost_usd)}
       </p>
       {child.report && <p className="pl-4 text-ui-sm break-words">{child.report.summary}</p>}
-      {child.error && <p className="pl-4 text-ui-sm break-words text-state-failed">{child.error}</p>}
+      {child.error && (waiting
+        ? <p className="ml-4 max-h-28 overflow-auto rounded-control border border-seam bg-chrome px-2 py-1.5 font-code text-ui-sm whitespace-pre-wrap [overflow-wrap:anywhere] text-text">{child.error}</p>
+        : <p className="pl-4 text-ui-sm break-words text-state-failed">{child.error}</p>)}
+      {waiting && <p className="pl-4 text-ui-sm text-muted">The server tries it again until it has room, for up to 24 hours from the request.</p>}
       <div className="flex gap-1 pl-3">
-        {started && <Button size="sm" variant="ghost" onClick={() => navigate('run', { runId: child.run_id })}>Open</Button>}
+        {started && !waiting && <Button size="sm" variant="ghost" onClick={() => navigate('run', { runId: child.run_id })}>Open</Button>}
+        {waiting && machines && <Button size="sm" variant="ghost" onClick={() => navigate('settings', { section: 'machines' })}>Open Machines</Button>}
       </div>
     </li>
   )

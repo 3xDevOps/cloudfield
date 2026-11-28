@@ -910,6 +910,7 @@ export function fakeApi(over: Partial<Api> = {}): Api {
     })),
     localUpdateStatus: vi.fn(async () => ({ phase: 'idle' as const })),
     serverUpdateStatus: vi.fn(async () => serverUpdateStatus()),
+    serverCapacity: vi.fn(async () => needsOverride('serverCapacity')),
     serverRunLimits: vi.fn<Api['serverRunLimits']>(async () => ({ limits: {}, default: { cpus: 8, memory_bytes: 8 * 2 ** 30, pids: 4096 }, effective: { cpus: 8, memory_bytes: 8 * 2 ** 30, pids: 4096 } })),
     serverReleaseChannelSet: vi.fn<Api['serverReleaseChannelSet']>(async (channel) => ({
       channel,

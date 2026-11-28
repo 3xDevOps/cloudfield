@@ -20,6 +20,7 @@ import { GitHubSection } from '@/routes/settings/github'
 import { LaunchDefaultsSection } from '@/routes/settings/launch'
 import { LinearSection } from '@/routes/settings/linear'
 import { SettingsNav } from '@/routes/settings/nav'
+import { MachinesSection } from '@/routes/settings/machines'
 import { MemorySection } from '@/routes/settings/memory'
 import { NotificationSections } from '@/routes/settings/notifications'
 import { type CategoryID, categoryOf, visibleCategories, visibleEntries } from '@/routes/settings/registry'
@@ -44,6 +45,7 @@ const bodies: Record<CategoryID, (client: Api) => ReactNode> = {
   usage: (client) => <UsageSection client={client} />,
   'this-computer': (client) => <ThisComputerSections client={client} />,
   server: (client) => <ServerSection client={client} />,
+  machines: (client) => <MachinesSection client={client} />,
   'remote-access': (client) => <RemoteAccessSection client={client} />,
 }
 

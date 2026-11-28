@@ -5640,7 +5640,13 @@ and applies again once there is room. Sections (`details.tsx`):
   purpose, state, agent and model, "On `<name>`'s account" plus "(fallback
   from `<name>`)" when the store's session carries `requested_account_member_id`,
   its cost or "Cost not reported", its latest report and error, and
-  a **Detached** badge. **Open** opens a started subsession. Under the list: the cost of this session and all its
+  a **Detached** badge. A `queued` or `starting` subsession that carries an
+  error is waiting for room on the server: it reads **Waiting to start**
+  with the waiting dot, the server's refusal text verbatim in a neutral
+  box, **Open Machines**, which opens Settings › Machines when the
+  server answers `server.capacity`, and `The server tries it again until it
+  has room, for up to 24 hours from the request.`; any other error is in the
+  failed colour. **Open** opens a started subsession that is not waiting. Under the list: the cost of this session and all its
   descendants, "At least $X: N sessions report no cost" when some are unmetered
   and "Cost not reported" when none are metered, never $0; the split by
   paying account; tokens; and "1 of 8 busy, 1 queued" against the
@@ -7295,6 +7301,7 @@ while one of its entries is visible, so the nav and search never disagree.
 | You | Usage (`usage`) | Subscription usage (`subscription-usage`) |
 | This computer | This computer (`this-computer`) | Link (`link`); Syncing: Sync daemon (`sync-daemon`), Mirror session files (`mirror`); Danger zone (`danger-zone`) |
 | Server | Server (`server`) | Status: Version (`version`), Tailnet dashboard, Disk and performance (`disk`); Admin: Docker inside sessions (`docker`), Retained sandboxes (`retained-containers`) |
+| Server | Machines (`machines`) | The server's machine (`machine`), Last refusals, Last 24 hours and 14 days |
 | Server | Remote access (`remote-access`) | Edge (`edge`) |
 
 **Addressing.** The route is `{name: "settings", params: {section}}`, and
@@ -7485,6 +7492,49 @@ Categories:
   board's Finished menu for the active workspace. It prevents reopening those
   sessions but does not delete all session data: checkouts, homes, repositories and
   history retain their existing lifecycle.
+- **Machines**, when the server answers `server.capacity`
+  (`machines.tsx`): one section per machine, today the one the server runs
+  on, with figures in GiB as `cloudfield-server status` prints them.
+  - **Can a session launch now?** says when the figures were read and
+    whether a launch would start or be refused, or `Not known` when a
+    memory stall could not be read, and why: what could not be
+    measured, memory or a disk under its launch line (what the server keeps
+    free plus the least a launch needs), or the server's memory stall at
+    its limit.
+  - **Memory** and each **Disk** show free against total as a meter marked
+    at the launch line. **Memory stall** shows the server's figure over 60
+    seconds against the limit that refuses launches and the host's over 10
+    seconds against the limit that saves session VMs, or `Not measured`
+    with the reason. Each carries a `Launch fits` or `Launch refused` badge;
+    a row that could not be measured reads `Launch refused`, a stall that
+    could not be measured `Not measured`. `memory_error`, `stall_error` and
+    `disk_error` show verbatim. With the disk check off (`disk_unchecked`)
+    **Disk** says so instead of listing none, and a runtime that could not
+    be asked still shows its error.
+  - **Session VMs** counts awake, frozen by the memory brake, asleep in
+    memory, asleep on disk and asleep with nothing kept, then how many VMs
+    of closed sessions still hold memory.
+  - **Last refusals** gives the last launch and wake refused in 14 days:
+    when, in local time with its zone; the cause in words; `A wake the
+    server tried by itself` for `wake-auto`; the server's text verbatim
+    with a copy button; and, for a super admin, the session: a link when
+    the dashboard holds it, its id otherwise.
+  - **Last 24 hours and 14 days**, in whole UTC hours: launches refused (a
+    waiting subsession's retries included), subsessions that waited for
+    room, the mean and the longest wait that ended in a start, the share of
+    the memory in use at memory and stall refusals that sessions idle over
+    an hour or closed held, wakes refused (`wake` and `wake-auto`) and how
+    many of those the server tried by itself. **All N counters** opens the
+    raw counters. Nothing counted reads `Nothing counted in 14 days`.
+  - The page reads `server.capacity` again every 5 seconds while it is
+    open, the tab is visible and the connection is live, and has
+    **Refresh**. After a failed read it asks less often, up to once a
+    minute, and not again by itself after `method not found`. Not
+    connected, it says so and **Refresh** is disabled. A failed read shows the error verbatim with **Try again**
+    and keeps the last figures, saying they are from the last good read.
+
+  [failure-handling.md](failure-handling.md#what-the-server-did-for-want-of-memory-or-disk)
+  defines the counters.
 - **Session limits**, a row in **Server › Admin**, for admins when the server
   answers `server.run_limits`: CPUs, memory in GiB and processes, empty
   meaning the flag or automatic value shown in grey, and **Save**. The launch

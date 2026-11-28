@@ -103,6 +103,47 @@ describe('child run usage', () => {
     expect(item.textContent).toContain('Disconnected')
     expect(item.textContent).toContain(stopped)
   })
+
+  it('shows a queued subsession the server had no room for as waiting, not failed', async () => {
+    const parent = run()
+    setUp([parent])
+    const refused = 'scheduler: insufficient host memory headroom: 1288490188 available bytes; reserve 1717986918 bytes plus 536870912 bytes for this start and 0 bytes for starts in flight'
+    const client = fakeApi({
+      runChildren: vi.fn(async () => ({
+        root_run_id: 'run_1',
+        children: [child({ state: 'queued', error: refused }), child({ run_id: 'run_c2', state: 'failed', error: 'agent exited with code 1' })],
+        limits: { max_live: 8 },
+        usage: { runs: 3, metered_runs: 0, unmetered_runs: 3, input_tokens: 0, output_tokens: 0, cost_usd: 0, by_account: [] },
+      })),
+    })
+    render(<ChildRuns run={toRecord(parent)} inset={false} client={client} />)
+    const [waiting, failed] = within(await screen.findByRole('list', { name: /Subsessions of/ })).getAllByRole('listitem')
+    expect(within(waiting).getByLabelText('Waiting to start')).toBeDefined()
+    expect(waiting.textContent).not.toContain('Queued')
+    const text = within(waiting).getByText(refused)
+    expect(text.className).not.toContain('text-state-failed')
+    fireEvent.click(within(waiting).getByRole('button', { name: 'Open Machines' }))
+    expect(useStore.getState().route).toEqual({ name: 'settings', params: { section: 'machines' } })
+    expect(within(failed).getByText('agent exited with code 1').className).toContain('text-state-failed')
+  })
+
+  it('offers no Open for a subsession that waits while the server tries it again', async () => {
+    const parent = run()
+    setUp([parent])
+    const client = fakeApi({
+      runChildren: vi.fn(async () => ({
+        root_run_id: 'run_1',
+        children: [child({ state: 'starting', error: 'scheduler: insufficient disk headroom' })],
+        limits: { max_live: 8 },
+        usage: { runs: 2, metered_runs: 0, unmetered_runs: 2, input_tokens: 0, output_tokens: 0, cost_usd: 0, by_account: [] },
+      })),
+    })
+    render(<ChildRuns run={toRecord(parent)} inset={false} client={client} />)
+    const [waiting] = within(await screen.findByRole('list', { name: /Subsessions of/ })).getAllByRole('listitem')
+    expect(within(waiting).getByLabelText('Waiting to start')).toBeDefined()
+    expect(within(waiting).getByText('The server tries it again until it has room, for up to 24 hours from the request.')).toBeDefined()
+    expect(within(waiting).queryByRole('button', { name: 'Open' })).toBeNull()
+  })
 })
 
 describe('kill confirmation', () => {
