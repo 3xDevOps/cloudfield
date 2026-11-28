@@ -856,7 +856,7 @@ func New(cfg Config) (*Scheduler, error) {
 		slog.Warn("scheduler: remove the old one-VM-session records", "error", err)
 	}
 	s.useOMPBroker(cfg.OMPBrokers)
-	s.wg.Go(func() { s.countCapacityEvents(ctx) })
+	s.wg.Go(func() { s.countCapacityEvents(ctx, cfg.Store) })
 	return s, nil
 }
 
