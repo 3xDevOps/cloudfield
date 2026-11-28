@@ -855,22 +855,36 @@ the end is longer. A wake then restores the VM from disk and reads all of
 its saved memory back first ([vm-guest.md](vm-guest.md#save-and-restore)),
 where a paused VM only resumed.
 
+Those saves are part of the first start, which has 5 minutes from
+migrating the database to finish. An update that cannot finish them in
+that time rolls back, and `cloudfield server update --status` gives
+`<version> did not finish its boot within 5m0s of migrating the database`.
+
+Once this release has saved such a VM, a downgrade to `v0.10.0-nightly.5`
+or earlier wakes it with its processes still frozen.
+
 A VM fits when the data disk keeps its reserve, 4 GiB and the memory of
 the saves still writing free after it, the rule the memory guard saves by
 ([Recover from memory pressure](failure-handling.md#recover-from-memory-pressure)).
-One that does not fit stays paused and holds its memory. The server log
-names it twice:
+One that does not fit stays paused and holds its memory, as does one whose
+memory the server cannot read or whose data disk it cannot measure. The
+server log names one that does not fit twice:
 
 ```
 scheduler: memory guard: no room on disk to save a session VM run=<id> memory=<bytes> writing=<bytes> free=<bytes>
 scheduler: save a sleeping session's VM; it stays running run=<id> error="its memory is unknown or does not fit on the data disk; the memory guard saves it once it fits and the host is short of memory, and a wake resumes it"
 ```
 
+A VM whose memory is unknown gets the second line only. When the data disk
+cannot be measured, the first line is `scheduler: memory guard: measure the
+data filesystem error=<error>`, which does not name the session.
+
 `sudo cloudfield-server status` counts it under `asleep in memory`
 ([failure-handling.md](failure-handling.md#what-the-server-did-for-want-of-memory-or-disk)).
-Its session reads as asleep with its processes kept, and a wake resumes it
-without a restore. The memory guard saves it once the host is short of
-memory and the disk has room
+The dashboard and `cloudfield sessions <session-id>` word it as saved to
+disk with every process, as they do a saved VM, until the memory guard
+saves it. A wake resumes it without a restore. The memory guard saves it
+once the host is short of memory and the disk has room
 ([Recover from disk pressure](failure-handling.md#recover-from-disk-pressure)).
 
 The

@@ -766,6 +766,9 @@ counters. What it cannot read it says, `VMs      not read: ...` and
 counts are the running server's, written when they change and at least
 every minute: an older count means no server has written one since, because
 it is stopped or cannot write. `awake` includes a session a member paused;
+`asleep in memory` is only a VM recorded asleep that the server found still
+running when it started and could not save
+([Sessions in VMs](#sessions-in-vms));
 `asleep with nothing kept` is a VM stopped with no saved memory, or one
 still being saved; the last figure is the VMs of closed sessions that can
 still hold memory, until the guard stops them. A wake the server tried by itself is marked on the
@@ -1219,9 +1222,11 @@ its save leaves one, is saved then only if its memory fits on the data disk
 by the memory guard's rule
 ([Recover from memory pressure](#recover-from-memory-pressure)).
 One that does not fit stays as it is and logs `scheduler: save a sleeping
-session's VM; it stays running run=<id>`: its session reads as asleep with
-its processes kept, a wake resumes it, and the memory guard saves it once
-the host is short of memory and the disk has room. A
+session's VM; it stays running run=<id>`: a wake resumes it, and the memory
+guard saves it once the host is short of memory and the disk has room.
+Until then the dashboard and `cloudfield sessions <session-id>` word it as
+saved to disk with every process, though it still holds its memory, and
+`cloudfield-server status` counts it under `asleep in memory`. A
 stop cuts short a wake still running and leaves its session asleep: with
 its saved state, or, once the restore has resumed the guest, with its VM
 running, which the next server saves again, or wakes if the memory guard
