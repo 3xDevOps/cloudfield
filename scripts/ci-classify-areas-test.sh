@@ -85,6 +85,8 @@ expect vm true internal/guest/helper/main_linux.go
 expect vm true internal/vmimage/store.go
 expect vm true images/kernel/config-x86_64
 expect vm true internal/scheduler/vm_sessions.go
+expect vm true internal/scheduler/acp_end.go
+expect vm true internal/scheduler/acp_keeper.go
 expect vm true internal/server/vmruntime.go
 expect vm true internal/sshd/sync_vm.go
 expect vm true internal/runtime/managed_exec.go
@@ -116,6 +118,41 @@ internal/events: data types; the gitengine and guest helper unit tests cover how
 internal/overlay: the server side of live sync; only the unit tests of the guest helper use it, without a VM
 internal/linear: a leaf URL parser reached only through protocol
 internal/browser: the client of the browser companion, the same over Docker and VMs; the VM engine only relays its socket
+internal/scheduler: the vm list names the files that restart a killed agent and start its keeper, which the KVM tests in it cover; a change elsewhere in it waits for the nightly VM run
+internal/acphost: the ACP client, the same over Docker and VMs
+internal/acphost/acpmock: the mock agent the scheduler tests run
+internal/harness: agent profiles, the same over Docker and VMs
+internal/adapter: reached only through the scheduler
+internal/agentstatus: reached only through the scheduler
+internal/attribution: reached only through the scheduler
+internal/codexapp: reached only through the scheduler
+internal/codexapp/codexmock: reached only through the scheduler
+internal/collab: reached only through the scheduler
+internal/control: reached only through the scheduler
+internal/coord: reached only through the scheduler
+internal/coordcli: reached only through the scheduler
+internal/coordhooks: reached only through the scheduler
+internal/cost: reached only through the scheduler
+internal/ctxlock: reached only through the scheduler
+internal/envname: reached only through the scheduler
+internal/evidence: reached only through the scheduler
+internal/fallback: reached only through the scheduler
+internal/github: reached only through the scheduler
+internal/jsonc: reached only through the scheduler
+internal/memberhome: the VM engine takes one function from it, which its unit tests cover
+internal/memory: reached only through the scheduler
+internal/mirror: reached only through the scheduler
+internal/overlap: reached only through the scheduler
+internal/permissions: reached only through the scheduler
+internal/profile: reached only through the scheduler
+internal/ptyhost: reached only through the scheduler
+internal/push: reached only through the scheduler
+internal/quota: reached only through the scheduler
+internal/secretstore: reached only through the scheduler
+internal/shellquote: reached only through the scheduler
+internal/signing: reached only through the scheduler
+internal/store/storetest: reached only through the scheduler
+internal/watch: reached only through the scheduler
 '
 cd "$script_dir/.."
 kvm_files=$(grep -rl --include='*_test.go' -E '^//go:build .*kvm' internal)
