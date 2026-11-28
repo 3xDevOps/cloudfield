@@ -39,7 +39,11 @@ until **Reset to standard**, and reach sessions only after **Save environment**
 
 `/tmp` is scratch on disk, not memory. A session's `/tmp` is deleted with the session,
 the environment's is emptied each time the environment starts, and **Save
-environment** never captures it.
+environment** never captures it. A session in a virtual machine
+([environments.md](environments.md#sessions-in-virtual-machines)) has about
+29 GiB of `/tmp`, on a 32 GiB disk nested Docker writes to as well; a write
+that finds it full fails with `No space left on device` until the session
+deletes files.
 
 ## Tool caches
 

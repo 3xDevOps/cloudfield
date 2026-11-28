@@ -385,6 +385,14 @@ What changes:
   applies inside the guest. Processes start at an open-file limit of 1024
   soft and 524288 hard, and any user may listen on ports below 1024 and use
   `ping` ([vm-guest.md](vm-guest.md#boot)).
+- `/tmp`, nested Docker's images and containers, and what an Isolated
+  session writes to its home share the session's data disk: 32 GiB plus the
+  swap file. It takes server disk only as the session writes, and never more
+  than its size. A write that finds it full fails with
+  `No space left on device` until the session deletes files; for the
+  session's user in `/tmp` that is at about 29 GiB
+  ([vm-guest.md](vm-guest.md#kernel-command-line)). A VM made before the
+  disk had this size keeps its 128 GiB disk.
 - The checkout and each extra repository live on disks of their own, made
   in constant time from a prepared disk per workspace and base commit, and
   git work on them runs inside the VM ([vm-guest.md](vm-guest.md#checkouts)).
@@ -393,7 +401,7 @@ What changes:
   ([vm-guest.md](vm-guest.md#the-file-service)): a file another session
   wrote reads as written from the next open, shows in listings and `stat`
   within a second, and read-only mounts stay read-only.
-- `/tmp` is on the session's data disk. `/aether-cache` is a copy-on-write
+- `/aether-cache` is a copy-on-write
   layer over the member's newest caches, made when the session is created
   and at each start after a stop, so sessions share those caches' blocks and
   each holds only what it wrote. The layer holds at most 32 GiB, and the VM

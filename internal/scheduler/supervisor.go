@@ -171,8 +171,11 @@ do
 	fi
 done`
 
-// PID 1 is Docker's init, which forwards the signal to the supervisor.
+// PID 1 is Docker's init, which forwards the signal to the supervisor. The
+// state file is written before the signal, by cat, whose error names the
+// cause: a supervisor that cannot write it swaps its child all the same.
 const swapScript = `nonce=$1 settle=$2 state=$3
+echo waiting | cat > "$state" || exit 4
 kill -ALRM 1 || exit 1
 i=0
 while :
@@ -212,6 +215,8 @@ func (s *Scheduler) swapChild(ctx context.Context, cid runtime.ID, nonce string,
 		return fmt.Errorf("signal the session supervisor: %w", err)
 	case code == 3:
 		return fmt.Errorf("the agent's terminal exited with code %s as it started; the Terminal tab shows its output", strings.TrimSpace(stdout))
+	case code == 4:
+		return fmt.Errorf("the session supervisor cannot record the switch in %s: %s", supervisorStateFile, strings.TrimSpace(stderr))
 	case code != 0:
 		return fmt.Errorf("signal the session supervisor: exit %d: %s", code, strings.TrimSpace(stderr))
 	}

@@ -268,14 +268,14 @@ func prunePins(path, keep string) error {
 }
 
 // NewDataDisk creates an empty ext4 data disk of size bytes at path, labelled
-// aether-data. It refuses to replace a disk already there.
-func (s *Store) NewDataDisk(ctx context.Context, path string, size int64) (Disk, error) {
+// aether-data, that keeps rootPercent of its blocks for root. It refuses to
+// replace a disk already there.
+func (s *Store) NewDataDisk(ctx context.Context, path string, size int64, rootPercent int) (Disk, error) {
 	tmp := path + ".tmp"
 	if err := removeIfExists(tmp); err != nil {
 		return Disk{}, err
 	}
-	// The session's users get every block.
-	if err := mkfs(ctx, tmp, size, "aether-data", "", "-m", "0"); err != nil {
+	if err := mkfs(ctx, tmp, size, "aether-data", "", "-m", strconv.Itoa(rootPercent)); err != nil {
 		return Disk{}, errors.Join(err, removeIfExists(tmp))
 	}
 	err := os.Link(tmp, path)

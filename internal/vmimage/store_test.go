@@ -195,12 +195,18 @@ func debugfs(t *testing.T, disk, request string) string {
 
 func label(t *testing.T, disk string) string {
 	t.Helper()
+	return superblock(t, disk, "Filesystem volume name")
+}
+
+// superblock is one field of an ext4 image's superblock.
+func superblock(t *testing.T, disk, field string) string {
+	t.Helper()
 	for _, line := range strings.Split(debugfs(t, disk, "stats"), "\n") {
-		if v, ok := strings.CutPrefix(line, "Filesystem volume name:"); ok {
+		if v, ok := strings.CutPrefix(line, field+":"); ok {
 			return strings.TrimSpace(v)
 		}
 	}
-	t.Fatalf("no volume name in debugfs stats of %s", disk)
+	t.Fatalf("no %q in debugfs stats of %s", field, disk)
 	return ""
 }
 
@@ -537,7 +543,7 @@ func TestStoreDataDisk(t *testing.T) {
 	needTools(t, "mkfs.ext4", "debugfs")
 	s := openStore(t, nil)
 	path := filepath.Join(t.TempDir(), "data.raw")
-	disk, err := s.NewDataDisk(context.Background(), path, 2<<30)
+	disk, err := s.NewDataDisk(context.Background(), path, 2<<30, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,6 +553,14 @@ func TestStoreDataDisk(t *testing.T) {
 	if got := label(t, path); got != "aether-data" {
 		t.Errorf("data label = %q", got)
 	}
+	whole := filepath.Join(t.TempDir(), "state.raw")
+	if _, err := s.NewDataDisk(context.Background(), whole, 2<<30, 0); err != nil {
+		t.Fatal(err)
+	}
+	// 2 GiB is 524288 blocks of 4 KiB.
+	if kept, none := superblock(t, path, "Reserved block count"), superblock(t, whole, "Reserved block count"); kept != "26214" || none != "0" {
+		t.Errorf("disks made to keep 5%% and nothing for root keep %s and %s blocks, want 26214 and 0", kept, none)
+	}
 	var st syscall.Stat_t
 	if err := syscall.Stat(path, &st); err != nil {
 		t.Fatal(err)
@@ -554,7 +568,7 @@ func TestStoreDataDisk(t *testing.T) {
 	if st.Size != 2<<30 || st.Blocks*512 > 2<<20 {
 		t.Errorf("data disk is %d bytes using %d on the host, want 2 GiB sparse, its journal unwritten", st.Size, st.Blocks*512)
 	}
-	if _, err := s.NewDataDisk(context.Background(), path, 2<<30); err == nil {
+	if _, err := s.NewDataDisk(context.Background(), path, 2<<30, 5); err == nil {
 		t.Error("NewDataDisk replaced an existing data disk")
 	}
 }

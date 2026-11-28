@@ -83,7 +83,7 @@ func TestKVMStandardImageRunsDocker(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("root disk created in %v", time.Since(start).Round(time.Microsecond))
-	data, err := s.NewDataDisk(ctx, filepath.Join(run, "data.raw"), 16<<30)
+	data, err := s.NewDataDisk(ctx, filepath.Join(run, "data.raw"), 16<<30, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

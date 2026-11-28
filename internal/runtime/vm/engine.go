@@ -34,7 +34,7 @@ type Images interface {
 	BaseDisk(ctx context.Context, ref string) (vmimage.Base, error)
 	LookupBase(ref string) (vmimage.Base, error)
 	NewRootDisk(ctx context.Context, base vmimage.Base, path string) (vmimage.Disk, error)
-	NewDataDisk(ctx context.Context, path string, size int64) (vmimage.Disk, error)
+	NewDataDisk(ctx context.Context, path string, size int64, rootPercent int) (vmimage.Disk, error)
 	SaveBase(ctx context.Context, disk vmimage.Disk, base vmimage.Base, ref string, labels map[string]string) (vmimage.Base, error)
 	Tag(source, target string) error
 	Untag(ref string) error
@@ -50,9 +50,14 @@ type Images interface {
 }
 
 const (
-	// dataDiskBytes and stateDiskBytes are sparse: they cost only what the
-	// guest writes.
-	dataDiskBytes  = 128 << 30
+	// dataRootPercent is the share of the data disk only root writes, ext4's
+	// default: the git service keeps its store there, so it still snapshots
+	// and commits once the session's user has filled /tmp.
+	dataRootPercent = 5
+	// dataDiskBytes is the most a session takes of the host through /tmp,
+	// nested Docker and an Isolated home; its swap file is added to it.
+	// Like stateDiskBytes it is sparse and costs only what the guest writes.
+	dataDiskBytes  = 32 << 30
 	stateDiskBytes = 1 << 30
 	minMemoryMiB   = 256
 	bootTimeout    = 90 * time.Second
@@ -268,7 +273,7 @@ func (e *engine) create(ctx context.Context, key string, spec runtime.Spec, opts
 	if err != nil {
 		return "", fmt.Errorf("vm runtime: root disk: %w", err)
 	}
-	data, err := e.cfg.Images.NewDataDisk(ctx, e.path(key, dataDisk), dataDiskBytes)
+	data, err := e.cfg.Images.NewDataDisk(ctx, e.path(key, dataDisk), dataDiskBytes+swapBytes(memMiB, opts.NoSwap), dataRootPercent)
 	if err != nil {
 		return "", fmt.Errorf("vm runtime: data disk: %w", err)
 	}
@@ -330,6 +335,15 @@ func guestMiB(limitMiB int64) int64 {
 // unitMemoryMiB is the MemoryMax of rec's unit.
 func unitMemoryMiB(rec *record) int64 {
 	return guestMiB(rec.MemoryMiB) + unitOverheadMiB
+}
+
+// swapBytes is the swap file of a VM whose session's limit is limitMiB: a
+// quarter of the limit, as Docker gives a container.
+func swapBytes(limitMiB int64, none bool) int64 {
+	if none {
+		return 0
+	}
+	return limitMiB << 20 / 4
 }
 
 func memoryMiB(limit int64) (int64, error) {
@@ -502,11 +516,7 @@ func (e *engine) bootLaunch(ctx context.Context, rec *record) (launch, error) {
 	}
 	cfg := guest.Config{
 		Hostname: rec.Key, Mounts: slices.Concat(p.mounts, programs), Checkouts: checkouts, Sockets: p.sockets, Serves: rec.Serves, Loopbacks: p.loopbacks,
-		MemoryLimit: uint64(rec.MemoryMiB) << 20,
-	}
-	if !rec.NoSwap {
-		// A quarter of the limit, as Docker gives a container.
-		cfg.Swap = cfg.MemoryLimit / 4
+		MemoryLimit: uint64(rec.MemoryMiB) << 20, Swap: uint64(swapBytes(rec.MemoryMiB, rec.NoSwap)),
 	}
 	if rec.Browser.Path != "" {
 		cfg.Serves = append(cfg.Serves, guest.Socket{Port: guest.BrowserPort, Path: guest.BrowserSocket})
@@ -588,7 +598,8 @@ func (e *engine) stateDisk(ctx context.Context, mounts []runtime.Mount) (vmimage
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return vmimage.Disk{}, fmt.Errorf("vm runtime: state disk: %w", err)
 	}
-	d, err := e.cfg.Images.NewDataDisk(ctx, path, stateDiskBytes)
+	// The session's users get every block.
+	d, err := e.cfg.Images.NewDataDisk(ctx, path, stateDiskBytes, 0)
 	if err != nil {
 		return vmimage.Disk{}, fmt.Errorf("vm runtime: state disk: %w", err)
 	}

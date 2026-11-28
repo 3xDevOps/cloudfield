@@ -91,13 +91,32 @@ func TestIntegrationSupervisorSwapsInContainer(t *testing.T) {
 			if ps := processes(t, docker, cid); !running(ps, "sleep 3602") || running(ps, "sleep 3601") {
 				t.Fatalf("processes after the first swap:\n%s", ps)
 			}
-			if err := swap("n2", "exit 5\n", time.Second); err == nil || !strings.Contains(err.Error(), "exited with code 5") {
+
+			// The container's /dev/shm, filled, stands in for a full /tmp.
+			fill := "ln -sf /dev/shm/state " + supervisorStateFile + "; cat /dev/zero > /dev/shm/fill"
+			if _, _, _, err := docker.Exec(ctx, cid, []string{"/bin/sh", "-c", fill}, ""); err != nil {
+				t.Fatal(err)
+			}
+			if err := swap("n2", "exec sleep 3603\n", time.Second); err == nil || !strings.Contains(err.Error(), supervisorStateFile) || !strings.Contains(err.Error(), "No space left on device") {
+				t.Errorf("swap with no room for the supervisor's state file: %v", err)
+			}
+			if ps := processes(t, docker, cid); !running(ps, "sleep 3602") || running(ps, "sleep 3603") {
+				t.Fatalf("processes after a swap the supervisor could not record:\n%s", ps)
+			}
+			if _, _, _, err := docker.Exec(ctx, cid, []string{"rm", "/dev/shm/fill"}, ""); err != nil {
+				t.Fatal(err)
+			}
+			if err := swap("n3", "exec sleep 3603\n", time.Second); err != nil {
+				t.Fatalf("swap once the state file has room again: %v", err)
+			}
+
+			if err := swap("n4", "exit 5\n", time.Second); err == nil || !strings.Contains(err.Error(), "exited with code 5") {
 				t.Fatalf("swap to a command that exits: %v", err)
 			}
-			if err := swap("n3", "", 0); err != nil {
+			if err := swap("n5", "", 0); err != nil {
 				t.Fatalf("swap to a login shell: %v", err)
 			}
-			if ps := processes(t, docker, cid); running(ps, "sleep 3602") || !running(ps, "/bin/sh -l") && !running(ps, "/bin/bash -l") {
+			if ps := processes(t, docker, cid); running(ps, "sleep 3603") || !running(ps, "/bin/sh -l") && !running(ps, "/bin/bash -l") {
 				t.Fatalf("processes after the swap to a shell:\n%s", ps)
 			}
 		})

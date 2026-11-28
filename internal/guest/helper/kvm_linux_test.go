@@ -125,7 +125,7 @@ func TestKVMHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := store.NewDataDisk(ctx, filepath.Join(dir, "data.raw"), 4<<30)
+	data, err := store.NewDataDisk(ctx, filepath.Join(dir, "data.raw"), 4<<30, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
