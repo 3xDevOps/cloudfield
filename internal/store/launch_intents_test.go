@@ -46,8 +46,8 @@ func TestALaunchIntentKeepsItsRequestAndIsOneToItsKey(t *testing.T) {
 	if _, _, err = db.CreateLaunchIntent(ctx, &domain.LaunchIntent{MemberID: m.ID, WorkspaceID: w.ID, Method: "run.launch", Params: []byte(`{}`)}, 3, 100); !errors.Is(err, ErrTooManyWaiting) {
 		t.Fatalf("a fourth open intent with a cap of three = %v, want ErrTooManyWaiting", err)
 	}
-	if _, _, err = db.CreateLaunchIntent(ctx, &domain.LaunchIntent{MemberID: m.ID, WorkspaceID: w.ID, Method: "run.launch", Params: []byte(`{}`)}, 8, 3); !errors.Is(err, ErrTooManyWaiting) {
-		t.Fatalf("a fourth intent in a day with a daily cap of three = %v, want ErrTooManyWaiting", err)
+	if _, _, err = db.CreateLaunchIntent(ctx, &domain.LaunchIntent{MemberID: m.ID, WorkspaceID: w.ID, Method: "run.launch", Params: []byte(`{}`)}, 8, 3); !errors.Is(err, ErrTooManyWaitingToday) {
+		t.Fatalf("a fourth intent in a day with a daily cap of three = %v, want ErrTooManyWaitingToday", err)
 	}
 	by, err := db.LaunchIntentByKey(ctx, m.ID, "k-1")
 	if err != nil || by.ID != in.ID {

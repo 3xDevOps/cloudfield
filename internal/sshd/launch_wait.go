@@ -103,7 +103,7 @@ func (s *Server) waitForRoom(ctx context.Context, member domain.MemberID, key st
 		return nil, rpcError(err)
 	}
 	if len(params) > maxWaitingParams {
-		return nil, notKept(fmt.Sprintf("its request is %d bytes and a waiting launch stores at most %d", len(params), maxWaitingParams))
+		return nil, notKept(fmt.Sprintf("its request is %d bytes, and a launch that waits may be at most %d bytes", len(params), maxWaitingParams))
 	}
 	base, err := s.cfg.Runs.CaptureLaunchBase(ctx, domain.WorkspaceID(p.WorkspaceID), p.CachedBase)
 	if err != nil {
@@ -117,8 +117,11 @@ func (s *Server) waitForRoom(ctx context.Context, member domain.MemberID, key st
 		Harness: p.Harness, Task: strings.ToValidUTF8(p.Task[:min(len(p.Task), waitingTaskBytes)], ""),
 		Base: base, Via: domain.ViaFrom(ctx), Connector: id.connector, Device: id.device, Refusal: refusal.Error(),
 	}, maxWaitingLaunches, maxDailyWaiting)
-	if errors.Is(err, store.ErrTooManyWaiting) {
-		return nil, notKept(fmt.Sprintf("one member may have %d launches waiting, and make %d in a day", maxWaitingLaunches, maxDailyWaiting))
+	switch {
+	case errors.Is(err, store.ErrTooManyWaiting):
+		return nil, notKept(fmt.Sprintf("you already have %d launches waiting for room, the most one member may have", maxWaitingLaunches))
+	case errors.Is(err, store.ErrTooManyWaitingToday):
+		return nil, notKept(fmt.Sprintf("%d of your launches have waited for room in the last 24 hours, the most one member may have", maxDailyWaiting))
 	}
 	if err != nil {
 		return nil, rpcError(err)
