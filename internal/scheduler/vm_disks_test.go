@@ -237,3 +237,68 @@ func TestTheDiskGuardResumesEvenWhenItCannotMeasureVMDisks(t *testing.T) {
 		t.Fatal("with space back and VM disks unmeasurable the guard kept its pause")
 	}
 }
+
+// savedDiskRuntime is a saveRuntime whose VMs report the disk use the test
+// sets.
+type savedDiskRuntime struct {
+	*saveRuntime
+	disks *diskRuntime
+}
+
+func (r *savedDiskRuntime) DiskUse(ctx context.Context) (map[runtime.ID]int64, error) {
+	return r.disks.DiskUse(ctx)
+}
+
+func (r *savedDiskRuntime) HoldDisks(ctx context.Context, id runtime.ID) error {
+	return r.disks.HoldDisks(ctx, id)
+}
+
+// Below the disk reserve a launch is refused, but a saved session still
+// wakes: its restore deletes its saved memory and creates no disk. The disk
+// guard then pauses it like any other session once its disks grow.
+func TestASavedVMWakesBelowTheDiskReserveAndTheDiskGuardStillHoldsIt(t *testing.T) {
+	t.Parallel()
+	var rt *savedDiskRuntime
+	var free atomic.Uint64
+	free.Store(50 << 30)
+	e, _, _ := newSaveEnv(t, false, func(cfg *Config) {
+		sr := cfg.Runtime.(*saveRuntime)
+		rt = &savedDiskRuntime{
+			saveRuntime: sr,
+			disks:       &diskRuntime{acpRuntime: sr.acpRuntime, use: map[runtime.ID]int64{}, held: map[runtime.ID]bool{}},
+		}
+		cfg.Runtime = rt
+		// The reserve of a 100 GiB filesystem is 5 GiB.
+		cfg.filesystemCapacity = func(string) (disk.Usage, error) {
+			return disk.Usage{TotalBytes: 100 << 30, FreeBytes: free.Load()}, nil
+		}
+	})
+	run := e.launchACP(t, "say pong").ID
+	waitItems(t, e.sched, run, "the task's turn", turnEnded("end_turn", 1))
+	e.saveRun(t, run)
+	cid := e.cid(t, run)
+	rt.disks.mu.Lock()
+	rt.disks.use[cid] = 10 << 30
+	rt.disks.mu.Unlock()
+
+	free.Store(2 << 30)
+	e.sched.guardVMDisks(t.Context()) // the baseline, taken while the session sleeps
+	if _, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "a new session", "fake", domain.LaunchACP); !errors.Is(err, ErrDiskFull) {
+		t.Fatalf("a launch below the disk reserve = %v, want %v", err, ErrDiskFull)
+	}
+	if _, err := e.sched.Inject(t.Context(), run, e.member.ID, domain.AgentPrompt{Text: "after sleep"}, false, nil); err != nil {
+		t.Fatalf("a prompt to a saved session below the disk reserve: %v", err)
+	}
+	if rt.isSaved(cid) || e.sched.Sleep(run).AsleepSince != nil {
+		t.Fatalf("the prompt did not restore the session: %+v", e.sched.Sleep(run))
+	}
+	waitItems(t, e.sched, run, "a turn after the wake", turnEnded("end_turn", 2))
+
+	rt.disks.mu.Lock()
+	rt.disks.use[cid] += 1 << 30
+	rt.disks.mu.Unlock()
+	e.sched.guardVMDisks(t.Context())
+	if !e.sched.Paused(run) {
+		t.Fatal("the disk guard did not pause a woken session that grew 1 GiB below the reserve")
+	}
+}

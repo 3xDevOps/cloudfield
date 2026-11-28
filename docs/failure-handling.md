@@ -302,7 +302,26 @@ Docker session.
 
 Attaching, messaging, pulling, closing, killing and deleting sessions keep
 working below the reserve, and so does reopening a closed session whose container
-is still there. To free space yourself:
+is still there. Waking a sleeping session, or starting a closed one's stopped
+container, creates no session disk, so it needs only 1 GiB free for itself
+and each start in flight, not the reserve. With less it is refused with the
+error above, naming a reserve of 0 bytes. Waking a saved VM deletes its saved
+memory, but not for good: while the disk is this full the session's next
+idle sleep saves the VM again at once, and a wake that fails after the VM
+started always does, both with no free-space check
+([Sessions in VMs](#sessions-in-vms)). A start
+from a VM's disks, as after disk reclaim deleted its saved memory, still
+writes to the data filesystem with no free-space check: the disk of an agent
+program that changed in the member's home since its last disk was built,
+with a copy of the program while it builds (the program is at most 2 GiB);
+a copy of a closed session VM's package cache, when you reopen it while the
+server still copies that cache for the member's next session; the helper
+disk, built once for each server binary; the browser's disk, after a server
+update brought another browser image; and the root disk of a VM whose setup
+script never finished. The 1 GiB is checked when the session wakes, not
+held afterwards: a woken session VM whose disks then grow is paused as
+described above, and a woken Docker session, like a running one, is not. To
+free space yourself:
 
 1. Open **Insights → System** to see what uses the space.
 2. Delete sessions you no longer need with **Delete run** or `cloudfield delete
@@ -978,8 +997,10 @@ that ran detached, such as one started with `nohup`, stopped with the sleep:
 the connection is refused until you start it again. The request that woke it waits while the
 container starts and the agent restores its conversation, then goes through.
 Two wakes at once start the container once. Waking counts against the same
-memory and disk checks as a launch, and a saved VM must fit its saved memory
-([Recover from memory pressure](#recover-from-memory-pressure)); a VM
+memory checks as a launch, and a saved VM must fit its saved memory
+([Recover from memory pressure](#recover-from-memory-pressure)). On disk it
+needs 1 GiB free but not the reserve a launch keeps
+([Recover from disk pressure](#recover-from-disk-pressure)). A VM
 still paused in memory already holds what it wakes with and passes no
 check. A refused or failed wake returns its
 error to the request that caused it, keeps the session asleep and shows the
