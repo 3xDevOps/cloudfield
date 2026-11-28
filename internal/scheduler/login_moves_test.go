@@ -117,6 +117,27 @@ func sentPrompts(t *testing.T, exec *acpExec) []string {
 	return texts
 }
 
+// waitSpent waits for a session that moved to rest on a usage limit. The
+// end of the turn that continued it on the new login rests it too, with
+// another reason, and can arrive after the next prompt.
+func (e *testEnv) waitSpent(t *testing.T, run domain.RunID) *domain.Run {
+	t.Helper()
+	deadline := time.Now().Add(waitTimeout)
+	for {
+		r, err := e.db.GetRun(t.Context(), run)
+		if err != nil {
+			t.Fatalf("GetRun: %v", err)
+		}
+		if r.Status == domain.RunNeedsAttention && strings.HasPrefix(r.Reason, "Usage limit reached") {
+			return r
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("session %s stuck at %s with %q, want it resting on a usage limit", run, r.Status, r.Reason)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 const continuedOnSecond = "Your previous turn stopped because Ada's usage ran out. The session continues on Ada (second)'s account. Continue the task where you stopped."
 
 // An Enhanced session whose turn fails on Ada's spent default login
@@ -164,7 +185,7 @@ func TestEnhancedRunMovesToTheAccountsNextLogin(t *testing.T) {
 	usage.set(domain.AccountOf(e.member.ID), 100)
 	usage.set(second, 100)
 	_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
-	got := e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
+	got := e.waitSpent(t, run.ID)
 	want := "Usage limit reached on Ada (second)'s account; no fallback has usage left; logins tried: Ada, Ada (second); the first is usable again at " + usage.resets.UTC().Format(time.RFC3339)
 	if got.Reason != want || got.Account() != second || len(rt.all()) != 2 {
 		t.Fatalf("run on %s with %q after %d agents; want it left on second with %q", got.Account(), got.Reason, len(rt.all()), want)
@@ -951,7 +972,7 @@ func TestTheAllSpentReasonNamesTheLoginsTheSessionRanOn(t *testing.T) {
 			usage.set(domain.AccountOf(e.member.ID), 100)
 			usage.set(grace, 100)
 			_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
-			got := e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
+			got := e.waitSpent(t, run.ID)
 			usable := usage.resets.UTC().Format(time.RFC3339)
 			if !reset {
 				usable = "unknown"
