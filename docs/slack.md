@@ -146,7 +146,8 @@ The message links to the dashboard instead of showing buttons for:
   decide text you did not see);
 - a question that is a form or asks you to open a link;
 - more than 25 options, or an option label longer than 75 characters;
-- a Standard session's own request, which is answered in its terminal.
+- a Standard session's own request, which is answered in its terminal. Its
+  message says so, and a reply in the thread is refused while it is open.
 
 Your role still decides: a viewer cannot answer. You cannot launch sessions or run
 other commands, and the bot posts in no channel. A top-level direct message

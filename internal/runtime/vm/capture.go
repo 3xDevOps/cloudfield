@@ -52,7 +52,7 @@ func (r *Runtime) BootForCapture(ctx context.Context, id runtime.ID) error {
 	unlock := r.vms.lock(key)
 	defer unlock()
 	if r.vms.halted(ctx, key) {
-		if err := newCHAPI(r.vms.path(key, apiSocket)).resume(ctx); err != nil {
+		if err := r.vms.resumeGuest(ctx, rec); err != nil {
 			return fmt.Errorf("vm runtime: start the vCPUs of VM %s for capture: %w", key, err)
 		}
 		return nil
