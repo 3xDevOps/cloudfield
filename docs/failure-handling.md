@@ -15,6 +15,7 @@ shown beside the status says why it is there.
 | When | What you see | What Cloudfield does | What you do |
 | --- | --- | --- | --- |
 | The server restarts or is killed, and session sandboxes survive | Sessions keep their status. | Reattaches to every live sandbox. An Enhanced agent keeps running under its keeper, and the new server adopts its conversation, turn and open requests ([Restarts and failures](enhanced-sessions.md#restarts-and-failures)). A kill accepted before the crash is issued again. | Nothing. When the keeper is gone, the conversation is restored in a fresh process and a turn that was cut off parks with `turn interrupted`: send a message to continue. |
+| The server restarts while it keeps [spare sessions](enhanced-sessions.md#spare-sessions) | Nothing. | Takes each spare up again as it does a session, then removes it with its VM, checkout and branch name: a spare is never kept across a restart. Members get new ones after their next launch. | Nothing. |
 | The host reboots, or Docker restarts without `live-restore` | Live sessions read `interrupted` with `server restarted: container exited <code>` (or `server restarted` when the container is gone). | Commits the partial work as `wip: <task>`, publishes the session branch and keeps the checkout. | Pull the branch (`cloudfield pull <session-id>`) or start a new session. An interrupted session cannot be reopened. |
 | A server update is interrupted, or the new version cannot boot | `cloudfield server update --status` shows `failed` or `rolled_back`. | Replaces nothing until every binary is verified. Rolls back a version that cannot finish booting. | [Recover from a failed server update](#recover-from-a-failed-server-update). |
 | The link to the server drops, or the server stalls, within a second after the server last sent the dashboard (through `cloudfield gui`) anything: an answer, an event, terminal output | The read sent next fails after a minute with `server did not answer <method> within 1m0s`. | Sends that read on a control channel it kept open, which skips the check a new channel makes that the connection still answers ([local-gateway.md](local-gateway.md#design)). It closes that channel; the next call opens a new one, which waits for a stalled server or redials a dead link. | Retry: the view's **Retry**, or reload the page. |
@@ -246,7 +247,8 @@ what nobody loses: unused standard and browser images, caches over their
 budget or unused for long, and leftover scratch directories, until it is at
 most 80% full. Those are the marks and the period of Kubernetes' image
 garbage collection. When free space drops below the reserve plus 4 GiB it
-first deletes the prepared checkout disks kept for the next launch
+first removes every [spare session](enhanced-sessions.md#spare-sessions),
+then deletes the prepared checkout disks kept for the next launch
 ([Checkouts](vm-guest.md#checkouts)), which that launch rebuilds. It then
 frees what sessions and members would lose, in this order, until it is back
 above, and after them every cache, image and scratch directory nobody uses:
@@ -417,6 +419,19 @@ refused it.
 With `--session-runtime vm`, the server stops VMs from taking the host's
 last memory in two steps: a brake that freezes them at once, and a memory
 guard that then frees memory by saving them to disk.
+
+[Spare sessions](enhanced-sessions.md#spare-sessions) go before either
+touches a member's session. A launch or wake that is short of memory
+removes every spare and measures again before it saves an idle VM. The
+guard removes them whenever less than twice the floor is free, or a session
+it saved waits for memory to wake, and saves nothing on that check. The
+brake, on a check that finds memory below the floor and a spare, starts the
+spares' removal and freezes nothing; its next check, 500 ms later, freezes
+as described below if memory is still short. A spare's VM is never frozen
+or saved. A spare is made only while twice the floor plus 1 GiB, and what
+admitted starts have yet to take, is available, and never while a saved
+session waits for memory. The log has `scheduler: removed a spare session
+member=<member id>` for each one removed for room.
 
 The brake reads `MemAvailable` from `/proc/meminfo` every 500 ms. Below the
 floor it freezes every session's VM, except those already paused in memory,
@@ -796,6 +811,30 @@ sudo journalctl -u aether-server | grep 'scheduler: agent start'
 ```
 INFO scheduler: agent start run=<run id> total_ms=... admission_ms=... ... agent_ms=... agent_start_ms=...
 ```
+
+A launch that takes over a [spare session](enhanced-sessions.md#spare-sessions)
+logs neither line. It logs one of these, a claim with how long it took from
+finding the spare to the agent having the task, or a miss with what
+differed, after which the launch's own `launch steps` line follows:
+
+```sh
+sudo journalctl -u aether-server | grep -E 'scheduler: launch (claimed|missed) the spare session'
+```
+
+```
+INFO scheduler: launch claimed the spare session member=<member id> run=<run id> took=<duration>
+INFO scheduler: launch missed the spare session member=<member id> run=<run id> reason="<what differs>"
+```
+
+`reason` is one of `its session ended`, `its session is busy`, `another
+member or account`, `another workspace`, `another agent or mode`, `another
+permission tier or limits`, `the base moved`, `the member's profile
+changed`, `the member's caches are busy`, `the session's environment
+changed`, or the error of a read that failed. `scheduler: spare session
+ready member=<member id> run=<run id>` marks a spare whose agent has
+started, and `scheduler: no spare session member=<member id> error=...` one
+that could not be made, which is not tried again before the member's next
+launch.
 
 ## Enhanced sessions
 

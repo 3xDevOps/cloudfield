@@ -118,6 +118,59 @@ retention, Pause and Close. The agent's ACP server runs beside a login shell,
 and the **Terminal** tab is that shell: use it to log the agent in or inspect
 the checkout ([terminal.md](terminal.md)).
 
+## Spare sessions
+
+A launch waits for a session VM to boot and for the agent to start. With
+`session-runtime vm`, the server skips that wait by keeping one **spare
+session** for each member who launched recently: a session VM with its
+checkout and a started agent, and no task. No member can see a spare. It is
+in no session list, count, notification or event, and
+`cloudfield kill <session-id>` of one answers that the session is not found.
+
+- **Who gets one.** When a launch of yours succeeds, the server makes you a
+  spare if, in the last 15 minutes, you launched a session a spare can stand
+  in for. The spare copies that launch's workspace, agent, permission tier
+  and limits. Its start begins once the launch's own agent has started.
+- **Which launches.** An Enhanced Claude Code session on your own default
+  login, in one repository, from the workspace's base. A launch on an added,
+  per-use or shared login, with extra repositories, from another session's
+  commit, with a Linear issue, from a connector, or of a subsession leaves
+  no spare and claims none. A launch a template's schedule fired does not
+  count as you being at work, but claims your spare when it matches.
+- **Claim.** Your next such launch becomes the spare when the spare is the
+  session that launch would start now: the same workspace, agent, permission
+  tier and limits, base commit, profile snapshot and sandbox (image, user,
+  mounts, environment, secrets, installed agent programs and agent command).
+  The launch returns the spare's session, sets its `--model` and `--effort`
+  on the running agent and sends the task as the agent's first prompt. The
+  agent is not started again.
+- **Miss.** When anything differs, the spare is removed and the launch runs
+  as it does without one. A launch while your spare is still starting
+  cancels that spare and does the same.
+- **Removal.** A spare is removed 15 minutes after your last launch, when
+  memory or disk runs short
+  ([failure-handling.md](failure-handling.md#recover-from-memory-pressure)),
+  when the server starts, when its workspace is deleted, and when you are
+  removed, merged into another member, change role or lose your grant of the
+  workspace.
+
+What follows from an agent that started before the launch:
+
+- The [team memory brief](memory.md#what-sessions-see-automatically) and the
+  date in the agent's instructions are from the spare's start, up to 15
+  minutes before your launch.
+- Your own Claude Code `SessionStart` hooks run when a spare starts, and
+  your `SessionEnd` hooks when a spare nobody claimed is removed.
+- A claimed session's branch is `cloudfield/run-<id>`, without the words of
+  the task, which was not known when the checkout was made.
+- A spare holds about 0.8 GiB of host memory
+  ([install.md](install.md#server-prerequisites)), and the tool caches it writes
+  are kept out of your cache pool until a launch claims it
+  ([vm-guest.md](vm-guest.md#kernel-command-line)).
+
+The server log has one line for each claim and each miss
+([failure-handling.md](failure-handling.md#where-a-launch-or-a-wake-spends-its-time)).
+
 ## The Chat view
 
 An Enhanced session opens on **Chat**: one timeline, newest at the bottom.

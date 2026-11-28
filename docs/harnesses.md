@@ -891,8 +891,11 @@ environment.
 
 Cloudfield gives each session its role card and the co-author rule
 ([agent instructions](coordination.md#agent-instructions)), followed by the
-[team memory brief](memory.md#what-sessions-see-automatically). How the text
-reaches the agent depends on the agent:
+[team memory brief](memory.md#what-sessions-see-automatically). An Enhanced
+Claude Code session made from a
+[spare](enhanced-sessions.md#spare-sessions) has the text of the spare's
+start, up to 15 minutes before the launch. How the text reaches the agent
+depends on the agent:
 
 | Agent | Delivery |
 | --- | --- |
