@@ -200,12 +200,13 @@ export function WaitingLaunches({ narrow }: { narrow?: boolean }) {
             <Icon className={`mt-0.5 size-4 shrink-0 ${over ? 'text-state-failed' : 'text-state-paused'}`} aria-hidden />
             <Button
               variant="quiet"
-              className="block min-w-0 flex-1 text-left text-text hover:not-aria-disabled:no-underline"
+              className="block min-w-0 flex-1 shrink text-left font-normal whitespace-normal text-text hover:not-aria-disabled:no-underline"
               onClick={() => navigate('run', { runId: w.id })}
             >
               <span className="block truncate text-ui leading-5">{w.task || `${w.harness} session`}</span>
-              <span className="block text-ui-sm leading-5 text-muted">
-                <span className={over ? 'text-state-failed' : undefined}>{heading[w.state]}</span> · asked {timeAgo(w.created_at)}
+              <span className="block truncate text-ui-sm leading-5 text-muted">
+                <span className={over ? 'text-state-failed' : undefined}>{heading[w.state]}</span>
+                {!narrow && ` · asked ${timeAgo(w.created_at)}`}
               </span>
               {!narrow && <span className="line-clamp-2 break-words font-mono text-ui-sm leading-5 text-muted">{w.refusal}</span>}
             </Button>
