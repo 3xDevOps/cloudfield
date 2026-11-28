@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -16,9 +17,11 @@ import (
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	edgeagent "github.com/3xDevOps/cloudfield/internal/edge/agent"
+	edgeclient "github.com/3xDevOps/cloudfield/internal/edge/client"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/server"
 	"github.com/3xDevOps/cloudfield/internal/serversetup"
+	"github.com/3xDevOps/cloudfield/internal/shellquote"
 	"github.com/3xDevOps/cloudfield/internal/sshd"
 	"github.com/3xDevOps/cloudfield/internal/store"
 	"golang.org/x/crypto/ssh"
@@ -77,9 +80,11 @@ func loadOptions(name string, args []string, extra func(*flag.FlagSet)) (*serveO
 	if err := fs.Parse(args); err != nil {
 		return nil, "", nil, err
 	}
-	if _, err := applyConfigFile(fs, *configPath, *configPath == serversetup.DefaultConfigPath); err != nil {
+	config, _, err := applyConfigFile(fs, *configPath, *configPath == serversetup.DefaultConfigPath)
+	if err != nil {
 		return nil, "", nil, err
 	}
+	o.config = config
 	return o, *configPath, fs.Args(), nil
 }
 
@@ -110,19 +115,25 @@ func edgeCmd(args []string) error {
 		return errors.New(edgeUsage)
 	}
 	edgeURL := string(*o.edgeURL)
+	if edgeURL == "" && sub == "move" {
+		// A flag that empties edge-url is an override, not an edge turned off.
+		if err := configGives(configPath, o.config, edgeURL, *o.dataDir); err != nil {
+			return err
+		}
+	}
 	if edgeURL == "" {
 		return fmt.Errorf("the edge is off: edge-url is empty in %s; turn it on with:\n  %saether-server config set edge-url %s%s",
 			configPath, sudoPrefix(), edgeagent.DefaultURL, configFlag(configPath))
 	}
 	switch sub {
 	case "status":
-		return edgeStatus(os.Stdout, *o.dataDir, edgeURL, edgeproto.AccessPolicy(*o.edgeAccess), time.Now())
+		return edgeStatus(os.Stdout, *o.dataDir, edgeURL, configPath, edgeproto.AccessPolicy(*o.edgeAccess), time.Now())
 	case "claim-code":
 		return edgeClaimCode(os.Stdout, *o.dataDir, edgeURL, domain.MemberID(*admin))
 	case "trust":
 		return edgeTrust(os.Stdout, os.Stdin, *o.dataDir, edgeURL)
 	case "move":
-		return edgeMove(os.Stdout, *o.dataDir, edgeURL, edgeproto.AccessPolicy(*o.edgeAccess), target, configPath)
+		return edgeMove(os.Stdout, *o.dataDir, edgeURL, edgeproto.AccessPolicy(*o.edgeAccess), target, configPath, o.config)
 	case "leave":
 		return edgeLeave(os.Stdout, *o.dataDir, edgeURL, edgeproto.AccessPolicy(*o.edgeAccess), configPath)
 	default:
@@ -151,7 +162,7 @@ func describeAccount(a edgeproto.Account) string {
 // still tell it from an error.
 var errNotConnected = errors.New("the server is not connected to the edge")
 
-func edgeStatus(w io.Writer, dataDir, edgeURL string, policy edgeproto.AccessPolicy, now time.Time) error {
+func edgeStatus(w io.Writer, dataDir, edgeURL, configPath string, policy edgeproto.AccessPolicy, now time.Time) error {
 	id, err := serverID(dataDir)
 	if err != nil {
 		return err
@@ -177,14 +188,42 @@ func edgeStatus(w io.Writer, dataDir, edgeURL string, policy edgeproto.AccessPol
 	if err != nil {
 		return err
 	}
+	notices, noticesErr := state.Notices(id)
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintf(tw, "edge\t%s\n", edgeURL)
 	_, _ = fmt.Fprintf(tw, "edge access\t%s\n", policy)
 	_, _ = fmt.Fprintf(tw, "server id\t%s\n", id)
 	stale := status.Stale(now)
-	if status.Connected && stale == nil && status.Edge != "" && status.Edge != origin {
-		_, _ = fmt.Fprintf(tw, "running\tthe running server is at %s; restart to apply edge-url: %s%s\n", status.Edge, sudoPrefix(), serversetup.RestartCommand)
+	notice, noticed := notices.For(origin)
+	_, noticedThere := notices.For(status.Edge)
+	elsewhere := status.Edge != "" && !sameOrigin(status.Edge, origin)
+	cmds := serverCommands(configPath)
+	switch {
+	case elsewhere && noticed:
+		// Restarting would take the server to an address that is leaving
+		// too, whatever the notices say of the address it is at.
+		at := "the running server is at"
+		if !status.Connected || stale != nil {
+			at = "the server last dialed"
+		}
+		line := edgeagent.NoticeLine(notice, cmds.Server("edge move "+shellquote.Quote(notice.Replacement))+", then "+cmds.Restart)
+		if notices.FirstUse {
+			line += firstUse
+		}
+		_, _ = fmt.Fprintf(tw, "running\t%s %s; edge-url names %s, but %s\n", at, status.Edge, origin, line)
+	case status.Connected && stale == nil && elsewhere:
+		_, _ = fmt.Fprintf(tw, "running\tthe running server is at %s; restart to apply edge-url: %s\n", status.Edge, cmds.Restart)
+	case elsewhere && (noticed || noticedThere):
+		_, _ = fmt.Fprintf(tw, "running\tthe server last dialed %s; restart to apply edge-url: %s\n", status.Edge, cmds.Restart)
+	case noticesErr != nil:
+		_, _ = fmt.Fprintf(tw, "notices\tunreadable, so none is shown: %s\n", edgeagent.Clean(noticesErr.Error()))
+	case noticed:
+		line := edgeagent.NoticeLine(notice, cmds.Server("edge move "+shellquote.Quote(notice.Replacement)))
+		if notices.FirstUse {
+			line += firstUse
+		}
+		_, _ = fmt.Fprintf(tw, "retiring\t%s\n", line)
 	}
 	_, _ = fmt.Fprintf(tw, "connector\t%s  (add it to ChatGPT or Claude; get a code: aether mcp)\n", origin+edgeproto.MCPPath(id))
 	if status.Connected && stale == nil && status.Protocol >= edgeproto.VersionUniversalMCP {
@@ -220,7 +259,7 @@ func edgeStatus(w io.Writer, dataDir, edgeURL string, policy edgeproto.AccessPol
 		_, _ = fmt.Fprintf(tw, "connection\tconnected since %s; the edge last answered %s ago\n",
 			status.Since.Local().Format(time.DateTime), now.Sub(status.Heartbeat).Round(time.Second))
 	default:
-		_, _ = fmt.Fprintf(tw, "connection\tdisconnected since %s: %s\n", status.Since.Local().Format(time.DateTime), status.Error)
+		_, _ = fmt.Fprintf(tw, "connection\tdisconnected since %s: %s\n", status.Since.Local().Format(time.DateTime), edgeagent.Clean(status.Error))
 	}
 	if ran {
 		_, _ = fmt.Fprintln(tw, "measures\tthe server->edge control connection; it does not prove clients can reach the server")
@@ -404,7 +443,12 @@ func edgeTrust(w io.Writer, in io.Reader, dataDir, edgeURL string) error {
 
 // edgeMove moves the server to target, another relay address of the edge
 // it is enrolled with, once edgeagent.Agent.Move found the move safe.
-func edgeMove(w io.Writer, dataDir, edgeURL string, policy edgeproto.AccessPolicy, target, configPath string) error {
+// config is the config file as read once at the start: what the probes'
+// edge-url and data-dir must come from, and what the write checks against.
+func edgeMove(w io.Writer, dataDir, edgeURL string, policy edgeproto.AccessPolicy, target, configPath string, config map[string]string) error {
+	if err := configGives(configPath, config, edgeURL, dataDir); err != nil {
+		return err
+	}
 	hostKey, err := sshd.LoadOrCreateHostKey(server.HostKeyPath(dataDir))
 	if err != nil {
 		return err
@@ -414,26 +458,96 @@ func edgeMove(w io.Writer, dataDir, edgeURL string, policy edgeproto.AccessPolic
 	if err != nil {
 		return err
 	}
-	to, err := agent.Move(context.Background(), target)
+	held, err := edgeagent.OpenState(dataDir).HoldPin()
 	if err != nil {
 		return err
 	}
-	return applyMove(w, dataDir, edgeURL, to, configPath)
+	defer held.Close()
+	moved, err := agent.Move(context.Background(), target, held, serverCommands(configPath))
+	if err != nil {
+		return err
+	}
+	return applyMove(w, dataDir, edgeURL, configPath, config, held, moved)
 }
 
-// applyMove writes to, the address edgeagent.Agent.Move checked, as
-// edge-url and says how to apply and undo it.
-func applyMove(w io.Writer, dataDir, edgeURL, to, configPath string) error {
-	pinned, err := edgeagent.OpenState(dataDir).PinnedKey()
+// firstUse ends a line whose notice came with the connection that pinned
+// the edge key.
+const firstUse = " (the edge sent this with the connection that pinned its key, so it is trusted on first use and shown only)"
+
+// sameOrigin reports whether a and b name the same edge origin, as
+// https://host and https://host:443 do.
+func sameOrigin(a, b string) bool {
+	ca, aerr := edgeclient.Canonical(a)
+	cb, berr := edgeclient.Canonical(b)
+	return aerr == nil && berr == nil && ca == cb || a == b
+}
+
+// configGives refuses unless values, read from configPath, give the
+// edge-url and data-dir edge move runs with: with a flag overriding them,
+// the move would write one edge-url while the service reads another.
+func configGives(configPath string, values map[string]string, edgeURL, dataDir string) error {
+	fs := flag.NewFlagSet("config", flag.ContinueOnError)
+	o := serveFlags(fs)
+	if _, err := serversetup.Apply(fs, values); err != nil {
+		return err
+	}
+	if string(*o.edgeURL) != edgeURL || *o.dataDir != dataDir {
+		return fmt.Errorf("%s gives edge-url %q and data-dir %q, but edge move runs with %q and %q from its flags; "+
+			"nothing changed, run it again without --edge-url or --data-dir", configPath, string(*o.edgeURL), *o.dataDir, edgeURL, dataDir)
+	}
+	return nil
+}
+
+// serverCommands spell cloudfield-server and the restart as an admin
+// types them on this host, with the config file in use.
+func serverCommands(configPath string) edgeagent.Commands {
+	return edgeagent.Commands{
+		Server:  func(args string) string { return sudoPrefix() + "cloudfield-server " + args + configFlag(configPath) },
+		Restart: sudoPrefix() + serversetup.RestartCommand,
+	}
+}
+
+// applyMove writes m.To, the address edgeagent.Agent.Move checked, as
+// edge-url while held is still the pin in place and the config file still
+// holds the edge-url and data-dir of snapshot, the values the move ran
+// with. It then says what it did, how to apply it and, unless edgeURL is
+// retired or retiring, how to undo it.
+func applyMove(w io.Writer, dataDir, edgeURL, configPath string, snapshot map[string]string, held *edgeagent.HeldPin, m edgeagent.Moved) error {
+	var written bytes.Buffer
+	err := edgeagent.OpenState(dataDir).WhilePinned(held, func() error {
+		now, err := serversetup.Load(configPath)
+		if err != nil {
+			return err
+		}
+		for _, key := range []string{"edge-url", "data-dir"} {
+			if now[key] != snapshot[key] {
+				return fmt.Errorf("%s changed while edge move ran: %s is now %q, was %q; nothing changed, run it again", configPath, key, now[key], snapshot[key])
+			}
+		}
+		now["edge-url"] = m.To
+		if err := serversetup.WriteConfig(configPath, now); err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(&written, "%s: edge-url = %s (was %s)\napply it with:\n  %s%s\n", configPath, m.To, snapshot["edge-url"], sudoPrefix(), serversetup.RestartCommand)
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(w, "enrolled at %s, an address of the same edge (edge key %s, still pinned); the edge announces %s too, so links and connectors made there keep working\n",
-		to, edgeproto.EdgeKeyFingerprint(pinned), edgeURL)
-	if err := configSet(w, configPath, "edge-url", to); err != nil {
-		return err
+	enrolled := fmt.Sprintf("enrolled at %s, an address of the same edge (edge key %s, still pinned); ", m.To, edgeproto.EdgeKeyFingerprint(held.Key()))
+	switch {
+	case m.Retired:
+		enrolled += "the edge says " + edgeURL + " is retired"
+	case m.Retiring:
+		enrolled += "the edge announces " + edgeURL + " too, so links and connectors made there keep working until it is retired; it is retiring, so there is no moving back"
+	default:
+		enrolled += "the edge announces " + edgeURL + " too, so links and connectors made there keep working"
 	}
-	_, _ = fmt.Fprintf(w, "to move back:\n  %saether-server edge move %s%s\n", sudoPrefix(), edgeURL, configFlag(configPath))
+	_, _ = fmt.Fprintln(w, enrolled)
+	_, _ = written.WriteTo(w)
+	if !m.Retired && !m.Retiring {
+		_, _ = fmt.Fprintf(w, "to move back:\n  %saether-server edge move %s%s\n", sudoPrefix(), shellquote.Quote(edgeURL), configFlag(configPath))
+	}
 	return nil
 }
 

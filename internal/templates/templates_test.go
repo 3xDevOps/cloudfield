@@ -143,6 +143,76 @@ func TestScheduleMissedWhileDownIsSkippedNotCaughtUp(t *testing.T) {
 	}
 }
 
+// robfig matches the hour that repeats when clocks fall back twice; each
+// wall-clock time of a zoned rule in that hour still launches once that
+// night, also when the server restarts in between.
+func TestZonedScheduleLaunchesOnceWhenClocksFallBack(t *testing.T) {
+	ctx := context.Background()
+	db, err := storetest.Open(filepath.Join(t.TempDir(), "aether.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	bus, err := events.NewInProc(ctx, nil)
+	if err != nil {
+		t.Fatalf("bus: %v", err)
+	}
+	defer func() { _ = bus.Close() }()
+	m := &domain.Member{DisplayName: "Ada", PublicKey: testPublicKey, Color: "#e6194b", Role: domain.RoleCollaborator}
+	if err = db.CreateMember(ctx, m); err != nil {
+		t.Fatalf("create member: %v", err)
+	}
+	ws := &domain.Workspace{Name: "proj", BaseBranch: domain.DefaultBaseBranch}
+	if err = db.CreateWorkspace(ctx, ws); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	tpl := &store.Template{WorkspaceID: ws.ID, Name: "nightly", Task: "sweep", Harness: "claude", Mode: domain.LaunchHeadless}
+	if err = db.SaveTemplate(ctx, tpl); err != nil {
+		t.Fatalf("save template: %v", err)
+	}
+	// On 2026-11-01, 01:00 and 01:30 in New York happen at 05:00Z and
+	// 05:30Z (EDT) and again at 06:00Z and 06:30Z (EST).
+	clock := &fakeClock{t: time.Date(2026, 11, 1, 4, 50, 0, 0, time.UTC)}
+	runs := &recordingLauncher{}
+	svc, err := New(Config{Store: storetest.Unscoped{DB: db}, Bus: bus, Runs: runs, Now: clock.now})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	info, err := svc.SaveSchedule(ctx, ws.ID, tpl.Name, "CRON_TZ=America/New_York 0,30 1 * * *", m.ID, false)
+	if err != nil {
+		t.Fatalf("SaveSchedule: %v", err)
+	}
+	if want := time.Date(2026, 11, 1, 5, 0, 0, 0, time.UTC); !info.Next.Equal(want) {
+		t.Fatalf("first slot = %s, want %s", info.Next, want)
+	}
+	scanAt := func(svc *Service, at time.Time) {
+		t.Helper()
+		clock.set(at)
+		if err = svc.scan(ctx, true); err != nil {
+			t.Fatalf("scan at %s: %v", at, err)
+		}
+	}
+	scanAt(svc, time.Date(2026, 11, 1, 5, 0, 10, 0, time.UTC))
+	scanAt(svc, time.Date(2026, 11, 1, 5, 30, 10, 0, time.UTC))
+	// A restart after 01:30 EDT: the new service only has the stored fire.
+	restarted, err := New(Config{Store: storetest.Unscoped{DB: db}, Bus: bus, Runs: runs, Now: clock.now})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	clock.set(time.Date(2026, 11, 1, 5, 45, 0, 0, time.UTC))
+	if err = restarted.scan(ctx, false); err != nil {
+		t.Fatalf("seed after restart: %v", err)
+	}
+	scanAt(restarted, time.Date(2026, 11, 1, 6, 0, 10, 0, time.UTC))
+	scanAt(restarted, time.Date(2026, 11, 1, 6, 30, 10, 0, time.UTC))
+	if n := runs.count(); n != 2 {
+		t.Fatalf("launches = %d, want one each for 01:00 and 01:30 on the night the clocks fell back", n)
+	}
+	if next, want := restarted.nextFire(info.Schedule.ID), time.Date(2026, 11, 2, 6, 0, 0, 0, time.UTC); !next.Equal(want) {
+		t.Fatalf("next slot = %s, want %s, 01:00 EST the next day", next, want)
+	}
+}
+
 // "0 0 31 4 *" - April 31st - is a valid set of cron fields naming a
 // date the calendar never reaches: it parses, and then it has no next
 // slot at all. Saving one is refused, and a row that already carries one

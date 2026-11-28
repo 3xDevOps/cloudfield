@@ -165,6 +165,10 @@ type RunController interface {
 	// decision wins, and a later one is scheduler.ErrSudoNotPending.
 	DecideSudo(ctx context.Context, run domain.RunID, request string, allow bool, member domain.MemberID) error
 	ACPCancel(ctx context.Context, run domain.RunID) error
+	// Interrupt asks run's agent to stop the turn it is in, or returns
+	// scheduler.ErrNoInterrupt for an agent that takes none from outside
+	// its terminal. stopped waits for the agent's answer.
+	Interrupt(ctx context.Context, run *domain.Run, actor domain.MemberID) (stopped func() error, err error)
 	ACPSetOption(ctx context.Context, run domain.RunID, optionID string, value any) error
 	// ACPHistory reads up to limit items before beforeSeq, oldest first;
 	// zero reads from the newest.
