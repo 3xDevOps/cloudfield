@@ -124,13 +124,16 @@ func (s *Scheduler) ensureTerminalAdmittedLocked(ctx context.Context, member dom
 		terminal, err = s.ensureTerminalLocked(ctx, member)
 	}
 	if !errors.Is(err, ErrDiskFull) || ctx.Err() != nil {
+		s.countRefusal(ctx, &memoryClaim{op: opStart}, err)
 		return terminal, err
 	}
 	lock := s.terminalLock(member)
 	lock.Unlock()
 	s.reclaimDisk(ctx, member)
 	lock.Lock()
-	return s.ensureTerminalLocked(ctx, member)
+	terminal, err = s.ensureTerminalLocked(ctx, member)
+	s.countRefusal(ctx, &memoryClaim{op: opStart}, err)
+	return terminal, err
 }
 
 func (s *Scheduler) ensureTerminalLocked(ctx context.Context, member domain.MemberID) (*domain.Terminal, error) {

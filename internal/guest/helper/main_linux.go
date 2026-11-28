@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -240,6 +241,9 @@ func serve() error {
 	record("listen on loopback ports", listenLoopbacks(cfg.Loopbacks))
 	record("start DAMON_RECLAIM", startDAMONReclaim(cfg.Swap > 0 && swapErr == nil))
 	go trimPageCache("/sys/fs/cgroup")
+	if slices.ContainsFunc(cfg.Mounts, func(m guest.Mount) bool { return m.Volume == guest.VolumeCache }) {
+		go trimCacheDisk(cacheRoot)
+	}
 
 	bootError := ""
 	if len(failures) > 0 {

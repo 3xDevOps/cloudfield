@@ -106,7 +106,7 @@ func (e *engine) createBrowser(ctx context.Context, key string, spec runtime.Bro
 		return "", fmt.Errorf("vm runtime: VM %s started while the server was still building the browser's disk; the browser works once the session's VM starts again, as after it sleeps", key)
 	}
 	if rec.Companion != nil {
-		if err = e.stopCompanion(ctx, key); err != nil {
+		if err = e.stopCompanion(ctx, rec); err != nil {
 			return "", err
 		}
 	}
@@ -193,7 +193,7 @@ func (e *engine) destroyBrowser(ctx context.Context, key string) error {
 	if rec.Companion == nil {
 		return nil
 	}
-	if err = e.stopCompanion(ctx, key); err != nil {
+	if err = e.stopCompanion(ctx, rec); err != nil {
 		return err
 	}
 	rec.Companion = nil
@@ -204,7 +204,8 @@ func (e *engine) destroyBrowser(ctx context.Context, key string) error {
 // holds the key's lock. A paused VM, as a closed session's is, runs just
 // long enough for the helper to kill the companion; its session processes
 // stay as frozen as the companion's cgroup is.
-func (e *engine) stopCompanion(ctx context.Context, key string) (err error) {
+func (e *engine) stopCompanion(ctx context.Context, rec *record) (err error) {
+	key := rec.Key
 	e.stopRelay(key)
 	up, err := e.running(ctx, key)
 	if err != nil || !up {
@@ -216,7 +217,7 @@ func (e *engine) stopCompanion(ctx context.Context, key string) (err error) {
 	}
 	if e.halted(ctx, key) {
 		api := newCHAPI(e.path(key, apiSocket))
-		if err = api.resume(ctx); err != nil {
+		if err = e.resumeGuest(ctx, rec); err != nil {
 			return fmt.Errorf("vm runtime: resume VM %s to remove its browser: %w", key, err)
 		}
 		defer func() {

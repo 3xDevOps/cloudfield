@@ -123,6 +123,9 @@ func renderChildren(w io.Writer, run string, out protocol.RunChildrenResult) {
 		if ch.Detached {
 			line += "  detached"
 		}
+		if (ch.State == protocol.ChildQueued || ch.State == protocol.ChildStarting) && ch.Error != "" {
+			line += "  waiting to start: " + printable(ch.Error)
+		}
 		_, _ = fmt.Fprintln(w, line)
 	}
 	u := out.Usage

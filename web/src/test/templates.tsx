@@ -46,8 +46,8 @@ export function Templates({ client }: { client: Api }) {
 export const detail = (name: string) => screen.getByRole('region', { name, hidden: true })
 
 export async function rowAction(name: string) {
-  if (name === 'Edit') {
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+  if (name === 'Edit' || name === 'Schedule') {
+    fireEvent.click(await screen.findByRole('button', { name }))
     return
   }
   const trigger = await screen.findByRole('button', { name: `More for ${template.name}` })

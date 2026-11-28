@@ -4,6 +4,8 @@ import { needsInputPrefix, plainReason } from '@/lib/reasons'
 import { isSudo } from '@/lib/run-requests'
 import type {
   Device,
+  EdgeNotice,
+  EdgePending,
   Member,
   RoomMessage,
   RoomStatusResult,
@@ -341,4 +343,77 @@ export function deviceNeeds(
       }
     })
     .sort((a, b) => a.waitingSince.localeCompare(b.waitingSince) || a.device.id.localeCompare(b.device.id))
+}
+
+export interface EdgeNeed {
+  /** The address the server is enrolled at. */
+  edgeURL: string
+  /** What the edge signed about edgeURL, if anything. */
+  notice?: EdgeNotice
+  /** What it signed about the address a restart applies, when that one is leaving too; this need is then about it. */
+  pending?: EdgePending
+  state: 'retiring' | 'retired'
+  reason: string
+  /** What notice says of edgeURL, for the members' row. */
+  noticeReason?: string
+  /** Run on the server's host, then restart; no command when the replacement is not a bare https origin. */
+  move?: string
+  /** The same for pending's replacement. */
+  moveOn?: string
+  restart: string
+}
+
+const dnsLabel = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
+const octet = '(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+const ipv4 = new RegExp(`^${octet}(?:\\.${octet}){3}$`)
+const trailingIPv4 = new RegExp(`^(.*:)${octet}(?:\\.${octet}){3}$`)
+
+function dnsName(host: string): boolean {
+  return host.length <= 253 && host.split('.').every((l) => dnsLabel.test(l))
+}
+
+/** Lowercase IPv6 without a zone: eight groups, or fewer around one `::`; the last two may be an IPv4 address. */
+function ipv6(host: string): boolean {
+  const v4 = trailingIPv4.exec(host)
+  const halves = (v4 ? `${v4[1]}0:0` : host).split('::')
+  if (halves.length > 2) return false
+  const groups = halves.flatMap((h) => (h === '' ? [] : h.split(':')))
+  return groups.every((g) => /^[0-9a-f]{1,4}$/.test(g)) && (halves.length === 2 ? groups.length <= 7 : groups.length === 8)
+}
+
+/** `value` is `https://` with a lowercase DNS name, an IPv4 address or a bracketed IPv6 address, and an optional port from 1 to 65535 without a leading zero, as the server writes an origin: nothing a shell or a reader could take for more. */
+export function bareOrigin(value: string): boolean {
+  const match = /^https:\/\/(\[([^\]]*)\]|[^:/[\]]+)(?::([1-9][0-9]{0,4}))?$/.exec(value)
+  if (!match || (match[3] !== undefined && Number(match[3]) > 65535)) return false
+  return match[2] !== undefined ? ipv6(match[2]) : ipv4.test(match[1]) || dnsName(match[1])
+}
+
+/** Brackets are shell glob characters, so an IPv6 address is quoted. */
+function moveCommand(origin: string): string {
+  return `sudo cloudfield-server edge move ${origin.includes('[') ? `'${origin}'` : origin}`
+}
+
+function leaving(state: 'retiring' | 'retired', date?: string): string {
+  return state === 'retired' ? 'is retired' : date ? `is retiring on ${date}` : 'is retiring'
+}
+
+/** What the server's pinned edge key signed about the address the server is enrolled at, or about the one a restart applies. */
+export function edgeNotice(edge: ServerEdge | null): EdgeNeed | undefined {
+  const notice = edge?.notice
+  const pending = edge?.pending
+  if (!edge?.edge_url || (!notice && !pending)) return undefined
+  const noticeReason = notice && `${edge.edge_url} ${leaving(notice.state, notice.date)}`
+  const pendingReason = pending && (pending.edge_url
+    ? `${pending.edge_url}, which edge-url names for the next restart, ${leaving(pending.state, pending.date)}`
+    : `The address edge-url names for the next restart ${leaving(pending.state, pending.date)}`)
+  return {
+    edgeURL: edge.edge_url,
+    ...(notice && { notice, noticeReason }),
+    ...(pending && { pending }),
+    state: pending?.state ?? notice!.state,
+    reason: pendingReason ?? noticeReason!,
+    ...(notice && bareOrigin(notice.replacement) && { move: moveCommand(notice.replacement) }),
+    ...(pending?.replacement && bareOrigin(pending.replacement) && { moveOn: moveCommand(pending.replacement) }),
+    restart: 'sudo systemctl restart aether-server',
+  }
 }

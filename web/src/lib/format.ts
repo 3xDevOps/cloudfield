@@ -40,6 +40,8 @@ export function timeAgo(iso: string, now = Date.now()): string {
   return step ? relative.format(...step) : ''
 }
 
+export const browserZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+
 /** The local wall-clock time of `iso`, with the date when it is not today. */
 export function clockTime(iso: string, now = Date.now()): string {
   const when = new Date(iso)

@@ -296,6 +296,8 @@ cloudfield wait <session-id> [<session-id>...] --timeout 30m
 cloudfield logs <session-id>
 cloudfield messages <session-id> --json
 cloudfield message <session-id> "<reply>"
+cloudfield interrupt <session-id>
+cloudfield session set <session-id> --model <model> --effort <level>
 ```
 
 Given several session ids, `cloudfield wait` returns when the first of them
@@ -335,6 +337,35 @@ A permission request is the human's: show it with its options, and run the
 `cloudfield answer <session-id> <request-id> <option-id>` they pick. It allows or
 rejects once, never always. Relay a session's question to the human unless the
 task they gave you already answers it.
+
+`cloudfield interrupt` stops the agent's current turn and leaves the session
+open; `cloudfield message` then starts the next one. It works on an Enhanced
+session and on a Standard Codex session that is not paused. It prints
+`sent an interrupt to session <session-id>` and exits 0 whether or not a turn
+was running; `cloudfield timeline <session-id>` then shows the note
+`sent an interrupt` with the member who ran it. A session the server saved to
+disk for memory while it worked keeps its turn: the command fails and names
+`cloudfield resume <session-id>`, which wakes it. Any other Standard agent
+stops only on its own key, so the command fails and names
+`cloudfield attach <session-id>`: **Human:** press the key there. While
+another member controls the session it fails with their name.
+
+`cloudfield session set` changes the model, the effort or both of a running
+Enhanced session, to values its agent offers: `cloudfield agent models <agent>`
+lists models, and `cloudfield agent list --json` each agent's `effort_levels`.
+It prints `session <session-id> set to model <model>, effort <level>` with the
+values the agent reports afterwards, which can differ from the ones passed;
+`cloudfield timeline <session-id>` then shows the note
+`set model <model>, effort <level>` with the member who ran it. The model is
+set first and stays changed if the effort then fails: the error then ends with
+`; the session is now set to model <model>`. A paused session fails and names
+`cloudfield resume <session-id>`. A Standard session changes them only inside
+the agent's own terminal, so the command fails and names
+`cloudfield attach <session-id>`, and
+`cloudfield session switch <session-id> --mode enhanced` when its agent can
+switch a running session
+([enhanced-sessions.md](enhanced-sessions.md#switching-a-running-agent)). While
+another member controls the session it fails with their name.
 
 ## Bring results back and publish
 

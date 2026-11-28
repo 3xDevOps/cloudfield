@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	edgeagent "github.com/3xDevOps/cloudfield/internal/edge/agent"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 )
@@ -45,10 +46,18 @@ type EdgeOwner interface {
 	// EdgeState is the edge's last reported state for this server,
 	// edgeproto.StateClaimed or StateUnclaimed, empty until it answers.
 	EdgeState() string
+	// Notices are the notices the edge holding the pinned key signed at
+	// the server's latest enrollment, verified.
+	Notices() (edgeagent.StoredNotices, error)
 	// IssueClaimCode replaces any claim code with a fresh one whose
 	// claim binds the claiming account to the existing admin member
 	// admin.
 	IssueClaimCode(admin domain.MemberID) (code string, expires time.Time, err error)
+	// ConnectorOrigins are the relay origins a connector can be added at
+	// now: those the live control connection announced at
+	// edgeproto.VersionRelayOrigin or later while the edge reports the
+	// server claimed, read as one snapshot; none otherwise.
+	ConnectorOrigins() []string
 }
 
 // SetEdgeOwner connects the edge agent that records ownership. Call it

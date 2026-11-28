@@ -280,7 +280,7 @@ type fakeUnits struct {
 	rebootOnResume bool
 	resumeWrites   string
 	// cgroups is the cgroup root, which holds a memory.current, a
-	// memory.stat and a cgroup.freeze for each running unit.
+	// memory.stat, a cgroup.freeze and a memory.max for each running unit.
 	cgroups string
 }
 
@@ -314,6 +314,9 @@ func (u *fakeUnits) Start(_ context.Context, name string, argv, properties []str
 		return err
 	}
 	if err = os.WriteFile(filepath.Join(u.cgroup(name), "cgroup.freeze"), []byte("0\n"), 0o644); err != nil {
+		return err
+	}
+	if err = os.WriteFile(filepath.Join(u.cgroup(name), "memory.max"), nil, 0o644); err != nil {
 		return err
 	}
 	u.mu.Lock()
@@ -480,8 +483,10 @@ func startVMM(socket string, args []string, exit func()) (*fakeVMM, error) {
 			_ = os.WriteFile(disk, nil, 0o600)
 			_ = os.WriteFile(filepath.Join(dir, "config.json"), fmt.Appendf(nil, `{"disks":[{"path":%q}]}`, disk), 0o600)
 		case "vm.counters":
-			_ = json.NewEncoder(w).Encode(map[string]map[string]uint64{
-				"net0": {"rx_bytes": 10, "tx_bytes": 20}, "root": {"read_bytes": 1, "write_bytes": 2}, "data": {"read_bytes": 3, "write_bytes": 4},
+			_ = json.NewEncoder(w).Encode(map[string]map[string]any{
+				"net0": {"device_type": "net", "rx_bytes": 10, "tx_bytes": 20},
+				"root": {"device_type": "block", "read_bytes": 1, "write_bytes": 2},
+				"data": {"device_type": "block", "read_bytes": 3, "write_bytes": 4},
 			})
 		case "vmm.shutdown":
 			exit()
@@ -530,6 +535,9 @@ type fakeHelper struct {
 	syncs     int
 	// onSync, when set, runs during each Sync.
 	onSync func()
+	// cacheUse and cacheUseErr are what CacheUse answers.
+	cacheUse    guest.CacheUse
+	cacheUseErr error
 	// unresponsive makes calls fail as a guest that stopped answering does.
 	unresponsive bool
 	stats        guest.Stats
@@ -686,6 +694,12 @@ func (g *fakeHelper) Sync(context.Context) error {
 		onSync()
 	}
 	return g.syncErr
+}
+
+func (g *fakeHelper) CacheUse(context.Context) (guest.CacheUse, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.cacheUse, g.cacheUseErr
 }
 
 func (g *fakeHelper) Close() error { return nil }

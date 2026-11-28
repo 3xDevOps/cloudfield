@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 )
 
@@ -29,20 +30,7 @@ const mcpUsage = "usage: cloudfield mcp [code | revoke <connector id>]"
 func runMCP(args []string) error {
 	switch {
 	case len(args) == 0:
-		return withControl(func(c *protocol.Client) error {
-			var list protocol.ConnectorListResult
-			if err := c.Call(protocol.MethodConnectorList, struct{}{}, &list); err != nil {
-				return olderServer(err)
-			}
-			var code *protocol.ConnectorCodeResult
-			if !list.SignIn {
-				code = &protocol.ConnectorCodeResult{}
-				if err := c.Call(protocol.MethodConnectorCode, struct{}{}, code); err != nil {
-					return olderServer(err)
-				}
-			}
-			return printConnectors(os.Stdout, list, code, time.Now())
-		})
+		return withControl(func(c *protocol.Client) error { return mcpOverview(os.Stdout, c.Call, time.Now) })
 	case len(args) == 1 && args[0] == "code":
 		return withControl(func(c *protocol.Client) error {
 			var code protocol.ConnectorCodeResult
@@ -72,6 +60,30 @@ func olderServer(err error) error {
 	return err
 }
 
+// mcpOverview prints how to add a connector and the caller's connectors.
+// When no code can be minted and the edge says something about the
+// address of one of them, it still prints the connectors before the error.
+func mcpOverview(w io.Writer, call func(method string, params, result any) error, now func() time.Time) error {
+	var list protocol.ConnectorListResult
+	if err := call(protocol.MethodConnectorList, struct{}{}, &list); err != nil {
+		return olderServer(err)
+	}
+	var code *protocol.ConnectorCodeResult
+	if !list.SignIn {
+		code = &protocol.ConnectorCodeResult{}
+		if err := call(protocol.MethodConnectorCode, struct{}{}, code); err != nil {
+			if !slices.ContainsFunc(list.Connectors, func(c protocol.Connector) bool { return c.Notice != nil }) {
+				return olderServer(err)
+			}
+			if perr := printConnected(w, list, list.URL, false, now()); perr != nil {
+				return perr
+			}
+			return olderServer(err)
+		}
+	}
+	return printConnectors(w, list, code, now())
+}
+
 func printConnectors(w io.Writer, list protocol.ConnectorListResult, code *protocol.ConnectorCodeResult, now time.Time) error {
 	connectorURL := list.URL
 	if code != nil {
@@ -90,11 +102,19 @@ func printConnectors(w io.Writer, list protocol.ConnectorListResult, code *proto
 	if list.UniversalURL != "" && connectorURL != list.UniversalURL {
 		_, _ = fmt.Fprintf(w, "To use the one URL %s instead, link a GitHub account: aether member link --github <login>\n", list.UniversalURL)
 	}
+	return printConnected(w, list, connectorURL, code == nil, now)
+}
+
+// printConnected lists the caller's connectors, connectorURL being the
+// URL to add and signIn whether that URL's
+// page takes the edge sign-in.
+func printConnected(w io.Writer, list protocol.ConnectorListResult, connectorURL string, signIn bool, now time.Time) error {
 	if len(list.Connectors) == 0 {
 		return nil
 	}
 	_, _ = fmt.Fprintln(w, "Connected:")
 	var own []string
+	ownPath := false
 	for _, c := range list.Connectors {
 		added, err := time.Parse(time.RFC3339, c.CreatedAt)
 		if err != nil {
@@ -111,23 +131,52 @@ func printConnectors(w io.Writer, list protocol.ConnectorListResult, code *proto
 		at := ""
 		switch {
 		case c.Resource == "":
+		case c.Notice != nil:
+			// The address tells apart connectors on different retiring addresses.
+			at = "  at " + c.Resource
 		case c.Resource == list.UniversalURL || slices.Contains(list.UniversalURLs, c.Resource):
 			at = "  universal URL"
 		default:
 			at = "  at " + c.Resource
 			own = append(own, c.ID)
 		}
+		if c.Notice != nil && c.Notice.URL != "" && !strings.HasSuffix(c.Notice.URL, edgeproto.PathUniversalMCP) {
+			ownPath = true
+		}
 		_, _ = fmt.Fprintf(w, "  %s  %s (%s)  scopes %s  added %s  %s%s\n", c.ID, c.ClientName, c.RedirectHost, strings.Join(c.Scopes, ","),
 			added.Local().Format(time.DateOnly), used, at)
+		if c.Notice != nil {
+			_, _ = fmt.Fprintln(w, "    "+noticeLine(c))
+		}
 	}
 	if len(own) > 0 && connectorURL == list.UniversalURL {
 		_, _ = fmt.Fprintf(w, "Move %s to the universal URL: connect again at %s, then aether mcp revoke <id>\n", strings.Join(own, ", "), list.UniversalURL)
 	}
-	if len(own) > 0 && code == nil {
+	if (len(own) > 0 || ownPath) && signIn {
 		_, _ = fmt.Fprintln(w, "Reconnecting one at the server's own URL asks for a code: aether mcp code")
 	}
 	_, _ = fmt.Fprintln(w, "Remove one: aether mcp revoke <id>")
 	return nil
+}
+
+// noticeLine is what the edge says about the address connector c was
+// added at, and what to do.
+func noticeLine(c protocol.Connector) string {
+	revoke := "aether mcp revoke " + c.ID
+	if c.Notice.State == edgeproto.NoticeRetired {
+		if c.Notice.URL == "" {
+			return "retired: remove it in the app, then: " + revoke
+		}
+		return "retired: add it again at " + c.Notice.URL + " if you still use it, remove the old one in the app, then: " + revoke
+	}
+	on := ""
+	if c.Notice.Date != "" {
+		on = " on " + c.Notice.Date
+	}
+	if c.Notice.URL == "" {
+		return "retiring" + on + ": ask this server's admin where to add it again"
+	}
+	return "retiring" + on + ": add it again at " + c.Notice.URL + ", check it works, remove the old one in the app, then: " + revoke
 }
 
 func printCode(w io.Writer, code protocol.ConnectorCodeResult, now time.Time) error {

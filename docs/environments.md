@@ -311,8 +311,10 @@ Cloudfield checks that the host has free disk and memory, and that the server is
 not stalling on memory (its cgroup's `memory.pressure`, `some avg60` below
 10%). Otherwise the launch fails with `scheduler: insufficient disk headroom`,
 `scheduler: insufficient host memory headroom` or `scheduler: host capacity
-unavailable`. Cloudfield never stops a running agent to make room, and reopening
-a retained session needs no check. A refusal for low available memory first
+unavailable`. Cloudfield never stops a running agent to make room. Reopening a
+retained session whose container still runs needs no check; one whose
+container a sleep stopped is checked as a wake, on memory and for 1 GiB of
+free disk. A refusal for low available memory first
 saves idle session VMs to disk and checks once more. When the host runs out of
 memory, a session VM can be saved to disk while it works, with every process
 kept, and woken again once memory is back. [Recover from disk
@@ -394,16 +396,21 @@ What changes:
 - `/tmp` is on the session's data disk. `/aether-cache` is a copy-on-write
   layer over the member's newest caches, made when the session is created
   and at each start after a stop, so sessions share those caches' blocks and
-  each holds only what it wrote. A session's caches become the member's
-  newest when its VM stops for good: it is stopped, or deleted while stopped
+  each holds only what it wrote. The layer holds at most 32 GiB, and the VM
+  deletes the least recently used Go build cache files while it is more
+  than half full ([environment-home.md](environment-home.md#tool-caches)). A
+  session's caches become the member's newest when its VM stops for good:
+  it is stopped, or deleted while stopped
   or saved. A VM that holds its session's checkout stays up for up to 10
   minutes after a stop, so its caches go back when it powers off, and a
   reopen before then keeps them on the session. The server writes the
   member's new caches in the background. A stopped VM keeps no cache disk,
   so a session that starts again finds the member's newest caches, not
-  always its own: they did not go back if the stop had to kill the VM, if
-  another session's went back later, or if the start or a server restart
-  came before the write finished. Nor did they if writing them could leave
+  always its own: they did not go back if the session added nothing to them
+  (the VM counts as many free blocks and inodes on them as when it first
+  started on them), if another session's went back after this one started,
+  if the stop had to kill the VM, or if the start or a server restart came
+  before the write finished. Nor did they if writing them could leave
   the data filesystem with less free than its reserve (`--min-free-disk`)
   plus 4 GiB, the level below which the server starts deleting stopped
   sessions' state: the member's newest caches stay as they were, and the

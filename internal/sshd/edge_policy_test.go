@@ -19,6 +19,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	edgeagent "github.com/3xDevOps/cloudfield/internal/edge/agent"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 	"github.com/3xDevOps/cloudfield/internal/store"
@@ -573,7 +574,14 @@ type fakeEdgeOwner struct {
 	state string
 	// issuedFor is the admin of the last IssueClaimCode.
 	issuedFor domain.MemberID
+	// notices and noticesErr are what Notices returns.
+	notices    edgeagent.StoredNotices
+	noticesErr error
 }
+
+func (f *fakeEdgeOwner) Notices() (edgeagent.StoredNotices, error) { return f.notices, f.noticesErr }
+
+func (f *fakeEdgeOwner) ConnectorOrigins() []string { return nil }
 
 func (f *fakeEdgeOwner) IssueClaimCode(admin domain.MemberID) (string, time.Time, error) {
 	f.mu.Lock()
