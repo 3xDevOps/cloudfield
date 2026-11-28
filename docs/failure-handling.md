@@ -897,10 +897,11 @@ waits: it stays asleep with the refusal shown.
   never holds up one that would fit. A launch that asks to wait while others
   wait goes behind them without a try of its own. A launch that does not ask
   to wait, a subsession and a wake are admitted as before and can take room
-  a waiting launch was about to get; each such launch is counted against
-  every waiting one (`passed`).
+  a waiting launch was about to get; each such launch or subsession, not a
+  wake, is counted against every waiting one (`passed`).
 - **How it ends.** It becomes its session, in one database transaction with
-  the session's row; or its member cancels it; or it finds no room for 24
+  the session's row, and its stored request is dropped; or its member
+  cancels it; or it finds no room for 24
   hours and ends `expired` with the last refusal; or a check refuses it; or
   a super admin cancels it. An ending its member did not choose is pushed
   to their devices and stays in `launch.waiting.list` for a day. An ended

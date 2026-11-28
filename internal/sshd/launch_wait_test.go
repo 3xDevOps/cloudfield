@@ -104,17 +104,17 @@ func TestALaunchWithNoRoomWaitsAndStartsOnce(t *testing.T) {
 	}
 	// A caller that does not ask to wait never gets a result without a
 	// session: it gets the refusal, and no second launch.
-	if _, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: "wait", IdempotencyKey: "k-1"}); perr == nil || perr.Code != protocol.CodeUnavailable ||
+	if _, perr = e.launch(e.member.ID, protocol.RunLaunchParams{Task: "wait", IdempotencyKey: "k-1"}); perr == nil || perr.Code != protocol.CodeUnavailable ||
 		!strings.Contains(perr.Message, errTestNoRoom.Error()) || !strings.Contains(perr.Message, "is waiting for room") {
 		t.Fatalf("the same key without wait = %v, want the refusal and that it waits", perr)
 	}
 	if e.launches() != tried {
 		t.Fatalf("a retry of a waiting launch was tried %d more times, want none", e.launches()-tried)
 	}
-	if _, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: "another", IdempotencyKey: "k-1", Wait: true}); perr == nil || perr.Code != protocol.CodeConflict {
+	if _, perr = e.launch(e.member.ID, protocol.RunLaunchParams{Task: "another", IdempotencyKey: "k-1", Wait: true}); perr == nil || perr.Code != protocol.CodeConflict {
 		t.Fatalf("the key with another task = %v, want a conflict", perr)
 	}
-	if list := e.listed(e.member.ID); len(list) != 1 || list[0].ID != first.Waiting.ID || list[0].Task != "wait" {
+	if list := e.listed(e.member.ID); len(list) != 1 || list[0].ID != first.Waiting.ID || list[0].Task != "wait" || list[0].IdempotencyKey != "k-1" {
 		t.Fatalf("waiting launches listed = %+v", list)
 	}
 
@@ -132,7 +132,8 @@ func TestALaunchWithNoRoomWaitsAndStartsOnce(t *testing.T) {
 	if err != nil || in.State != domain.IntentStarted || run.MemberID != e.member.ID || run.Task != "wait" || run.BaseCommit != in.Base.Commit {
 		t.Fatalf("once there is room: intent %+v, session %+v, %v; want it started as that session from the kept base", in, run, err)
 	}
-	if receipt, _, err := e.db.LaunchReceipt(t.Context(), e.member.ID, "k-1"); err != nil || receipt != in.ID {
+	receipt, _, err := e.db.LaunchReceipt(t.Context(), e.member.ID, "k-1")
+	if err != nil || receipt != in.ID {
 		t.Fatalf("the key's receipt after the start = %q, %v; want the session", receipt, err)
 	}
 	counts, err := e.db.CapacityCounts(t.Context(), time.Now().Add(-time.Hour))
@@ -158,6 +159,31 @@ func TestALaunchWithNoRoomWaitsAndStartsOnce(t *testing.T) {
 	e.srv.startWaitingLaunches(t.Context(), created.Add(3*launchRetryEvery))
 	if e.launches() != tried {
 		t.Fatal("a started launch was tried again")
+	}
+	// The request is the session's now: the intent keeps none of it.
+	if string(in.Params) != "" {
+		t.Fatalf("a started launch still stores its request: %s", in.Params)
+	}
+}
+
+// A launch asked for without a key offers none, and its ID is no key: a
+// request that names it launches on its own.
+func TestAKeylessWaitingLaunchAnswersToNoKey(t *testing.T) {
+	e := newWaitEnv(t)
+	w, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: "no key", Wait: true})
+	if perr != nil || w.Waiting == nil || w.Waiting.IdempotencyKey != "" {
+		t.Fatalf("a keyless waiting launch = %+v, %v; want it waiting and offering no key", w, perr)
+	}
+	other, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: "another task", IdempotencyKey: w.Waiting.ID, Wait: true})
+	if perr != nil || other.Waiting == nil || other.Waiting.ID == w.Waiting.ID {
+		t.Fatalf("a request keyed with that launch's ID = %+v, %v; want a launch of its own", other, perr)
+	}
+	e.setRoom(true)
+	e.srv.startWaitingLaunches(t.Context(), time.Now().Add(launchRetryEvery))
+	for _, id := range []string{w.Waiting.ID, other.Waiting.ID} {
+		if in := e.intent(id); in.State != domain.IntentStarted {
+			t.Fatalf("launch %s once there is room = %+v, want it started", id, in)
+		}
 	}
 }
 

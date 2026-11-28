@@ -604,9 +604,10 @@ type LaunchWaiting struct {
 	Refusal string `json:"refusal"`
 	// Attempts counts the tries since the first refusal, and Passed the
 	// launches the server admitted while this one waited.
-	Attempts       int    `json:"attempts"`
-	Passed         int    `json:"passed"`
-	IdempotencyKey string `json:"idempotency_key"`
+	Attempts int `json:"attempts"`
+	Passed   int `json:"passed"`
+	// IdempotencyKey is the request's, absent when it had none.
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 	CreatedAt      string `json:"created_at"`
 	// ExpiresAt is when a launch still waiting ends "expired".
 	ExpiresAt string `json:"expires_at"`

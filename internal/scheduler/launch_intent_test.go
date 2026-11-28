@@ -47,7 +47,8 @@ func TestAWaitingLaunchStartsAsItsReservedSessionFromItsKeptBase(t *testing.T) {
 	if run.ID != in.ID || run.BaseCommit != in.Base.Commit || run.BaseBranch != "kept" || run.BaseSource != "origin" || !run.BaseCheckedAt.Equal(in.Base.CheckedAt) {
 		t.Fatalf("session = %+v, want the reserved ID and the kept base", run)
 	}
-	if got, err := e.db.GetLaunchIntent(t.Context(), in.ID); err != nil || got.State != domain.IntentStarted {
+	got, err := e.db.GetLaunchIntent(t.Context(), in.ID)
+	if err != nil || got.State != domain.IntentStarted {
 		t.Fatalf("intent after the start = %+v, %v", got, err)
 	}
 	// A second start of it is the same session, not another.

@@ -167,6 +167,10 @@ func (s *Scheduler) countSave(c memoryCandidate, available, floor uint64) {
 // passWaitingLaunches counts the launch of run against every launch that
 // waits for room: it got the room first.
 func (s *Scheduler) passWaitingLaunches(ctx context.Context, run domain.RunID) {
+	// Most launches pass nothing: a read, and no write to wait on.
+	if open, err := s.cfg.Store.OpenLaunchIntents(ctx); err == nil && open == 0 {
+		return
+	}
 	passed, err := s.cfg.Store.PassLaunchIntents(ctx)
 	if err != nil {
 		slog.Warn("scheduler: capacity: count the waiting launches a launch passed", "run", run, "error", err)

@@ -34,7 +34,7 @@ type LaunchIntent struct {
 	ID          RunID
 	MemberID    MemberID
 	WorkspaceID WorkspaceID
-	// IdempotencyKey is the request's, or the ID when it had none.
+	// IdempotencyKey is the request's, empty when it had none.
 	IdempotencyKey string
 	// Method and Params are the launch request as its member sent it,
 	// without its key, replayed as that member at every attempt.
@@ -51,7 +51,7 @@ type LaunchIntent struct {
 	// Device is the edge device the request's connection signed in with,
 	// if one: a launch whose device no longer admits it ends refused.
 	Device DeviceID
-	State LaunchIntentState
+	State  LaunchIntentState
 	// Refusal is the last refusal, as the caller got it; for a final state
 	// that is not started, why it ended.
 	Refusal string

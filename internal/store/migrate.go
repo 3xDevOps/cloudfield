@@ -2739,7 +2739,7 @@ CREATE TABLE capacity_vms (
 	// v120: the launches that wait for room (store/launch_intents.go). id
 	// is the session ID reserved for one and has no foreign key: no
 	// session row exists until it is started. An open intent is unique to
-	// its member and key.
+	// its member and key, when its request had one.
 	`
 CREATE TABLE launch_intents (
 	id              TEXT PRIMARY KEY,
@@ -2763,7 +2763,9 @@ CREATE TABLE launch_intents (
 	attempted_at    INTEGER NOT NULL,
 	ended_at        INTEGER
 );
-CREATE UNIQUE INDEX launch_intents_open_key ON launch_intents (member_id, idempotency_key) WHERE state IN ('waiting', 'starting');
+CREATE UNIQUE INDEX launch_intents_open_key ON launch_intents (member_id, idempotency_key)
+	WHERE state IN ('waiting', 'starting') AND idempotency_key <> '';
+CREATE INDEX launch_intents_key ON launch_intents (member_id, idempotency_key);
 CREATE INDEX launch_intents_state ON launch_intents (state, created_at);
 `,
 }

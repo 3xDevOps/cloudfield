@@ -336,10 +336,7 @@ func (s *Server) startWaitingLaunch(ctx context.Context, in *domain.LaunchIntent
 		s.endRefused(ctx, in, "the stored request cannot be read: "+err.Error(), now)
 		return true
 	}
-	// An intent whose request had no key carries its own ID as its key.
-	if in.IdempotencyKey != string(in.ID) {
-		p.IdempotencyKey = in.IdempotencyKey
-	}
+	p.IdempotencyKey = in.IdempotencyKey
 	params, err := json.Marshal(p)
 	if err != nil {
 		s.endRefused(ctx, in, "the stored request cannot be written: "+err.Error(), now)
@@ -405,7 +402,18 @@ func (s *Server) startWaitingLaunch(ctx context.Context, in *domain.LaunchIntent
 	}
 	switch {
 	case perr == nil:
-		return started()
+		select {
+		case <-attempt.created:
+			return started()
+		default:
+		}
+		if _, err := s.cfg.Store.GetRun(ctx, in.ID); err == nil {
+			// Its session existed already; the next pass settles the row.
+			return started()
+		}
+		// Answered without this launch: its key already named a session.
+		s.endRefused(ctx, in, "its idempotency key already answers with another session, so this one was not started", now)
+		return true
 	case ctx.Err() != nil:
 		// A server stopping: the next one returns it to waiting.
 		return false

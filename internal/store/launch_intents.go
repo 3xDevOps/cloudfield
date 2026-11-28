@@ -80,17 +80,17 @@ func (d *DB) CreateLaunchIntent(ctx context.Context, in *domain.LaunchIntent, ma
 	}
 	defer tx.Rollback() //nolint:errcheck // committed below
 	if in.IdempotencyKey != "" {
-		prior, err := scanLaunchIntent(tx.QueryRowContext(ctx, `SELECT `+launchIntentCols+` FROM launch_intents
+		prior, scanErr := scanLaunchIntent(tx.QueryRowContext(ctx, `SELECT `+launchIntentCols+` FROM launch_intents
 			WHERE member_id = ? AND idempotency_key = ? AND state IN ('waiting', 'starting')`, in.MemberID, in.IdempotencyKey))
-		if err == nil {
+		if scanErr == nil {
 			return prior, true, nil
 		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return nil, false, fmt.Errorf("store: create launch intent: %w", err)
+		if !errors.Is(scanErr, sql.ErrNoRows) {
+			return nil, false, fmt.Errorf("store: create launch intent: %w", scanErr)
 		}
 	}
 	var open int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM launch_intents WHERE member_id = ? AND state IN ('waiting', 'starting')`, in.MemberID).Scan(&open); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM launch_intents WHERE member_id = ? AND state IN ('waiting', 'starting')`, in.MemberID).Scan(&open); err != nil {
 		return nil, false, fmt.Errorf("store: create launch intent: %w", err)
 	}
 	if open >= maxOpen {
@@ -102,9 +102,6 @@ func (d *DB) CreateLaunchIntent(ctx context.Context, in *domain.LaunchIntent, ma
 	}
 	out := *in
 	out.ID, out.CreatedAt, out.AttemptedAt, out.State = domain.RunID(id), ts, ts, domain.IntentWaiting
-	if out.IdempotencyKey == "" {
-		out.IdempotencyKey = id
-	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO launch_intents (`+launchIntentCols+`)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, NULL)`,
 		out.ID, out.MemberID, out.WorkspaceID, out.IdempotencyKey, out.Method, string(out.Params), out.Base.Commit, out.Base.Branch, out.Base.Source, out.Base.CheckedAt.UTC().UnixNano(), out.Via, out.Connector, out.Device,
@@ -199,7 +196,9 @@ func (d *DB) CreateRunForIntent(ctx context.Context, r *domain.Run) error {
 		return errors.New("store: create an intent's session: id is required")
 	}
 	return d.createRun(ctx, r, true, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `UPDATE launch_intents SET state = 'started', refusal = '', ended_at = ? WHERE id = ? AND state = 'starting'`,
+		// The request is the session's from here: a deleted session must
+		// not leave its task behind.
+		res, err := tx.ExecContext(ctx, `UPDATE launch_intents SET state = 'started', refusal = '', params = '', ended_at = ? WHERE id = ? AND state = 'starting'`,
 			time.Now().UTC().UnixNano(), r.ID)
 		if err != nil {
 			return fmt.Errorf("start launch intent: %w", err)
@@ -212,7 +211,7 @@ func (d *DB) CreateRunForIntent(ctx context.Context, r *domain.Run) error {
 }
 
 func (d *DB) RecoverLaunchIntents(ctx context.Context) error {
-	if _, err := d.db.ExecContext(ctx, `UPDATE launch_intents SET state = 'started', refusal = '', ended_at = ?
+	if _, err := d.db.ExecContext(ctx, `UPDATE launch_intents SET state = 'started', refusal = '', params = '', ended_at = ?
 		WHERE state = 'starting' AND id IN (SELECT id FROM runs)`, time.Now().UTC().UnixNano()); err != nil {
 		return fmt.Errorf("store: recover launch intents: %w", err)
 	}

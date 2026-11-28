@@ -293,7 +293,7 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 		launched := p
 		launched.LinearIssueURL = linkedIssue
 		var refused error
-		started, perr := s.launchRun(ctx, caller, member, launched, mode, policy, attempt, wait, &refused, func(id domain.RunID) {
+		started, launchErr := s.launchRun(ctx, caller, member, launched, mode, policy, attempt, wait, &refused, func(id domain.RunID) {
 			if created != nil {
 				created(id)
 			}
@@ -309,7 +309,7 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 		if attempt != nil {
 			attempt.refused = refused
 		}
-		if perr != nil && wait && attempt == nil && scheduler.IsCapacityRefusal(refused) {
+		if launchErr != nil && wait && attempt == nil && scheduler.IsCapacityRefusal(refused) {
 			in, waitErr := s.waitForRoom(ctx, member, key, p, refused)
 			if waitErr != nil {
 				return nil, waitErr
@@ -317,7 +317,7 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 			waiting = in
 			return nil, nil
 		}
-		return started, perr
+		return started, launchErr
 	})
 	if perr != nil {
 		return nil, perr

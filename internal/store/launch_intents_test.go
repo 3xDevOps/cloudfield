@@ -39,19 +39,19 @@ func TestALaunchIntentKeepsItsRequestAndIsOneToItsKey(t *testing.T) {
 	if err != nil || !existing || again.ID != in.ID {
 		t.Fatalf("the same key while it waits = %+v, existing %v, %v; want the same intent", again, existing, err)
 	}
-	// With no key of its own, its ID is its key.
-	keyless := waitingIntent(t, db, w, m, "")
-	if keyless.IdempotencyKey != string(keyless.ID) {
-		t.Fatalf("a keyless intent's key = %q, want its ID %s", keyless.IdempotencyKey, keyless.ID)
+	// Two with no key are two launches.
+	if a, b := waitingIntent(t, db, w, m, ""), waitingIntent(t, db, w, m, ""); a.ID == b.ID || a.IdempotencyKey != "" {
+		t.Fatalf("two keyless intents = %+v and %+v, want two with no key", a, b)
 	}
-	if _, _, err := db.CreateLaunchIntent(ctx, &domain.LaunchIntent{MemberID: m.ID, WorkspaceID: w.ID, Method: "run.launch", Params: []byte(`{}`)}, 2); !errors.Is(err, ErrTooManyWaiting) {
-		t.Fatalf("a third open intent with a cap of two = %v, want ErrTooManyWaiting", err)
+	if _, _, err = db.CreateLaunchIntent(ctx, &domain.LaunchIntent{MemberID: m.ID, WorkspaceID: w.ID, Method: "run.launch", Params: []byte(`{}`)}, 3); !errors.Is(err, ErrTooManyWaiting) {
+		t.Fatalf("a fourth open intent with a cap of three = %v, want ErrTooManyWaiting", err)
 	}
 	if by, err := db.LaunchIntentByKey(ctx, m.ID, "k-1"); err != nil || by.ID != in.ID {
 		t.Fatalf("LaunchIntentByKey = %+v, %v", by, err)
 	}
-	if list, err := db.LaunchIntents(ctx, "", domain.IntentWaiting); err != nil || len(list) != 2 || list[0].ID != in.ID {
-		t.Fatalf("waiting intents = %+v, %v; want both, the oldest first", list, err)
+	list, err := db.LaunchIntents(ctx, "", domain.IntentWaiting)
+	if err != nil || len(list) != 3 || list[0].ID != in.ID {
+		t.Fatalf("waiting intents = %+v, %v; want the three, the oldest first", list, err)
 	}
 }
 
@@ -115,16 +115,16 @@ func TestIntentsLeftStartingAreSettledAfterARestart(t *testing.T) {
 	w, m := mustCreateWorkspace(t, db), mustCreateMember(t, db)
 	noSession, withSession, waiting := waitingIntent(t, db, w, m, "k-1"), waitingIntent(t, db, w, m, "k-2"), waitingIntent(t, db, w, m, "k-3")
 	for _, in := range []*domain.LaunchIntent{noSession, withSession} {
-		if err := db.ClaimLaunchIntent(ctx, in.ID, time.Now()); err != nil {
+		if err = db.ClaimLaunchIntent(ctx, in.ID, time.Now()); err != nil {
 			t.Fatal(err)
 		}
 	}
 	// The session row written, the intent's own update lost: what a crash
 	// could only leave if the two were not one transaction.
-	if err := db.CreateRunWithID(ctx, intentRun(withSession)); err != nil {
+	if err = db.CreateRunWithID(ctx, intentRun(withSession)); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Close(); err != nil {
+	if err = db.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -133,7 +133,7 @@ func TestIntentsLeftStartingAreSettledAfterARestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := db.RecoverLaunchIntents(ctx); err != nil {
+	if err = db.RecoverLaunchIntents(ctx); err != nil {
 		t.Fatal(err)
 	}
 	for id, want := range map[domain.RunID]domain.LaunchIntentState{
@@ -147,10 +147,10 @@ func TestIntentsLeftStartingAreSettledAfterARestart(t *testing.T) {
 		t.Fatalf("the intent returned to waiting = %+v, want its refusal and attempt kept", got)
 	}
 	// It can be claimed again, and started once.
-	if err := db.ClaimLaunchIntent(ctx, noSession.ID, time.Now()); err != nil {
+	if err = db.ClaimLaunchIntent(ctx, noSession.ID, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.CreateRunForIntent(ctx, intentRun(noSession)); err != nil {
+	if err = db.CreateRunForIntent(ctx, intentRun(noSession)); err != nil {
 		t.Fatal(err)
 	}
 }
