@@ -1080,3 +1080,30 @@ func TestConnectorMarkReviewedNeedsReadyRun(t *testing.T) {
 		t.Fatalf("review later = %+v", got)
 	}
 }
+
+// On a server that keeps a launch it has no room for, the launch tool asks
+// it to, says the launch waits with the server's refusal, and repeats to
+// the same waiting launch under its key.
+func TestConnectorLaunchWaitsForRoom(t *testing.T) {
+	f := newFake(t)
+	f.answers[protocol.MethodRunList] = returns(protocol.RunListResult{})
+	waiting := &protocol.LaunchWaiting{ID: "run-w", State: "waiting", Refusal: "scheduler: insufficient host memory headroom: 1 available bytes", ExpiresAt: "2026-11-29T00:00:00Z"}
+	f.answers[protocol.MethodRunLaunch] = returns(protocol.RunLaunchResult{Waiting: waiting})
+	cs := connectorSession(t, f, ScopeWrite)
+	args := map[string]any{"workspace_id": "ws-1", "harness": "claude", "task": "wait for room", "idempotency_key": "k-w"}
+	run(t, cs, "aether_launch_session", args)
+	if got := f.acted(); strings.Contains(got.params, `"wait"`) {
+		t.Fatalf("run.launch to a server without the feature = %s, want no wait", got.params)
+	}
+
+	f.calls = nil
+	f.answers[protocol.MethodServerInfo] = returns(protocol.ServerInfoResult{DashboardURL: "https://aether.example", Features: []string{protocol.FeatureLaunchWait}})
+	text, out := run(t, cs, "aether_launch_session", args)
+	if got := f.acted(); !strings.Contains(got.params, `"wait":true`) || !strings.Contains(got.params, `"idempotency_key":"k-w"`) {
+		t.Fatalf("run.launch = %s, want it to ask to wait under the key", got.params)
+	}
+	if out["state"] != "waiting" || out["idempotency_key"] != "k-w" || out["run_id"] != nil ||
+		!strings.Contains(text, waiting.Refusal) || !strings.Contains(text, "idempotency_key k-w") || !strings.Contains(text, "nothing started") {
+		t.Fatalf("a launch with no room = %q %v; want it waiting, with the refusal and the key to repeat", text, out)
+	}
+}

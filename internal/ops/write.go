@@ -253,6 +253,17 @@ func starting(tool, key string, replayErr error) (string, any, error) {
 	return text, out, nil
 }
 
+// waitingForRoom is the result of a launch the server has no memory or disk
+// for and keeps until it has: no session exists yet, and the same call with
+// the key says whether it started.
+func waitingForRoom(tool, key string, w *protocol.LaunchWaiting) (string, any, error) {
+	next := "call " + tool + " again with the same arguments and idempotency_key " + key
+	text := fmt.Sprintf("The server has no room for this launch yet, so nothing started. Its refusal: %s. The launch is waiting and starts by itself when there is room; with none by %s it ends. To see whether it started, %s; a call without that key launches a second one. Its owner can cancel it in the dashboard.",
+		w.Refusal, w.ExpiresAt, next)
+	return text, map[string]any{"state": "waiting", "idempotency_key": key, "write": writePending, "next": next,
+		"waiting": map[string]any{"id": w.ID, "refusal": w.Refusal, "attempts": w.Attempts, "passed": w.Passed, "created_at": w.CreatedAt, "expires_at": w.ExpiresAt}}, nil
+}
+
 // recentLaunch is the member's run in the workspace, created within
 // duplicateWindow and not stopped, with the same task, agent, mode, model,
 // account, fallback policy, extra repositories, child-run setting,
@@ -323,6 +334,8 @@ func launchRun(ctx context.Context, c calls, in connectorLaunchInput) (string, a
 		AccountMemberID: in.AccountMemberID, FallbackAccountMemberIDs: in.FallbackAccountMemberIDs, NoFallback: in.NoFallback,
 		ExtraWorkspaceIDs: in.ExtraWorkspaceIDs, Children: in.Children, Permission: in.Permission, IdempotencyKey: in.IdempotencyKey,
 		LinearIssueURL: in.LinearIssueURL}
+	// A server that keeps a launch it has no room for is asked to.
+	params.Wait = slices.Contains(info.Features, protocol.FeatureLaunchWait)
 	dup, done := false, func(error) {}
 	if params.IdempotencyKey == "" {
 		var prior protocol.Run
@@ -346,6 +359,9 @@ func launchRun(ctx context.Context, c calls, in connectorLaunchInput) (string, a
 	res, finished, err := launch[protocol.RunLaunchResult](ctx, c, protocol.MethodRunLaunch, withReason(params, in.Reason, c.surface, fill), done)
 	if err != nil && finished {
 		return "", nil, retryable(savedConflict(err, in.SavedDefaults != savedIgnore, in.IdempotencyKey != ""), params.IdempotencyKey)
+	}
+	if res.Waiting != nil {
+		return waitingForRoom("aether_launch_session", params.IdempotencyKey, res.Waiting)
 	}
 	if res.Run.ID == "" {
 		return starting("aether_launch_session", params.IdempotencyKey, err)
