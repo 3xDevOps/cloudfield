@@ -306,6 +306,11 @@ func (s *Scheduler) wakeLive(ctx context.Context, entry *supervised) (woke, erro
 		return woke{}, fmt.Errorf("%w: the session is ending", ErrNoLiveEnvironment)
 	}
 	cid := entry.containerID
+	s.mu.Unlock()
+	if err := s.checkWakeLogin(ctx, entry); err != nil {
+		return woke{}, err
+	}
+	s.mu.Lock()
 	resident := entry.asleepResident
 	entry.admitting = true
 	s.mu.Unlock()
@@ -372,6 +377,27 @@ func (s *Scheduler) wakeLive(ctx context.Context, entry *supervised) (woke, erro
 		return woke{}, errors.Join(fmt.Errorf("record the wake: %w", err), s.stopAsleep(context.WithoutCancel(ctx), entry))
 	}
 	return how, nil
+}
+
+// checkWakeLogin refuses to wake a session whose container mounts a login
+// of an account with added logins that its launcher or owner may no longer
+// use, and hands the session to the revoke path, which stops it. Caller
+// holds entry.lifecycleMu.
+func (s *Scheduler) checkWakeLogin(ctx context.Context, entry *supervised) error {
+	run, err := s.cfg.Store.GetRun(ctx, entry.runID)
+	if err != nil {
+		return err
+	}
+	logins, err := s.cfg.Store.ListAgentLogins(ctx, run.AccountMember(), run.Harness)
+	if err != nil || len(logins) == 0 {
+		return err
+	}
+	revoked, err := s.accountRevoked(ctx, run)
+	if err != nil || !revoked {
+		return err
+	}
+	s.goMove(func() { s.leaveRevokedAccount(entry) })
+	return fmt.Errorf("%w: the login this session is on is no longer shared with it, so the session stops", ErrNoLiveEnvironment)
 }
 
 // untilExit is ctx ending once cid's container exits, with the exit as its

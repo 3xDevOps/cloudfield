@@ -161,13 +161,13 @@ function queuedMessages(run: RunRecord, ctx: StateContext): RoomMessage[] {
 }
 
 const blockedPrefix = 'blocked: '
-// Mirrors usageLimitReason in internal/scheduler/usage_fallback.go and
-// revokedReason in internal/scheduler/account_revoke.go.
+// Mirrors usageLimitReason in internal/scheduler/usage_fallback.go, and
+// revokedReason and loginRevokedReason in internal/scheduler/account_revoke.go.
 const usageLimitPrefix = 'Usage limit reached on '
-const revokedPrefix = 'account share revoked: '
+const revokedPrefixes = ['account share revoked: ', 'login share revoked: ']
 
 const asks = (run: RunRecord) => run.reason?.startsWith(needsInputPrefix) === true
-const leftAccount = (run: RunRecord) => run.reason?.startsWith(usageLimitPrefix) === true || run.reason?.startsWith(revokedPrefix) === true
+const leftAccount = (run: RunRecord) => run.reason?.startsWith(usageLimitPrefix) === true || revokedPrefixes.some((prefix) => run.reason?.startsWith(prefix))
 // Mirrors acpInterruptedReason and acpStoppedReason in internal/scheduler/acp_turn.go.
 const turnCutShort = (run: RunRecord) => run.reason === 'turn interrupted' || run.reason?.startsWith('turn ended: ') === true
 // Mirrors waitBrokenReasonPrefix in internal/scheduler/wait.go.

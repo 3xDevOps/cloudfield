@@ -285,6 +285,8 @@ func callBound(method string) time.Duration {
 		return protocol.TerminalExecTimeout + callTimeout
 	case protocol.MethodDictationTranscribe:
 		return protocol.DictationTimeout + callTimeout
+	case protocol.MethodAgentLoginResult:
+		return protocol.AgentLoginSignInOpenWithin + protocol.AgentLoginSignInProvision + protocol.AgentLoginSignInTimeout + callTimeout
 	}
 	return callTimeout
 }
@@ -492,6 +494,7 @@ var noReplay = map[string]bool{
 	protocol.MethodAgentLoginRemove:    true,
 	protocol.MethodAgentLoginOrder:     true,
 	protocol.MethodAgentLoginAutomatic: true,
+	protocol.MethodAgentLoginShare:     true,
 
 	protocol.MethodWorkspaceAdd:             true,
 	protocol.MethodWorkspaceDelete:          true,

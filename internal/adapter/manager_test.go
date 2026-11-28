@@ -398,6 +398,54 @@ func TestManagerScanTapsTheReplacementAfterALostAccountEvent(t *testing.T) {
 	assertPayloads(t, payloads, want)
 }
 
+// TestManagerScanTapsTheReplacementAfterALostLoginMove: a move between two
+// logins of one member whose run.account event is lost, scanned while the
+// old session's tap still reads, replaces that tap with the replacement's.
+func TestManagerScanTapsTheReplacementAfterALostLoginMove(t *testing.T) {
+	data, err := os.ReadFile("testdata/claude_tty.jsonl")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	const (
+		workspace = domain.WorkspaceID("ws_1")
+		run       = domain.RunID("run_1")
+	)
+	bus := newTestBus(t)
+	runs := &fakeRuns{runs: map[domain.RunID]*domain.Run{
+		run: {ID: run, WorkspaceID: workspace, MemberID: "mem_a", Harness: "claude", Mode: domain.LaunchHeadless, Status: domain.RunRunning},
+	}}
+	oldR, oldW := io.Pipe()
+	defer func() { _ = oldW.Close() }()
+	tap := &movedTap{old: oldR}
+	sub, err := bus.Subscribe(t.Context(), events.SubscribeOptions{
+		Filter: events.Filter{Types: []events.Type{events.TypeAgentEvent, events.TypeRunCost}},
+	})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+	m := NewManager(bus, runs, tap, &fakeResults{})
+	if err = m.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+
+	runs.mu.Lock()
+	runs.runs[run].AccountLogin = "lgn-second0000"
+	runs.mu.Unlock()
+	tap.mu.Lock()
+	tap.replacement = io.NopCloser(bytes.NewReader(data))
+	tap.mu.Unlock()
+	m.scan(t.Context())
+
+	want := fixturePayloads()
+	var payloads []events.Payload
+	for _, e := range collect(t, sub, len(want), 5*time.Second) {
+		payloads = append(payloads, e.Payload)
+	}
+	assertPayloads(t, payloads, want)
+}
+
 type pipeTap struct {
 	mu sync.Mutex
 	n  int
@@ -427,4 +475,31 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+// A usage limit read from a session's output names the account and login
+// that session was tapped on, so the scheduler can drop one a replaced
+// container reports after a move.
+func TestManagerNamesTheLoginAUsageLimitWasReportedOn(t *testing.T) {
+	data, err := os.ReadFile("testdata/claude_usage_limit.jsonl")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	const run = domain.RunID("run_1")
+	bus := newTestBus(t)
+	runs := &fakeRuns{runs: map[domain.RunID]*domain.Run{
+		run: {ID: run, WorkspaceID: "ws_1", Harness: "claude", Mode: domain.LaunchHeadless, Status: domain.RunRunning,
+			AccountMemberID: "mem_a", AccountLogin: "lgn-second0000"},
+	}}
+	sub, err := bus.Subscribe(t.Context(), events.SubscribeOptions{Filter: events.Filter{Types: []events.Type{events.TypeRunUsageLimit}}})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+	startManager(t, bus, runs, &fakeTap{output: map[domain.RunID][]byte{run: data}})
+	publishRunning(t, bus, run)
+	limit, ok := collect(t, sub, 1, 5*time.Second)[0].Payload.(events.RunUsageLimitPayload)
+	if !ok || limit.Account != "mem_a" || limit.Login != "lgn-second0000" || limit.Message == "" {
+		t.Fatalf("usage limit = %+v; want it on mem_a's lgn-second0000", limit)
+	}
 }

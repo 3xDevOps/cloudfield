@@ -334,9 +334,10 @@ file yours is mounted over and detach it. For `claude` that is
 [harnesses.md](harnesses.md#per-agent-setup) gives each agent's path. A Claude
 Code sign-in through the Anthropic Console lives elsewhere in your home
 (`primaryApiKey` in `~/.claude.json`, or `~/.config/anthropic`) and is never
-mounted into their session. The server reads it to decide whether the account
-is signed in and keeps a digest of it, never the key or token. A member the
-account is shared with can learn that the sign-in exists, which of
+mounted into their session; an added Console login, outside your home, can be
+([Several logins](#several-logins)). The server reads the one in your home to
+decide whether the account is signed in and keeps a digest of it, never the
+key or token. A member the account is shared with can learn that the sign-in exists, which of
 `~/.claude.json`, `~/.claude/.config.json` and `~/.config/anthropic` holds it,
 and roughly when it changes: the
 refusal of their launch and the account's usage row name it. Their own
@@ -471,6 +472,93 @@ runtime: docker engine API "1.44" cannot mount a path beneath a member home; tha
 After you first share a `claude` or `gemini` account, restart your environment
 (**Stop environment** in **Profile**, then **Open** on **Environment**, or
 `cloudfield terminal stop` and `cloudfield terminal`) so recipients get your refreshes.
+
+### Several logins
+
+A member's added Claude Code logins ([agents.md](agents.md#several-logins))
+live in `<data-dir>/logins/<member-id>/claude/<login-id>/`, outside every member
+home. Cloudfield creates each directory mode `0700` and its own files `0600`,
+and reads them through paths that refuse a symlink
+([privacy.md](privacy.md#agent-logins)); it does not set the modes of files
+Claude Code writes there. A login's tokens are bearer secrets. They exist
+there, in the sign-in's container while it runs, and in the container of every
+session on the login, a closed session's kept container included. The server
+reads a login to learn its usage and its kind; no RPC returns its content.
+
+What the two switches stop is in [agents.md](agents.md#manage-logins). With
+**Use for shares** off, Cloudfield also hands a session on the login to no one
+but its owner. A teammate cannot name a login, read its email, organisation
+or files through Cloudfield, or make the server choose a particular one.
+
+What they do not stop:
+
+- A session holds the tokens of the login it runs on, as a session on a
+  shared default login does, and a share reaches every login left on for
+  shares and automatic. Revoking a share or turning a login off for shares
+  moves teammates' sessions off it, and removing it deletes its files; none
+  of these recalls a token a session already copied, which stays usable until
+  it expires or is revoked at Anthropic.
+- With that token a teammate's session can ask Anthropic whose login it runs
+  on.
+- A member's own sessions are not walled from each other. They share the home,
+  so code one session plants there runs in the next container. Whether root in
+  a session can unmount what covers the default login depends on the container
+  runtime's capabilities, not on sudo alone: unmounting needs `CAP_SYS_ADMIN`,
+  which Docker's default capability set leaves out. A compromised session
+  can reach, in time, every login Cloudfield puts that member's sessions on,
+  and each login left automatic adds to that. Isolated sessions do not write
+  to the home and narrow this.
+- The sign-in of an added login runs the `claude` binary found in the member's
+  home, whose `~/.local/bin` comes first on `PATH`. Code a compromised session
+  planted there can capture the new login and change what the server reads
+  back about it.
+- Whoever may steer a session can tell its agent to print its login file,
+  whichever login it is on ([who can act](#who-can-see-and-act-on-a-session)).
+- A session that can write its login's directory can replace the sign-in in
+  it with another account's of the same kind. Cloudfield compares the kind of
+  sign-in, not which account it is, and refuses a change of kind with
+  `scheduler: login lgn-… no longer holds the subscription sign-in it was
+  added with; its owner removes it and adds it again`.
+- A move resumes the conversation on the next login, so the agent can send
+  earlier conversation content to that login's provider. Do not let a
+  session with content one organisation must not see move onto another's
+  login.
+- The server's operator, and setup scripts a workspace admin makes every
+  session run, can read any login a session is on. Backups of the data
+  directory hold the added logins ([install.md](install.md#what-lives-in-the-data-directory)).
+- A teammate's session and an Isolated session use another home than yours,
+  as for a shared default login, so two sessions can refresh one login's
+  token from different homes. Nothing here tests what Claude Code does then;
+  a login that ends up signed out is removed and added again
+  ([harnesses.md](harnesses.md#claude-code)).
+
+A usage-limit report comes from inside the container and can be forged. When
+a session's owner, or the member whose home it mounts, is not the owner of
+the login it runs on, and that owner keeps added logins, Cloudfield reads the
+login's usage afresh before it moves the session, counting a report the vendor
+sent in the last 10 seconds as fresh. It moves the session only when a current
+window, of any kind, reads 95% or more; otherwise the session stops with `the
+agent reported a usage limit that Ada (work)'s usage does not show`. A
+teammate therefore cannot walk a session through the owner's logins, or off
+one billed per use, on its own word. The owner's own sessions move on the
+report alone.
+
+Cloudfield checks what would pay before a session runs on an added login, at
+launch and again when its mounts are built: a workspace or server variable
+that signs Claude Code in, and an `apiKeyHelper` or such a variable under
+`env` in the home's `~/.claude/settings.json`, refuse it, and so does a
+settings file the server cannot read
+([agents.md](agents.md#what-does-not-work-with-added-logins)). In the session,
+each variable that signs Claude Code in, and `ANTHROPIC_BASE_URL`, that no
+workspace or server variable sets is set empty, so an image's `ENV` cannot
+supply it; a value set that does not sign Claude Code in, such as
+`CLAUDE_CODE_USE_VERTEX=0`, stays. `ANTHROPIC_PROFILE` is always set empty.
+What it does not check: a setting written into the home after those checks, a
+repository's own `.claude/settings.json` or `.claude/settings.local.json`, and
+managed settings in an image can still sign Claude Code in, as they can on a
+default login. The **billed per use** labels in the CLI and the dashboard
+classify the sign-in Cloudfield reads, not who pays: any of these can pay in
+its place.
 
 ## GitHub credentials and signing keys
 

@@ -49,13 +49,32 @@ export function currentWindows(provider: UsageProvider | undefined, now: number)
   })
 }
 
-function resetsIn(resetsAt: string | undefined, now: number): string | null {
+/** `days` reads a reset past 24 hours in days and hours, as the logins do; Settings → Usage reads hours. */
+function resetsIn(resetsAt: string | undefined, now: number, days = false): string | null {
   const reset = resetsAt ? Date.parse(resetsAt) : NaN
   if (!Number.isFinite(reset) || reset <= now) return null
   const minutes = Math.max(1, Math.ceil((reset - now) / 60_000))
   if (minutes < 60) return `resets in ${minutes}m`
   const hours = Math.floor(minutes / 60)
+  if (days && hours >= 24) return hours % 24 === 0 ? `resets in ${hours / 24}d` : `resets in ${Math.floor(hours / 24)}d ${hours % 24}h`
   return minutes % 60 === 0 ? `resets in ${hours}h` : `resets in ${hours}h ${minutes % 60}m`
+}
+
+/** The server's ExhaustedPercent (internal/fallback): a window used this far counts as run out. */
+const exhaustedPercent = 95
+
+/** The windows internal/fallback judges a Claude Code login on, and only from a current read; a per-model window shows usage alone. */
+const startWindows = ['five_hour', 'seven_day']
+
+/** "At its limit (7 days) · resets in 1d 16h" while a window the server judges is run out; the one that resets last says when the login serves again. */
+export function limitWords(provider: UsageProvider | undefined, now: number): string | null {
+  if (provider?.status !== 'ok') return null
+  const spent = currentWindows(provider, now).filter((window) => startWindows.includes(window.id) && window.used_percent >= exhaustedPercent)
+  if (spent.length === 0) return null
+  const resets = (window: UsageWindow) => (window.resets_at ? Date.parse(window.resets_at) : Infinity)
+  const last = spent.reduce((latest, window) => (resets(window) > resets(latest) ? window : latest))
+  const reset = resetsIn(last.resets_at, now, true)
+  return `At its limit (${last.label})${reset ? ` · ${reset}` : ''}`
 }
 
 type MeterTone = Extract<Tone, 'failed' | 'needs-you' | 'done'>
@@ -70,6 +89,33 @@ const fill: Record<MeterTone, string> = {
   failed: 'bg-state-failed',
   'needs-you': 'bg-state-needs-you',
   done: 'bg-state-done',
+}
+
+/** One meter per usage window; `label` names the login or provider in each meter's accessible name. */
+export function UsageMeters({ label, windows, now, days }: { label: string; windows: UsageWindow[]; now: number; days?: boolean }) {
+  return (
+    <ul className="flex min-w-0 flex-col gap-3">
+      {windows.map((window) => {
+        const reset = resetsIn(window.resets_at, now, days)
+        return (
+          <li key={window.id} className="flex min-w-0 flex-col gap-1">
+            <div className="flex min-w-0 items-baseline justify-between gap-2 text-ui-sm">
+              <span className="min-w-0 truncate text-text">{window.label}</span>
+              <span className="shrink-0 tabular-nums text-muted">
+                {Math.round(window.used_percent)}% used{reset && ` · ${reset}`}
+              </span>
+            </div>
+            <ProgressBar
+              role="progressbar"
+              aria-label={`${label} ${window.label} usage`}
+              value={window.used_percent}
+              fillClassName={fill[tone(window.used_percent)]}
+            />
+          </li>
+        )
+      })}
+    </ul>
+  )
 }
 
 function ProviderRow({ name, provider, now, own }: { name: UsageProviderName; provider: UsageProvider | undefined; now: number; own: boolean }) {
@@ -88,27 +134,7 @@ function ProviderRow({ name, provider, now, own }: { name: UsageProviderName; pr
         : help}
     >
       {windows.length > 0 ? (
-        <ul className="flex min-w-0 flex-col gap-3">
-          {windows.map((window) => {
-            const reset = resetsIn(window.resets_at, now)
-            return (
-              <li key={window.id} className="flex min-w-0 flex-col gap-1">
-                <div className="flex min-w-0 items-baseline justify-between gap-2 text-ui-sm">
-                  <span className="min-w-0 truncate text-text">{window.label}</span>
-                  <span className="shrink-0 tabular-nums text-muted">
-                    {Math.round(window.used_percent)}% used{reset && ` · ${reset}`}
-                  </span>
-                </div>
-                <ProgressBar
-                  role="progressbar"
-                  aria-label={`${label} ${window.label} usage`}
-                  value={window.used_percent}
-                  fillClassName={fill[tone(window.used_percent)]}
-                />
-              </li>
-            )
-          })}
-        </ul>
+        <UsageMeters label={label} windows={windows} now={now} />
       ) : (status === 'ok' || status === 'stale') && <p className="text-ui-sm text-muted">No current measured windows.</p>}
     </SettingRow>
   )

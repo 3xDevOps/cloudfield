@@ -15,6 +15,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/harness"
 	"github.com/3xDevOps/cloudfield/internal/memberhome"
+	"github.com/3xDevOps/cloudfield/internal/protocol"
 	"github.com/3xDevOps/cloudfield/internal/ptyhost"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
 	"github.com/3xDevOps/cloudfield/internal/store"
@@ -25,9 +26,9 @@ import (
 // container; loginSignInTimeout is how long the sign-in may then run;
 // loginSignInKept is how long its result waits to be collected.
 const (
-	loginSignInOpenWithin = 10 * time.Minute
-	loginSignInProvision  = 5 * time.Minute
-	loginSignInTimeout    = 15 * time.Minute
+	loginSignInOpenWithin = protocol.AgentLoginSignInOpenWithin
+	loginSignInProvision  = protocol.AgentLoginSignInProvision
+	loginSignInTimeout    = protocol.AgentLoginSignInTimeout
 	loginSignInKept       = 10 * time.Minute
 )
 
@@ -113,7 +114,7 @@ func (s *Scheduler) BeginLoginSignIn(ctx context.Context, member domain.MemberID
 	defer s.mu.Unlock()
 	for _, other := range s.loginSignIns {
 		if other.member == member && !other.ended {
-			return "", fmt.Errorf("%w: the sign-in of login %q is still running; finish it first", store.ErrConflict, other.name)
+			return "", fmt.Errorf("%w: the sign-in of login %q (%s) is still running; finish it first", store.ErrConflict, other.name, other.id)
 		}
 	}
 	if s.loginSignIns == nil {

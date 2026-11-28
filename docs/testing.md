@@ -163,10 +163,21 @@ script committed to the test repository).
 | `TestIntegrationRestart*` | Enhanced sessions through server restarts and updates ([Restart acceptance](#restart-acceptance)) |
 | `TestIntegrationServerGateway` | The dashboard the server hosts on the tailnet |
 | `TestIntegrationConnectorFlows` | A ChatGPT connector, over OAuth and MCP, launching, messaging, answering and stopping enhanced sessions |
+| `TestIntegrationSeveralLogins*` | Several Claude Code logins through the built CLI: add a login on a terminal, launch, run out on cue, move to the added login, run out there too; and a member with one login, unchanged |
 
 ```sh
 sudo env "PATH=$PATH" "HOME=$HOME" make test-integration \
   INTEGRATION_PKGS=./internal/server INTEGRATION_RUN='^TestIntegrationEndToEnd$'
+```
+
+`TestIntegrationSeveralLogins*` always uses the in-process runtime, so it
+needs git but not Docker. Its agent is a stand-in that prints the usage-limit
+stream lines in `internal/adapter/testdata/claude_usage_limit.jsonl`,
+synthesized from Claude Code 2.1.112 and not recorded from a live limit, when
+the test writes a cue file into its checkout:
+
+```sh
+go test -tags integration -run '^TestIntegrationSeveralLogins' ./internal/server/
 ```
 
 ## Restart acceptance

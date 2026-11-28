@@ -13,9 +13,15 @@ export function fallbackFromSaved(saved: SavedLaunchDefaults['fallback'], accoun
   return { off: false, order, excluded: accounts.map((member) => member.id).filter((id) => !order.includes(id)) }
 }
 
+/** Whether saved choices hold "your logins only": the member's own account, with a fallback order naming it alone. */
+export function savedOwnLogins(saved: SavedLaunchDefaults | null | undefined, own: string): boolean {
+  if (!saved || (saved.account_member_id && saved.account_member_id !== own)) return false
+  return saved.fallback?.policy === 'ordered' && saved.fallback.order?.length === 1 && saved.fallback.order[0] === own
+}
+
 /** The policy a launch with `fallback` sends; `skip` is the account the Run tab leaves out of its list, as the launch does. */
-export function fallbackToSaved(fallback: Fallback, accounts: Member[], skip: string): NonNullable<SavedLaunchDefaults['fallback']> {
-  const params = fallbackParams(fallback, accounts, skip)
+export function fallbackToSaved(fallback: Fallback, accounts: Member[], skip: string, logins: boolean): NonNullable<SavedLaunchDefaults['fallback']> {
+  const params = fallbackParams(fallback, accounts, skip, logins)
   if (params.no_fallback) return { policy: 'off' }
   if (params.fallback_account_member_ids) return { policy: 'ordered', order: params.fallback_account_member_ids }
   return { policy: 'automatic' }
@@ -45,7 +51,8 @@ export function SavedIssues({ issues, title }: { issues: LaunchDefaultIssue[]; t
 }
 
 /** Saves the account and fallback chosen here, which `choice` identifies; a launch never saves them on its own. */
-export function SaveAccountDefault({ choice, onSave }: { choice: string; onSave: () => Promise<unknown> }) {
+/** `saves` says what the button saves. */
+export function SaveAccountDefault({ choice, onSave, saves }: { choice: string; onSave: () => Promise<unknown>; saves: string }) {
   const [state, setState] = useState<{ busy: boolean; savedFor: string | null; error: string | null }>({ busy: false, savedFor: null, error: null })
   const save = () => {
     setState({ busy: true, savedFor: null, error: null })
@@ -60,7 +67,7 @@ export function SaveAccountDefault({ choice, onSave }: { choice: string; onSave:
         <Button type="button" size="sm" variant="secondary" disabled={state.busy} onClick={save}>Save as my default</Button>
         {state.savedFor === choice
           ? <span role="status" className="text-ui-sm text-muted">Saved for every device.</span>
-          : <span className="text-ui-sm text-muted">Saves this account and fallback for launches on every device.</span>}
+          : <span className="text-ui-sm text-muted">{saves}</span>}
       </div>
       {state.error && <Callout tone="failed" role="alert">{state.error}</Callout>}
     </div>

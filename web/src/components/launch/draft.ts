@@ -20,6 +20,8 @@ export interface LaunchDraft {
   task: string
   /** The Linear issue the launch will link; absent for none. */
   linear?: LinearLink
+  /** The login picked for the launch, with its name to show while the list is read; absent for Automatic. */
+  login?: { id: string; name: string }
 }
 
 export const launchDraftLinkStatusPending = 'Could not confirm this browser gateway link; launch drafts are staying in memory.'
@@ -37,6 +39,7 @@ export function readLaunchDraft(identity: string, persistent = true): { draft: L
       !(draft.fallback.order === null || strings(draft.fallback.order)) || !strings(draft.fallback.excluded) ||
       !['root', 'default', 'isolated'].includes(draft.permission) || !['', 'on', 'off'].includes(draft.childRuns) ||
       !(draft.linear === undefined || (typeof draft.linear?.identifier === 'string' && typeof draft.linear.url === 'string')) ||
+      !(draft.login === undefined || (typeof draft.login?.id === 'string' && typeof draft.login.name === 'string')) ||
       !['tui', 'acp', 'headless'].includes(draft.mode) || !draft.limits ||
       !['cpus', 'memory', 'pids'].every((key) => typeof draft.limits[key as keyof LimitsDraft] === 'string')) {
       return draft === null ? { draft: null, error: null } : { draft: null, error: 'Saved launch draft has an invalid format.' }

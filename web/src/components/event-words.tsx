@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { Participants } from '@/components/messages/message-row'
+import { PerUseBadge } from '@/components/per-use-badge'
 import type { EventType } from '@/lib/events'
 import { budgetStateLabel, money } from '@/lib/format'
 import { memberName, resolveMember } from '@/lib/member-name'
@@ -42,6 +43,15 @@ function AccountOf({ id }: { id: unknown }) {
   const self = useStore((s) => s.info?.member.id)
   const name = useStore((s) => (resolveMember(s, text(id)).member ? memberName(s, text(id)) : undefined))
   return text(id) === self ? 'your account' : `${name ?? 'another member'}'s account`
+}
+
+/** The badge of a move onto a login billed per use, naming the account it charges as a session's header does. */
+function PerUseOf({ id, login }: { id: unknown; login: string }) {
+  const self = useStore((s) => s.info?.member.id)
+  const name = useStore((s) => (resolveMember(s, text(id)).member ? memberName(s, text(id)) : undefined))
+  const own = text(id) === self
+  const whose = `${name ?? 'another member'}'s`
+  return <PerUseBadge className="ml-1.5 align-middle" payer={own ? 'yours' : whose} title={`Billed per use to ${own ? 'your' : whose} account, ${login}`} />
 }
 
 const statusWords: Record<Exclude<RunStatus, 'running' | 'needs-attention'>, string> = {
@@ -271,7 +281,22 @@ const describers: Record<EventType, (p: Payload, event: Event) => ReactNode> = {
     return e.actor_id ? <><Who id={e.actor_id} /> released control</> : 'Control released'
   },
   'run.mode': (p) => modeLine(p),
-  'run.account': (p) => <>Moved from <AccountOf id={p.previous_account_member_id} /> to <AccountOf id={p.account_member_id} /></>,
+  'run.account': (p) => {
+    // Both logins are named once either is an added one; an empty or `default` id is the default login.
+    const added = (id: unknown) => text(id) !== '' && text(id) !== 'default'
+    const logins = added(p.login) || added(p.previous_login)
+    const login = (id: unknown, name: unknown) => `login ${text(name) || (added(id) ? text(id) : 'default')}`
+    const perUse = p.per_use === true && <PerUseOf id={p.account_member_id} login={login(p.login, p.login_name)} />
+    if (logins && text(p.account_member_id) === text(p.previous_account_member_id)) {
+      return <>Moved from {login(p.previous_login, p.previous_login_name)} to {login(p.login, p.login_name)}{perUse}</>
+    }
+    return (
+      <>
+        Moved from <AccountOf id={p.previous_account_member_id} />{logins && `, ${login(p.previous_login, p.previous_login_name)}`} to <AccountOf id={p.account_member_id} />{logins && `, ${login(p.login, p.login_name)}`}
+        {perUse}
+      </>
+    )
+  },
   'run.usage_limit': (p) => (text(p.message) ? `Usage limit reached: ${bounded(p.message, 160)}` : 'Usage limit reached'),
   'run.model': (p) => (text(p.model) ? <>Model set to <Quote>{bounded(p.model, 160)}</Quote></> : "Model refused, so the agent's default runs"),
   'run.effort': (p) => <>Effort set to <Quote>{bounded(p.effort, 160)}</Quote></>,

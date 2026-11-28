@@ -221,3 +221,12 @@ the member's own server, not on the phone: the APK carries none of them.
 They are declared with their versions in
 [`web/package.json`](../web/package.json) and [`go.mod`](../go.mod), each
 under its own licence.
+
+## Design sources
+
+Keeping one isolated sign-in per Claude Code login, made only through Claude
+Code's own sign-in, and resuming a conversation on another login without
+replaying its prompt ([agents.md](agents.md#several-logins)) follow the design
+of [Orca](https://github.com/stablyai/orca), read at commit
+`055555dfa7d78ce12ac3244f8d95dbba21d8556d` (MIT licence, Copyright (c) 2026
+Lovecast Inc.). No Orca code was copied for this feature.

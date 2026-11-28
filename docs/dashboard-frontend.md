@@ -470,7 +470,12 @@ title keeps its room.
 **Session details.** Resting a mouse on a row for 400ms opens a box docked to
 the row's right edge (`run-details.tsx`): the whole title, the state's
 reason, the workspace, the agent and mode, the branch, a root's subsession counts, when the session started, when it last changed if that is later,
-its owner, and the people on it with the controller marked **Controlling**.
+its owner, the account it is on in the header's words when it is on an added
+login, a default login billed per use, or a fallback (from a server with the
+`logins` feature, or for a run that carries a login), with the **Billed per
+use** badge on a login billed per use, and the people on it with the
+controller marked **Controlling**. The row itself names no account and
+carries no badge.
 A live session nobody controls says so above them and names who had control
 last, when the server knows. Moving to another row swaps the box without
 the delay or the animation. The box takes no pointer events, closes when the
@@ -681,7 +686,15 @@ session orders them **Terminal**, **Chat**, **Changes**. **Changes** carries
 the muted `+N −M` of the latest snapshot, unless it was truncated, and drops
 it below 400px while a fourth tab shows. The pull request, with its checks,
 feedback and **Watch PR**, would crowd the tabs, so it sits in a 44px row of
-its own under them on the Changes tab only.
+its own under them on the Changes tab only. A session on an added login, on
+a default login billed per use, or moved to another account by a fallback,
+has the account on a line of its own
+under the title (from a server with the `logins` feature, or for a run that
+carries a login; a server without them shows the phone what it did before), wrapping rather than cut: "On your account, login console"
+with a **Billed per use** badge, whose tooltip and accessible name say
+"Billed per use to your account, login console", or "On Ada's account, …"
+on a teammate's; a removed login is named by its id. The line and its
+badge hide while the on-screen keyboard is up.
 
 **More** opens with a **Views** group (Trace, Files, Browser, **Session
 details**, **Session tree**, **Search…**, **Assistant**), then the session's
@@ -1687,6 +1700,8 @@ where a resend is deduped or refused and the eventual result still shows:
 | Invite code **Generate code** | Generating… | No: each call mints a new code |
 | Roster **Remove** (confirm dialog) | Removing… | Closes the dialog, as for Device **Approve** |
 | Giving up your own admin role (confirm dialog) | Becoming *role*… | Closes the dialog, as for Device **Approve** |
+| Logins **Automatic** / **Use for shares** switch, **Move up** / **Move down** (Agents) | Saving… / Moving… | No: the control stays locked until the server answers and the list is read again |
+| Login **Rename** **Save**, **Remove** (confirm dialog) | Saving… / Removing… | No: the form's **Cancel** stays locked while the call runs |
 | Invitation **Invite** | Inviting…, and the new row reads Creating… | No, and no **Retry**: the row stays until the server answers, and the answer carries the join link. The dialog's **Cancel** closes it while the request keeps going; the answer then shows as a toast. A refusal drops the row and shows the error; a failure with no answer re-reads `member.invitation.list` once and keeps the invitation if the server holds it, else drops the row |
 
 ## Board
@@ -1760,7 +1775,7 @@ both show:
 
 | Condition | Action |
 | --- | --- |
-| Enhanced turn interrupted or stopped short, or a `needs input:` question | **Reply**: on the card a popover composer whose message goes through `run.inject` (`Mod+Enter` sends); in the sidebar it opens the session's Chat view with the composer focused |
+| Enhanced turn interrupted or stopped short, or a `needs input:` question | **Reply**: on the card a popover composer whose message goes through `run.inject` (`Mod+Enter` sends), and which keeps its draft with "Message not sent: <the server's reason>" when the server does not send it; in the sidebar it opens the session's Chat view with the composer focused |
 | Native permission or question on a Standard session; blocked, held, or an Enhanced failure | **Open terminal** |
 | Native permission or question on an Enhanced session, or teammate question | **Answer** |
 | Usage limit with no account to move to | **Open** |
@@ -2307,6 +2322,7 @@ they come from the room, which the session's `state` does not cover, so push and
 | `state` `needs-you` with a `blocked: <summary>` reason | owner | Blocked: … |
 | `state` `needs-you` with a `needs input: <question>` reason | owner | Agent asks: …, with **Reply** |
 | `state` `needs-you` with a usage limit Cloudfield will not resume | owner | Usage limit reached on …, with **Open** |
+| `state` `needs-you` after an `account share revoked: ` or `login share revoked: ` stop | owner | the server's reason, with **Open** |
 | `state` `needs-you` with an Enhanced `turn interrupted` or `turn ended: <stop reason>` reason | owner | Turn interrupted · reply to continue / Stopped: the reply reached its token limit · reply to continue, with **Reply** |
 | `state` `needs-you`, any other reason: a permission or question not loaded yet | owner | Open the session to see its request, with **Open** |
 | `state` `failed` with `outcome_unseen` (labelled Failed) | owner | Agent reported failure; review the result / the reason: Turn failed: … |
@@ -2732,7 +2748,9 @@ includes a caller-generated `idempotency_key`, which stays the same when the
 request is retried and changes only after the message payload changes or the
 submission succeeds. The server records the message as a room
 `steer_request`, so it follows the controller lease, 45-second queue,
-moderation and receipt rules. The launch and message forms are store dialogs
+moderation and receipt rules. A message the server did not send keeps the
+dialog open on its text, with "Not sent: <the server's reason>", such as
+the session moving to another account or login. The launch and message forms are store dialogs
 (`openPaletteDialog` on the `palette` slice) hosted by `AppShell`, so a
 button on any surface opens one by asking the store, with no dependence on
 the palette being on screen. The template form's open state lives with
@@ -2911,7 +2929,12 @@ saved account is preselected when `account.list` still lists it and `get`
 does not mark it invalid, and the saved fallback policy fills the fallback
 list, keeping only listed accounts. A launch never saves the account or the
 fallback; **Save as my default** under **Account** does, and says "Saved
-for every device." until the account or fallback changes again. It saves the fallback list as the session sends
+for every device." until the account or fallback changes again. Beside it,
+it says what it saves: "Saves this account and fallback for launches on
+every device.", "Saves the fallback …" with only the caller's own account,
+and "; not the login" while the **Login** field shows, since the login is
+not saved; with several logins it names the move switch instead (see
+**Login** below). It saves the fallback list as the session sends
 it, without the selected account. **Session**, **Default mode** and **Set up** on
 Agents, and the onboarding wizard, save their agent and mode the same way
 (`rememberChoice`); **Default mode** leaves the preselected agent alone.
@@ -2986,16 +3009,102 @@ heading reads "Neither you nor <owner> has an agent installed." and the note
 says the session uses the owner's login and the caller's installation, or the
 owner's when the caller has none.
 
+**Login** (`login-picker.tsx`) is a select under Account for Claude Code on
+the caller's own account, where `server.info` lists the `logins` feature and
+`agent.login.list` returns more than one login. Its value is short:
+**Automatic**, which sends no `login`, or the picked login's name; it sends
+that login's id as `run.launch` `login` (`default` for the default login). A line under it says what happens: Automatic
+"Starts on the first automatic login in your order with usage left, and
+moves to the first other one with usage left when it runs out." (the Agents
+page's lead says the same), and a picked login "The session starts on this
+login, and moves to the first other automatic login in your order with usage
+left when it runs out.", or, for a login billed per use, which has no usage
+windows, "… It has no usage windows, so it moves to the first other
+automatic login … only if Anthropic reports it out of credit with a
+usage-limit message; otherwise it stops with Anthropic's error.", or, when the dialog read it at
+its limit, "This login is at its limit, so the session may start on the
+first other automatic login in your order with usage left." A move goes only
+to a login with Automatic on, whatever the session started on. With
+automatic changes off the server weighs no usage, so they read "Starts on the
+first automatic login in your order, even at its limit, and stays on it: it
+never moves to <name>." and "The session starts on this login and stays on
+it: it never moves to <name>.", naming the logins billed per use a move could
+have reached, if any. Under them, on lines of their own led by a coins icon,
+it says what can cost and whom it charges, the login's organisation or else
+"your account": "<name> is billed per use to <organisation>." for a picked
+one, "Can start on <name>, billed per use to <organisation>." when the first
+automatic login is, and, while moves are on and another login with Automatic
+on that a move could reach is billed per use, "Can move to <name>, billed per
+use to <organisation>, when the automatic logins before it run out." ("when
+<picked> runs out" for a picked login, "if Anthropic reports <picked> out of
+credit" for one billed per use). Under those lines sits the dialog's one
+control for moves, the **Let this session move to another login** switch
+(**… login or account** when another account is shared with the caller;
+`MoveSwitch` in `login-picker.tsx`), for Automatic and for a picked login
+alike, which sets `no_fallback`. On a phone the Login field, its lines and
+the switch sit in the sheet above **More options**, in view whether it is
+shut or open. The menu is as wide as the
+field and its options wrap; each shows as muted detail "Tries <name> first"
+for Automatic, and for a login its kind and plan ("Subscription · pro",
+"Console · billed per use"), an Automatic that is off, and
+"At its limit (<window>) · resets in …", by the same rule as the Agents
+page, when the dialog already read its usage (the default login's, read with the account's when there are several
+accounts; the dialog reads no usage per login). A teammate's account never
+shows it: only a login's owner names one.
+
+The picked login, id and name, is kept in the launch draft, so it survives
+collapsing the form and a reload. Each opening reads `agent.login.list`
+afresh, and the pick is sent only once that read holds it: while it is read
+the field says "<name>: reading your logins…", a failed read shows "Your
+logins could not be read." with the error verbatim and **Retry login read**
+(only with a login picked, several logins in the last read, or a saved
+"your logins only" below, so a member who has added none sees nothing of
+it),
+and a login removed meanwhile reads "You have no login <name> any more. Pick
+another to launch."; **Launch** stays off in all three. Without a pick,
+for a member with several logins in the last read or a saved "your logins
+only", **Launch** also waits for the read under "Login · Reading your
+logins…", and a failed read keeps the several-logins form, so the saved
+choice is sent and saved unchanged. When the caller's only
+login has Automatic off, a line above **Launch** says a session that names no
+login is refused until Automatic is on, on Agents or with `cloudfield agent
+logins auto default on`. With several
+logins, **Save as my default** still shows, since `no_fallback` also stops
+moves between one account's logins, and names what it saves: "Saves
+whether a session may move to another login, for launches on every device;
+not the login.", or with other accounts "Saves this account, the fallback
+accounts and whether a session may move to another login or account, …".
+**Fallback** then holds only what the switch does not: **Fallback accounts ·
+Most usage left first** (or **In your order**) **· after your logins**, which
+wraps between words on a narrow sheet and never breaks "after your logins", the
+other accounts' list without a checkbox, shown while the switch is on and
+another account is shared with the caller, and gone otherwise. Unticking
+every other account leaves moves between the caller's own logins on: the
+caption reads **Fallback accounts · None · your logins only**, and the
+launch sends `fallback_account_member_ids` with the caller's own id alone,
+which the server reads as that account's logins only; only the switch sends
+`no_fallback`. Saved, that is the `ordered` policy with the caller's id,
+which has one meaning wherever it is read: on the caller's own account, for
+Claude Code on a server with `logins`, it is sent as their own logins only
+while they have several or the list cannot be read, and as `no_fallback`
+otherwise (another agent, one login). The right half of **New session**
+reads `agent.login.list` to send exactly that. **Save as my default** in a
+dialog that reads it as Off keeps it saved unless the fallback was changed. Settings
+→ **Launch** and the assistant's launch card name it "Your logins only".
+
 Where the server offers `run.children.allow`, the form has a **Child
 sessions** select: **Use my setting** (naming it, "(off)"), **Allow for this
-session** and **Off for this session**, sent as `run.launch` `subsessions: "on"` or
+session** and **Off for this session**, sent as `run.launch` `children: "on"` or
 `"off"`; the first sends nothing.
 
 The collapsed **Fallback** under the account list, whose caption reads
-"Automatic", "Ordered" or "Off", then "if <owner> runs out" with only the
-name truncated, holds the [usage
+"Automatic", "Ordered" or "Off", then "if <owner> runs out" with only
+the name truncated (on the caller's own account with several logins it is
+**Fallback accounts**, above), holds the [usage
 fallback](teams.md#usage-fallback) controls (`launch-options.tsx`): a
-**Fall back to another account** checkbox and the **Fallback accounts** list,
+**Fall back to another account** checkbox (left out with several logins,
+where the switch under **Login** is that control) and the **Fallback
+accounts** list,
 each account with a checkbox, "You" or "Shared", the account list's status
 ("Skipped: <status>" where a launch would be refused, which usage fallback
 skips too, and "No saved login" for "Sign in after launch", whose tooltip
@@ -3005,10 +3114,13 @@ and **Move `<name>` up** / **Move `<name>` down**. A hint names the rule: "If
 <owner>'s usage is 95% or more at launch, or the vendor reports the limit
 mid-session, the session moves to the ticked account with the most usage
 left.", with "the first ticked account, top to bottom, with usage left" once
-the list was changed. Untouched, the form sends neither field and the server
+the list was changed; with several logins, "If a login's usage is 95% or more
+at launch, or the vendor reports its limit mid-session, the session moves to
+the first other automatic login in your order with usage left", then to those accounts. Untouched,
+the form sends neither field and the server
 orders by usage left. After a reorder or untick it sends the ticked accounts
 in order as `fallback_account_member_ids`; with the checkbox off, or every
-account unticked, it sends `no_fallback: true`. The list leaves out the
+account unticked (with a single login), it sends `no_fallback: true`. The list leaves out the
 selected account but keeps its place and tick, so selecting another account
 and editing the list never drops it; changed from automatic, the list adds
 it last, ticked. An account the changed list did not hold, such as one
@@ -3294,19 +3406,45 @@ agent's last terminal or Enhanced session title,
 line, else the task's first line cut at 120 characters, with a lock for a
 protected session. The row holds, from the left:
 
-- The view switch.
+- The view switch. Below 800px of row width its views are icons; beside a
+  login or a per-use badge it then keeps its width, so no view leaves the
+  row. Otherwise it scrolls when the row is too narrow for it.
 - The state's dot and label. On the tile that carries the session's
   controls, from 560px of row width, they are the
-  [Session tree panel](#session-tree-panel)'s chip.
+  [Session tree panel](#session-tree-panel)'s chip. Beside a login or a
+  per-use badge, when the row is still full the label folds to its dot,
+  first of anything, and stays the accessible state; it returns once the
+  reason's room holds it.
 - From 560px of row width, the reason, then `repo +N` on a
   [multi-repo session](#multi-repo-sessions), the mode ("Standard"; the
   tooltip adds the `agent.list` display name, `run.model` and `run.effort`,
-  "Claude Code · Standard · opus · high"), "On `<name>`'s account (fallback)" when the session carries
-  `requested_account_member_id` ([usage fallback](teams.md#usage-fallback);
-  a `run.account` event updates it live when the session moves), "Launched via
-  `<name>`". Each part that does not fit drops whole,
-  last first; the reason truncates last, and with under 96px left for it
-  drops whole too, before the view switch gives way.
+  "Claude Code · Standard · opus · high"), "Launched via `<name>`". Each
+  part that does not fit drops whole, last first; the reason truncates
+  last, and with under 96px left for it drops whole too, leaving the room
+  to the parts after it beside a login or a per-use badge; a session with
+  neither then drops every part, as before logins.
+- "On `<name>`'s account (fallback)" when the session carries
+  `requested_account_member_id` and no login to name ([usage
+  fallback](teams.md#usage-fallback); a `run.account` event updates it live
+  when the session moves), after the mode as one of the parts above, as it
+  was before logins.
+- The account line, at the same place for every login: "On
+  `<name>`'s account, login `<login>`" (with " (fallback)" after a usage
+  fallback), or "On your account, …" to its
+  owner, when it is on an added login (`account_login_name`, or the
+  `account_login` id once that login is removed, as the activity line
+  names it), or "login default" when its default login is billed per use
+  (an API key, a Console profile, or a key that `~/.claude/settings.json`
+  signs in with). It truncates only past half the row, with the full line as
+  its tooltip. Under 560px it stays only where it says who pays: on
+  another member's account, or on a login billed per use; below 800px a
+  teammate's reads "`<name>`'s login `<login>`". A session on a login
+  billed per use (`account_login_per_use`) has a **Billed per use** badge,
+  led by a coins icon (`PerUseBadge`, the same on every surface), whose
+  tooltip and accessible name say "Billed per use to Ada's account, login
+  console". Below 800px of row width, where the views are icons, the
+  badge takes the account line's place and names the payer itself in
+  short: "Per use · Ada's", or "Per use · yours".
 - From 560px, the **Root access** (needs-you tone) or **Isolated** badge and,
   on the tile that carries the session's controls, the watch button. Neither
   yields to a long reason.
@@ -4161,7 +4299,12 @@ Details sheet and focuses the card; on other views it lists the cards. `routes/r
 **Retry Enhanced** and **Open in Standard**, which starts a new Standard
 session when the switch is refused with `session_not_reported`, and a sign-in failure with the
 agent's auth methods, plus **Retry Enhanced** when the agent failed to start,
-since signing in does not start it. On a run on the viewer's own account it adds **Sign in
+since signing in does not start it. **Open in Standard** that starts a replacement keeps,
+when the viewer owns the run, its account, fallback and subsession setting,
+naming no login: a run does not say whether its login was named at launch or
+chosen by the server, so the replacement is chosen as a launch that names
+none. Another viewer's replacement launches as any launch of theirs does, on
+their own account and settings. On a run on the viewer's own account it adds **Sign in
 on Agents**, and when that agent's `agent.list` row has `login_problem` its
 title is the alert's ("Claude Code is signed out" or "Claude Code's sign-in
 was refused"); a login-file problem shows verbatim, while a refusal is
@@ -5626,8 +5769,9 @@ and applies again once there is room. Sections (`details.tsx`):
   every `run.wait.changed` event.
 - **Subsessions**, where the server offers `run.children` and the session has
   any: every descendant, nearest first and indented by depth, with its
-  purpose, state, agent and model, "On `<name>`'s account" plus "(fallback
-  from `<name>`)" when the store's session carries `requested_account_member_id`,
+  purpose, state, agent and model, "On `<name>`'s account" plus ", login
+  `<login>`" while the store's session is on an added login of that account,
+  and "(fallback from `<name>`)" when it carries `requested_account_member_id`,
   its cost or "Cost not reported", its latest report and error, and
   a **Detached** badge. **Open** opens a started subsession. Under the list: the cost of this session and all its
   descendants, "At least $X: N sessions report no cost" when some are unmetered
@@ -5690,7 +5834,9 @@ and applies again once there is room. Sections (`details.tsx`):
   cannot re-add the row, and a retried send that turns out to target an
   already-deleted note drops its own sticky too, rather than leaving an orphan.
 - **Details**: the task, Owner, Agent account (when it is someone else's),
-  Agent and mode, Branch, Created, Changed, Last commit, In control,
+  Login (an added one, or "default" for a default login billed per use, with the **Billed per use** badge whose tooltip names
+  the account and login that pay, since a session does not know the
+  login's organisation), Agent and mode, Branch, Created, Changed, Last commit, In control,
   Watching, Sandbox ("Starting", "Running", "Stopped, kept for reopening"
   or "Removed"), Sandbox size (what a Docker session wrote inside its container
   outside the mounted home, checkout and cache; shown to the session's owner and
@@ -5904,7 +6050,11 @@ in **Needs you**.
   type without words fails the test. A type this dashboard has never heard of
   reads "Something changed" under the type name "Other". A
   [usage fallback](teams.md#usage-fallback) move reads "Moved from Alice's
-  account to your account" (`run.account`, filter **Account changed**), and
+  account to your account" (`run.account`, filter **Account changed**); a
+  move to or from an added login names both logins, "Moved from login work
+  to login console" and the badge "Per use · yours" (or "Per use · <name>'s"),
+  titled "Billed per use to your account, login console", when the login that now pays is billed per use, with each account only when the two
+  differ, and
   the headless Claude output that triggered it "Usage limit reached: You've
   hit your session limit · resets 3pm (UTC)", the agent's message cut at 160
   characters (`run.usage_limit`, filter **Usage limit reached**).
@@ -6598,6 +6748,143 @@ command's first word, which is also the executable. A session that is not
 signed in offers its terminal login method, typed as the ACP server command
 (`agent_command` in the session state) with the method's args.
 
+**Several logins.** Where `server.info` lists the `logins` feature, the
+installed Claude Code row adds **Add login**. A member with only the default
+login sees nothing else new, unless a switch of that login is off: the server
+keeps its row then, and the list below shows it with its switches, so they can
+be turned back on. With Automatic off there, the list's lead says that a
+session that names no login is refused until Automatic is on, here or with
+`cloudfield agent logins auto default on`, since the launch dialog offers no
+pick with one login. Turned back on, the server drops the row; the page keeps
+it, and the focus on its switch, until the member leaves the page. With more, the row's status reads "Installed · 3
+logins" ("Installed · 3 logins · default login signed out" while
+`login_problem` names the default one and `login_blocks_launch` is set,
+"… · default login sign-in refused" while it is not), the row offers **Run** while any
+login is found (an added login whose kind the list reads counts as
+`login_found` does; the list does not say whether a login can still sign
+in), and the row lists `agent.login.list` in priority order
+(`agent-logins.tsx`). Everything owner-only there, the list and its reads,
+whom the account is shared with, **Add login** and its outcome and the
+running sign-in, belongs to the signed-in identity: a gateway bound to
+another member shows none of it, and an answer read for the previous one
+never lands. Each login has its rank (1, 2, 3) with framed
+**Move <name> up** and **Move <name> down** arrows under it, the disabled
+one at either end drawn without a frame
+(`agent.login.order`, every id). Each control is a server-decided action
+(see [Actions](#actions)): while its call and the read of the list after it
+are pending, it alone is locked (a switch with `aria-disabled`, so it keeps
+focus) and shows "Saving…" beside a switch or
+"Moving…" in the moved row, then "Still waiting for the server…" past the
+deadline. Any outcome of a change, an answer, a refusal or a failure that
+may hide a committed change, reads the list again, and only the newest read
+of the list lands; a call waits for that newest read. Every arrow waits for
+an order call until a list read after it lands, since the next move is built
+from the order the server keeps: if that read fails, the arrows stay off
+under the "Logins not read" error until **Retry** lands a list. Each login shows its name, kind and plan, "· tried
+first" in the same muted text on the first login with Automatic on (the login a launch that
+names none starts from before usage is weighed), a **Billed per use** badge,
+and, in the needs-you colour with a gauge icon, "At its limit (<window>) ·
+resets in …" while its 5-hour or 7-day window is at 95% or more (the
+server's `ExhaustedPercent`) in a current (`ok`) read, naming the window that
+resets last: those are the windows and the read the server starts and moves
+a session on, so a per-model window or a `stale` read shows as usage only; email and
+organisation; with Use for shares on, a line only where it adds a fact
+beyond the switch: whom the share serves, "Sessions of <teammates> can run
+here too." (the teammates from `account.list` `shared_with`), which for a
+login billed per use adds ", charged per use to <organisation>" ("login
+<name>" when it has no organisation); "No new teammate session starts or
+moves onto it while Automatic is off; one already on it keeps running."; or "A share cannot use this kind of login." for a default login
+kept as an API key or a Console profile, which has no file a share mounts.
+The teammates line is left out while `account.list` is unanswered, whose
+error the list's lead shows verbatim, and when the account is shared with
+nobody, which the lead says; the other two do not wait for it. The lead ends
+with **How logins work**, a link to [agents.md](agents.md#several-logins).
+The badge's tooltip and accessible name name the payer, "Billed
+per use to <organisation>"; its
+**Automatic** (`agent.login.automatic`) and **Use for shares**
+(`agent.login.share`) switches, each a row of its own; and its usage windows
+(`account.usage` with `login`), whose reset reads in days and hours past 24
+hours ("resets in 1d 16h"), as the launch dialog's limit lines do; Settings →
+Usage reads hours ("resets in 76h"). A Console login, whose usage the server
+reports `unsupported`, reads "No usage windows"; any other
+read error shows verbatim, and windows kept from a refresh that failed (`stale`)
+add "Last read, not current:" with its error. A login billed per use with Automatic on, below
+the first automatic login, adds "Sessions can move here when the automatic
+logins above it run out, charged per use to <organisation>." An added login has **Rename** (inline,
+`agent.login.rename`) and **Remove** as icon buttons on its name line;
+**Remove** confirms first, naming the email and organisation recorded for
+the login when there are any and saying it does not sign the login out at
+Anthropic (`agent.login.remove`). **Save** of a rename and **Remove** close
+once their call answers, and the list is read again after. A
+refusal shows verbatim and leaves only **Cancel** until the dialog is opened
+again; on a login off for shares that teammates' sessions still hold, a line
+above it says "Use for shares is off, so no teammate's session starts or
+moves onto this login now; one already on it holds it until it ends." It links each of the caller's sessions it
+lists after "your sessions", and, when it names `cloudfield account revoke`, links
+Members, where a share is revoked. The default login has neither button and
+says why: it is the one `cloudfield agent login claude` signs in. Below
+1024px the switches sit under the facts and above the usage bars, and the
+share line and the Automatic line each sit under the switch they explain.
+
+**Add login** (`add-login.tsx`) asks for a name (placeholder "e.g.
+team-max", which no login can be named), and a line under the field says
+Automatic and Use for shares both start on: Cloudfield may start or move the
+member's sessions onto it, and the teammates `account.list` names
+("teammates you share your account with" until it answers) can use it, that
+a Console account's organisation is charged per use for those sessions,
+the member's and theirs, and that the next screen can turn either off as
+soon as the login is added. The switches
+cannot sit on this step: `agent.login.add` takes only the name, and the
+login does not exist until its sign-in ends. It calls `agent.login.add`,
+and runs the sign-in under the heading "Sign in to <name>" in the
+assistant's sign-in terminal on `/ws/terminal?agent_login=<id>`, then shows
+how it ended. A login added retitles the panel "Added <name>", drops the
+sign-in instructions, and shows a callout with its kind and plan, email and
+organisation (with the **Billed per use** badge for a login billed per use),
+once the page has read the list again its place, "Added as number <n> in
+your order", adding ", after <name>, billed per use" when an automatic login
+billed per use is above it (the server puts a subscription before the first
+login billed per use, and one billed per use last), and the login's live
+**Automatic** and **Use for shares** switches, the same calls, pending state
+and verbatim refusal as on its row, each with a line on what it does for
+this login: "Sessions can move here when the automatic logins above it run
+out.", adding ", charged per use to <organisation>" for a login billed per
+use, and "Sessions of <teammates> can run here too", with the same addition
+("No new teammate session starts or moves onto it while Automatic is off;
+one already on it keeps running." once Automatic is off). The
+callout is as wide as the form.
+The switches show the login as the page's read of the list holds it, which
+each change reads again. A refused sign-in shows the refusal with **Start
+again**. The
+running sign-in is kept in `store/login-sign-in.ts` while the member moves
+between pages, and the Agents page holds the one `agent.login.result` wait
+for it, which the panel reads; an answer the server did not give (the
+gateway's `server did not answer`, `server unreachable`, a failed fetch) is
+no outcome, and the page waits again. The panel's one way to end the
+sign-in is **Cancel sign-in**, which sends Ctrl-C; pressed while the
+terminal is still starting, the panel says it is cancelling and sends it as
+soon as the terminal is up, also when the member has left the panel by then. A dropped socket reconnects to the same sign-in
+("Reconnecting to the sign-in…") instead of ending it. A line under the
+buttons says how long the sign-in keeps running if the member leaves the
+page: "for about <n> more minutes" when this tab opened its terminal,
+else "until about 15 minutes after it started"; the server's 15 minutes run
+from the sign-in's container start, a little before its terminal opens. It
+says Add login offers **Return to the sign-in** for it, and after a reload
+only once **Start sign-in** is refused because it is still running: the
+page keeps the running sign-in in memory alone, and the server's refusal
+names it again. While a sign-in runs, the Claude Code row
+says "Sign-in for <name> is still running." with **Return to the sign-in**, which reattaches its terminal, and
+Add login leads with the same callout, its primary button and **Close**,
+which leaves the sign-in running, and hides the form until that sign-in ends. The server refuses another add
+while one runs, naming it; the refusal shows the same way, with the server's
+words verbatim, until that sign-in ends. Every other refusal shows verbatim under
+"Sign-in not started". Once the server has ended a sign-in the panel shows
+that outcome alone: a refused attach of its terminal adds no **Try again**.
+The terminal opens only the links the sign-in button would, https pages on
+the vendor's hosts; any other prints "Not opened, as it is not a <vendor>
+sign-in page:" and the link as text. A server that stops listing `logins`
+closes the panel and stops the wait and every `agent.login.*` call.
+
 **Signed-out logins.** `SignedOutAlert` (`components/shell/signed-out-alert.tsx`),
 mounted by `AppShell` under `StaleBanner`, shows while any installed agent in
 the member's own `agent.list` has `login_problem`: a needs-you band with one
@@ -7022,8 +7309,21 @@ opens a dialog with two tabs:
   board and in Sign-ins.
 - **I have a merge code** sends `member.merge.preview` and shows both
   members side by side (role, sign-ins, devices, sessions, schedules,
-  settings), stacked at phone width. **Keep settings from** has no
-  default; choosing a side lists what the other loses. When the roles
+  added logins, settings), stacked at phone width. **Keep settings from** has no
+  default; choosing a side lists what the other loses: its home, with its
+  default logins, archived, and its added logins moving to the survivor,
+  off for shares, each under the name it arrives with: "If <survivor>
+  already has a login with the same name, the moved login is renamed
+  `<name>-2`, or the next free number". The preview does not say that the
+  server keeps each moved login's Automatic switch, puts it after the
+  survivor's own logins, and cuts a long name to fit 32 characters before
+  the suffix ([teams.md](teams.md#link-or-merge-sign-ins)). A plan from a
+  server without logins carries none and the preview says nothing of them.
+  Each card lists
+  its added logins with what the plan carries for each, name, agent and id;
+  the plan has no account or billing for them. The accepting side's card
+  lists the same. The confirming checkboxes and **Propose merge** stay in
+  view at the dialog's foot while it scrolls. When the roles
   differ the resulting role is stated, and the admin side gets **Keep the
   merged member an admin** only when the plan carries
   `role_with_keep_admin`. **Propose merge** (danger style) stays disabled
@@ -7404,7 +7704,8 @@ Categories:
   reason. When the saved account or a fallback member is invalid, **Remove
   unusable accounts** saves both repaired at once: your own account, and
   the order without them, or fallback off when none are left. **Account** and **Fallback** (any account, off, or the saved
-  ordered list) save on change; the order itself is set in the launch
+  ordered list, "Your logins only" when it names your own account alone)
+  save on change; the order itself is set in the launch
   dialog with **Save as my default**. **Clear** asks first, then clears
   them. Each change uses `launch.defaults.set` with the revision read and
   retries once on a conflict, as the launch dialog does. The section starts

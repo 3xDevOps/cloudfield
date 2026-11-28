@@ -642,7 +642,7 @@ export async function applyEvent(
     }
     case 'run.account': {
       const p = ev.payload as RunAccountPayload
-      store.getState().applyRunAccount(ev.run_id, p.account_member_id, p.requested_account_member_id)
+      store.getState().applyRunAccount(ev.run_id, p)
       break
     }
     case 'run.archived': {

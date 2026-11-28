@@ -320,7 +320,7 @@ credential is active. Where the login lands depends on the account:
 | --- | --- | --- | --- |
 | Claude subscription (claude.ai) | `~/.claude/.credentials.json` | Yes | Yes |
 | Anthropic Console, creating an API key | `primaryApiKey` in `~/.claude.json` | No: the API bills it | No |
-| Anthropic Console, without an API key | An Anthropic profile: `~/.config/anthropic/credentials/<profile>.json`, for the profile `~/.config/anthropic/active_config` names, or `default` | No: the API bills it | No |
+| Anthropic Console, without an API key | An Anthropic profile: `~/.config/anthropic/credentials/<profile>.json`, for the profile `~/.config/anthropic/active_config` names, or `default` | No: the API bills it | Only as an [added login](agents.md#several-logins) |
 
 All three sign in your own Standard, Enhanced and Background sessions, which
 mount your whole home, and count as **Login found**. An
@@ -328,8 +328,9 @@ Isolated session works on a copy of your home that it
 discards: a profile token Claude Code renews there is not written back, so
 sign in again if the Console sign-in stops working after one. A session on an account
 shared with you carries the owner's `~/.claude/.credentials.json` alone, so a
-Console sign-in never leaves its owner's sessions: sharing needs a
-subscription login. A Console sign-in the server cannot read is not counted:
+Console sign-in in the owner's home never leaves the owner's sessions: sharing
+needs a subscription login, or a Console sign-in the owner added as a login
+(below). A Console sign-in the server cannot read is not counted:
 a symlink on its path, a file with another hard link or that is not JSON, a
 configuration file over 64 MiB, or a profile file over 1 MiB. A profile whose
 token has expired and holds no refresh token is not counted either. A launch
@@ -339,6 +340,40 @@ is skipped without a message. The server reads nothing through a `~/.claude`
 that is a symlink leaving your home. Cloudfield reads the profile directory at
 `~/.config/anthropic`; a workspace variable `ANTHROPIC_CONFIG_DIR` or
 `ANTHROPIC_PROFILE` that points Claude Code elsewhere is not followed.
+
+`cloudfield agent login claude --as <name>` adds a login beside this one
+([agents.md](agents.md#several-logins)). A session on an added login mounts,
+from the login's directory on the server, its `credentials.json` over
+`~/.claude/.credentials.json` and its `anthropic/` at `~/.config/anthropic`;
+the one the login does not use is read-only. `ANTHROPIC_CONFIG_DIR` points at
+`~/.config/anthropic` and `ANTHROPIC_PROFILE` is empty. Like a session on a
+shared account ([security.md](security.md#account-sharing)) it gets its own
+copy of your `~/.claude.json` without the account keys at
+`CLAUDE_CONFIG_DIR`, with the legacy `~/.claude/.config.json` masked. The
+login's files and the copy are Docker volume subpath mounts, whose inodes
+Cloudfield checks once, when the container starts, so a dropped one fails the
+launch; the mask over the legacy file is a plain bind and is not checked. This
+needs Docker Engine 26.0 or newer, as sharing does.
+`TestIntegrationRealClaudeCodeUsesTheAddedLogin` in `internal/scheduler` (tag
+`integration`; it needs `claude` on `PATH` and unprivileged user and mount
+namespaces) lays out a session's mounts for each kind of added login over
+each kind of default login, runs Claude Code against a stand-in for
+Anthropic's API, and fails unless every request to the stand-in carries the
+added login's credential. It does not reach Anthropic.
+
+Before a session runs on an added login, its files must still hold a sign-in
+of the kind it was added with. A session's reason, or the launch's refusal,
+then says:
+
+| Message | What to do |
+| --- | --- |
+| `scheduler: login lgn-…: it no longer holds the <kind> sign-in it was added with; its owner removes it and adds it again` at launch, or `scheduler: login lgn-… no longer holds …` when the container is built | The login's owner runs `cloudfield agent logins remove <name>`, then `cloudfield agent login claude --as <name>`. |
+| `scheduler: login is signed out: login <name>: <problem>; its owner removes it and adds it again, with cloudfield agent logins remove <name>, then cloudfield agent login claude --as <name>` | A login is signed in once, when it is added, so its owner runs those two commands. When `<problem>` is `it holds no sign-in right now; a session on it may be refreshing it, so launch again; ...`, launch again first. |
+| `scheduler: login lgn-… has no directory on this server; it was removed` | The login's directory is missing or is not a directory the server can read. If `cloudfield agent logins` no longer lists the login, it was removed: start a new session. Otherwise the server's operator checks `<data-dir>/logins/`. |
+
+Removing a login is refused while a session, or a closed session's kept
+container, still holds it; [agents.md](agents.md#manage-logins) says how to
+free them.
 
 For an API key, set `ANTHROPIC_API_KEY` in the server's environment, and
 `ANTHROPIC_BASE_URL` for a gateway. A `CLAUDE_CODE_OAUTH_TOKEN` from
@@ -619,6 +654,17 @@ not exhausted.
 
 If a vendor changes its signal, the session fails or ends its turn with the vendor's
 error instead of moving.
+
+Between the logins of one account ([agents.md](agents.md#when-a-login-runs-out))
+only a spent balance moves a session: a message that starts `You've hit your`,
+`You've reached your`, `You're out of usage credits`, `You're out of extra
+usage` or `Your org is out of usage`. The others in Claude Code's list, such as
+`Your seat type doesn't include usage` or `Your usage allocation has been
+disabled by your admin`, restrict the whole account: the session skips its
+other logins and moves to another account or stops. The list is the Claude
+Agent SDK's `USAGE_LIMIT_ERROR_PREFIXES`, copied into
+`internal/agentstatus/agentstatus.go`. No test here shows whether a Console
+account out of credit ends a turn with one of them.
 
 ## Launching
 

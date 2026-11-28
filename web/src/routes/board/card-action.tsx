@@ -124,7 +124,13 @@ export function ReplyComposer({
       const result = await api.runInject(card.run.id, payload, request.key)
       const state = result.receipt ?? result.message.state
       const label = `Message ${deliveryLabel(result).toLowerCase()}`
-      if (state === 'not_sent' || state === 'uncertain') toast.error(label)
+      const reason = result.message.failure?.message
+      // A refused message keeps its draft under a fresh key, so a resend tries again.
+      if (state === 'not_sent') {
+        if (current()) saveReply({ sending: undefined, request: undefined, error: reason ? `${label}: ${reason}` : label })
+        return
+      }
+      if (state === 'uncertain') toast.error(label)
       else toast.success(label)
       if (!current()) return
       setReplying(runId, false)

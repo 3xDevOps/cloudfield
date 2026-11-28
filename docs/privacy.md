@@ -588,6 +588,60 @@ records each as deleted in the same file before it commits. Merging two members 
 remains, even past the 200 limit; new saves are then refused until enough
 are forgotten.
 
+## Agent logins
+
+A Claude Code login added with `cloudfield agent login claude --as <name>`
+([agents.md](agents.md#several-logins)) is kept on your server, in
+`<data-dir>/logins/<member-id>/claude/<login-id>/`:
+
+| File | Holds |
+| --- | --- |
+| `credentials.json` | A subscription login's sign-in, with its tokens; empty for a Console login |
+| `anthropic/` | A Console login's Anthropic profile, with its token |
+| `identity.json` | The kind, plan, email and organisation Claude Code recorded at sign-in, as the sign-in's container left them: Cloudfield drops a field over 256 bytes or with a control character, and checks nothing else |
+
+While the sign-in runs, its scratch copy of Claude Code's configuration is
+kept there and the server records its terminal in a transcript; both are
+removed once its container is. When the container cannot be removed, the
+sign-in ends with `its container could not be removed, so nothing was added;
+the server removes it at its next start: <error>`, and the login's directory
+and the transcript stay until then. A transcript that cannot be removed
+stays, with a warning in the server's log. The database keeps each login's
+name, place in the order and switches, and which login each session ran on. Whoever can
+read the data directory, such as the server's operator, can read the logins,
+and backups of the data directory hold them.
+
+The server reads a login's files:
+
+- to read its usage, for a subscription login: when you list your logins on
+  the CLI or the **Agents** page, when a launch or a move weighs it, and before
+  a teammate's session on it moves;
+- to learn its kind and whether it holds a sign-in: when a launch or a move
+  considers it, and when a session's container is built on it;
+- `identity.json`: when it lists the login to you, checks that a new sign-in
+  is another account, places a new login in your order, and labels a session
+  billed per use.
+
+A usage read reuses the last answer while it is under 60 seconds old and no
+usage window in it has reset, unless the read must be fresh, as before a
+teammate's session moves; otherwise it
+sends the login's access token to Anthropic's usage endpoint,
+`https://api.anthropic.com/api/oauth/usage`, at most once every 10 seconds per
+login. After a failed request it serves the last answer, marked stale, until
+it may try again, at least 60 seconds later. A Console login's usage is never
+read. A session on the login sends its token with each request to Anthropic, or to `ANTHROPIC_BASE_URL` when a
+workspace or server variable sets it; with none set, the session runs with
+`ANTHROPIC_BASE_URL` empty. Only your own listing of your logins shows their
+email and organisation; the login's name reaches everyone who sees a session
+on it, and a session on the login can learn whose it is
+([security.md](security.md#several-logins)). `cloudfield agent logins remove
+<login>` deletes its files and its row, removing a member deletes theirs, and
+merging a member moves theirs to the survivor
+([teams.md](teams.md#link-or-merge-sign-ins)). When a member removal or a
+merge fails to delete or move the files, it still succeeds: the server logs a
+warning, and the next server start deletes or moves them.
+None of these signs the login out at Anthropic.
+
 ## Dictation
 
 With [dictation](dictation.md) installed, the dashboard sends each clip you

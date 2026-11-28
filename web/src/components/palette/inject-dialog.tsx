@@ -55,9 +55,16 @@ export function InjectDialog() {
     try {
       const result = await api.runInject(runID, payload, nextRequest.key)
       setRequest(null)
-      close()
       const label = deliveryLabel(result)
-      if (result.receipt === 'not_sent' || result.receipt === 'uncertain' || result.message.state === 'not_sent' || result.message.state === 'uncertain') {
+      const reason = result.message.failure?.message
+      // A refused message keeps its draft, so a resend tries again under a fresh key.
+      if (result.receipt === 'not_sent' || result.message.state === 'not_sent') {
+        setSending(false)
+        setError(reason ? `${label}: ${reason}` : label)
+        return
+      }
+      close()
+      if (result.receipt === 'uncertain' || result.message.state === 'uncertain') {
         toast.error(label)
       } else {
         toast.success(label)

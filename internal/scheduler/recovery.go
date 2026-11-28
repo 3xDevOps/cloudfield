@@ -1465,6 +1465,12 @@ func (s *Scheduler) recoverSupervised(ctx context.Context, r *domain.Run) {
 	// recorded the account and the run carries on where it was.
 	if swap := sc.AccountSwap; swap != nil {
 		switch {
+		case sc.ContainerID == swap.Container && swap.Sending:
+			// The agent may be working on the continuation; sending it again
+			// would repeat it, so the session only says it may be missing.
+			// The driver takes the conversation up and drops the marker.
+			s.acp.switchNotice(r.ID, "warning", "The continuation prompt may not have been delivered",
+				"The session moved to "+s.accountLabel(ctx, swap.to(), r.Harness)+"; the continuation prompt may not have been delivered.")
 		case sc.ContainerID == swap.Container:
 			if swap.Continuation == "" {
 				s.dropAccountSwap(r.ID, &sc)
@@ -1997,7 +2003,9 @@ func (s *Scheduler) entryFromSidecar(r *domain.Run, sc sidecar) *supervised {
 		memberID:       r.HomeMember(),
 		loginMember:    domain.MemberID(sc.LoginMember),
 		loginID:        sc.LoginID,
+		account:        r.Account(),
 		verifiedLogins: sc.VerifiedLogins,
+		restricted:     sc.Restricted,
 		// Reattaching makes a full-screen agent repaint; without the saved
 		// report that repaint would read as work resuming.
 		reporter:            sc.Reporter,

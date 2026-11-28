@@ -146,7 +146,12 @@ run `cloudfield member merge <code>` (options `--keep <member id>`, `--keep-admi
 discarded before you confirm. The survivor takes the other member's sessions,
 schedules, devices and accounts, and the lower of the two roles. The absorbed
 member's home moves to `<data-dir>/merged/<merge id>/home` and their private
-signing key to `signing-key` beside it. Both hold credentials, so remove the
+signing key to `signing-key` beside it. Their added Claude Code logins
+([agents.md](agents.md#several-logins)) move to the survivor after the
+survivor's own, off for shares and with their Automatic switch as it was, so the survivor's sessions can move onto them;
+check `cloudfield agent logins` afterwards. A name the survivor already uses
+gets the first free suffix, `-2`, `-3` and so on, the name cut to fit 32
+characters. Both hold credentials, so remove the
 directory with `sudo rm -r` once nothing in it is needed. A merge is
 refused, with the reason, when either member is pending or has an unfinished
 session or terminal. It is also refused when the merged role would be below
@@ -156,8 +161,8 @@ Nothing undoes a merge.
 
 ### Remove access
 
-`cloudfield member remove <id>` deletes a member, their environment and their
-private signing key, and closes their connections. `cloudfield device revoke <id>` refuses a device key everywhere.
+`cloudfield member remove <id>` deletes a member, their environment, their added
+Claude Code logins and their private signing key, and closes their connections. `cloudfield device revoke <id>` refuses a device key everywhere.
 `cloudfield member unlink <member-id> github:<user id>` unbinds one GitHub account,
 revokes the devices that signed in with it and deletes the connectors its
 sign-in authorized. `cloudfield invite revoke <id>` kills
@@ -621,8 +626,10 @@ See [memory.md](memory.md).
 
 Each member signs in to each agent once, in their own environment (`cloudfield agent
 add <name>`, then `cloudfield terminal`). That home is mounted into every session they
-launch. A member's **agent account** is that vendor login and the subscription
-behind it. One member can let a collaborator launch sessions on theirs.
+launch. A member's **agent account** is that vendor login, their **default login**,
+and the subscription behind it, plus, for Claude Code, the logins they added
+outside their home ([Shares and several logins](#shares-and-several-logins)).
+One member can let a collaborator launch sessions on theirs.
 
 The owner turns on **Share my account** on the recipient's row in **Members**. The
 recipient picks the owner under **New session → Account**, below the agent.
@@ -673,11 +680,13 @@ lists exactly what is shared.
 - An owner with no login shows **Needs `<owner>`'s login**. A CLI launch fails with `Grace
   is not logged in to claude: no login at ~/.claude/.credentials.json in their
   home; Grace logs in to claude in their own environment terminal`.
-- A Claude Code sign-in through the Anthropic Console is never shared
-  ([harnesses.md](harnesses.md#claude-code)): it holds an API key or a token
-  for the API, which stays in its owner's sessions. An owner with only that
-  sign-in shows **Needs `<owner>`'s login**, and a CLI launch fails with `Grace
-  is not logged in to claude with a login Cloudfield shares: ~/.claude.json
+- A Claude Code sign-in through the Anthropic Console in the owner's home is
+  never shared ([harnesses.md](harnesses.md#claude-code)): it holds an API key
+  or a token for the API, which stays in its owner's sessions. An added
+  Console login can be ([Shares and several
+  logins](#shares-and-several-logins)). An owner with only that sign-in shows
+  **Needs `<owner>`'s login**, and a CLI launch fails with `Grace is not
+  logged in to claude with a login Cloudfield shares: ~/.claude.json
   holds an Anthropic Console sign-in, which stays in Grace's own sessions;
   sharing needs a subscription login at ~/.claude/.credentials.json`.
 - Every member's containers mount their own Claude Code and Gemini login files
@@ -700,16 +709,73 @@ lists exactly what is shared.
   fails with `runtime: docker engine API "1.44" cannot mount a path beneath a
   member home; that needs API 1.45 (Docker Engine 26.0) or newer`.
 
+### Shares and several logins
+
+An owner can keep several Claude Code logins
+([agents.md](agents.md#several-logins)). A share reaches every one of them the
+owner left on for shares and automatic, until the owner turns one off:
+
+```sh
+cloudfield agent logins share work off   # owner: teammates' sessions leave work; only the owner's run on it
+cloudfield agent logins auto work off    # owner: no new session starts on work unless the owner names it
+```
+
+The owner's order decides which login serves you: a launch on their account
+starts on the first login in their order that is on for both and can serve
+the session, and moves on in that order when one runs out. When you launch
+on your own account, your own logins come before any teammate's. When you
+launch on a teammate's account, their other logins come first, then yours if
+you added logins and your account is among the fallback accounts (it is
+unless `--fallback` leaves it out), then the other accounts.
+
+You cannot name a teammate's login: `--login` on their account fails with
+`run.launch: only a login's owner names it; a launch on a teammate's account is
+served in their order`. Cloudfield shows you a login's name wherever its
+session shows the account, `, login work` in `cloudfield sessions`, but not
+its email or organisation; a session on the login can still learn whose it is
+([security.md](security.md#several-logins)). An account none of whose logins
+is open to you fails with `run.launch: permission denied: none of this
+account's logins is available to you, so it is not shared with you`; one
+whose open logins cannot serve the session fails with `run.launch: permission
+denied: none of this account's logins can serve you: <login>: <why>`, with
+`; <login>: <why>` for each further open login. Launch on another account, or
+ask the owner to fix what `<why>` names.
+
+- Turning a login off for shares moves teammates' running sessions off it to
+  another login or account they may use, as revoking the share does, and
+  stops those that cannot move with a reason that starts `login share revoked:
+  <owner> turned use for shares off for login <name>; ` and says why it could
+  not move. The owner's own sessions stay.
+  Turning a login automatic off moves nothing: sessions already on it stay
+  ([agents.md](agents.md#manage-logins)).
+- A session on a login that is off for shares is handed off only to that
+  login's owner: `cannot hand off to <name>: the session is on a login its
+  owner keeps out of shares`.
+- A subsession that names no account, runs its parent's agent and belongs to
+  the member whose home its parent mounts starts on its parent's login when
+  its owner owns that login or the login is on for shares, the login is automatic and can still serve
+  it, and it is not billed per use. Otherwise it starts on the first login
+  that serves it, as a launch that names none.
+
 ### Usage fallback
 
 When a `claude` or `codex` launch's account has used 95% or more of its
 subscription quota, Cloudfield starts the session on another account with usage left.
 Other agents always launch as requested, and so does an account whose usage
-cannot be read (an API-key login, signed out, or a vendor read over 3 seconds).
+cannot be read (an API-key login, signed out, or a vendor read over 3 seconds),
+unless a launch that names no login chose a login billed per use, which yields
+to one with usage left ([agents.md](agents.md#when-a-login-runs-out)).
 
 Candidates are your own account and every account shared with you whose owner is
-logged in to the agent. The one with the most usage left wins. In the launch
-dialog, **Fallback → Fall back to another account** turns it off and lists
+logged in to the agent. The one with the most usage left wins. Where members keep
+several Claude Code logins ([shares and several
+logins](#shares-and-several-logins)), each account is scored by its first
+automatic login with usage left, after the requested account's own logins and,
+when your account is among the fallback accounts, your own. `--fallback` lists
+the other accounts; the requested account's own logins stay candidates. In the
+launch dialog, **Fallback → Fall back to another account** (with several logins
+of your own, the **Let this session move to another login or account** switch)
+turns it off and lists
 **Fallback accounts**, which you untick or reorder; an account a launch could
 not run on reads **Skipped:** and the reason. Your own account with no login
 file for the agent reads **No saved login**: a launch may still fall back to

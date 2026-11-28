@@ -845,10 +845,32 @@ move, interactive sessions park as **Needs you**, a Background session fails, an
 | `Usage limit reached on <owner>'s account; fallback is off for this session` | The session was launched with `--no-fallback`. |
 | `Usage limit reached on <owner>'s account; cannot continue on another account: <reason>` | The session cannot move: for example the agent reported no session to resume, it is a member's own agent definition, or the owner may no longer launch. Nothing was changed. |
 | `Usage limit reached on <A>'s account; continuing on <B>'s account failed: <error>` | The move started and failed. The session fails. `start container: runtime: <path> in the container is inode <n>, not <login> in <B's home> ...` means the container would have signed in with another login than B's; the rest of the error says whether Docker or the container runtime left B's login out. |
-| `Usage limit reached on <A>'s account; the session is on <B>'s account and its session could not be restored: <error>` | The session moved, but the Enhanced session did not come back. Send a message to start fresh. |
+| `Usage limit reached on <A>'s account; the session is on <B>'s account and its conversation could not be restored: <error>` | The session moved, but the Enhanced session did not come back. Send a message to start fresh. |
 
 A paused session, or one being closed or killed, is not moved. A move survives a
 server restart: the next start finishes it.
+
+### Several logins
+
+On an account with added Claude Code logins
+([agents.md](agents.md#when-a-login-runs-out)) the reasons name a login as
+`Ada (work)`, and a session that has run on more than one login ends a
+usage-limit reason with the logins it left spent:
+
+| Reason | Meaning and what to do |
+| --- | --- |
+| `Usage limit reached on Ada (work)'s account; <why>; logins tried: Ada, Ada (work); the first is usable again at <time>` | No other login or account the session may use could take it; `<why>` says why, and the others may have been unable to serve rather than spent. `logins tried` lists the logins the session left because they ran out. `<time>` is the earliest of each listed login's latest reset among its windows at 95% or more, in UTC, or `unknown` when a listed login's read shows no such window or no reset. Wait until then, or add a login. |
+| `Usage limit reached on Ada (work)'s account; the agent reported a usage limit that Ada (work)'s usage does not show` | A session on another member's login reported a limit that a fresh read of the login's usage does not show, so it did not move ([security.md](security.md#several-logins)). Ask the login's owner, or start a new session on another account. |
+| `login share revoked: Ada turned use for shares off for login work; <why>` | The login's owner turned **Use for shares** off and the session could not move to another login or account. `<why>` is one of the `account share revoked:` endings in [security.md](security.md#account-sharing), such as `no other account can run claude`. Start a new session on a login you may use. |
+| `scheduler: the session has no live environment: the login this session is on is no longer shared with it, so the session stops` | Waking a sleeping session whose login its launcher or owner may no longer use fails with this, and the session moves off the login or stops as in the row above. |
+| `the session moved to Ada (work); the continuation prompt may not have been delivered` | The server restarted while a Background session's continuation prompt was being sent, and the session's log does not show it. Check what the session finished before you rely on it. |
+| `permission denied: login <id> of this account is not available to you: its owner turned it off for shares; a kept session cannot change login, so start a new session, or ask the login's owner to turn it on again` | Reopening a session on another member's login that is now off for shares, or automatic off (`its owner turned it automatic off, so only they start sessions on it`). Start a new session. |
+
+The continuation prompt is sent at most once. An Enhanced session whose server
+restarted while sending it shows **The continuation prompt may not have been
+delivered** and sends nothing again: send the session a message if it waits.
+One whose conversation went on before the prompt was sent shows **Continuation
+prompt not sent**.
 
 ## Raise file-watch limits
 

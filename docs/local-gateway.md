@@ -233,7 +233,11 @@ reconnect. A call with no answer after 60 seconds fails with `-32004`
 `server did not answer <method> within 1m0s` and is not retried;
 `home.upload`, `home.download`, `files.upload` and `terminal.file`, which
 carry up to 64 MiB, and `workspace.import`, whose first fetch of a large repository is
-slow, get 15 minutes. Only that call's channel closes: a slow server
+slow, get 15 minutes. `agent.login.result` waits for a Claude Code
+sign-in: up to 10 minutes for its terminal to open, 5 for its container to
+start and 15 for the sign-in after that, so it gets those 30 minutes plus 60
+seconds.
+Only that call's channel closes: a slow server
 handler is not a dead connection, so the connection, its streams and its
 other calls stay up. The keepalive below drops a dead one. A `run.launch`
 the server had not yet admitted when its channel closed starts no session.

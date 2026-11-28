@@ -259,6 +259,28 @@ var usageLimitPrefixes = [...]string{
 	"Your seat type doesn't include extra usage",
 }
 
+// depletionPrefixes are the usage-limit messages that mean a spent balance,
+// not a restriction an administrator or a plan set.
+var depletionPrefixes = [...]string{
+	"You've hit your",
+	"You've reached your",
+	"You're out of usage credits",
+	"You're out of extra usage",
+	"Your org is out of usage",
+}
+
+// IsDepletionMessage reports whether text is a usage-limit message for a
+// spent balance, which another login of the same account may still have.
+func IsDepletionMessage(text string) bool {
+	text = strings.TrimPrefix(text, "Internal error: ")
+	for _, p := range depletionPrefixes {
+		if strings.HasPrefix(text, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsUsageLimitMessage reports whether text is Claude Code's wording for a
 // subscription usage limit.
 func IsUsageLimitMessage(text string) bool {

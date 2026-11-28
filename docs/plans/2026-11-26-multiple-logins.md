@@ -478,7 +478,8 @@ when no usage read gave one.
     forged signal (section 3).
 - **A member's own sessions are not walled from each other.** They share
   the home, so code a session plants there runs in the next container,
-  and a session with sudo can unmount what covers the default login. A
+  and root in a session whose container runtime grants `CAP_SYS_ADMIN` may
+  unmount what covers the default login. A
   compromised or prompt-injected session can therefore reach, in time,
   every login Cloudfield will put that member's sessions on. That is
   today's exposure of the default login, multiplied by the logins marked
@@ -625,3 +626,65 @@ The rewritten sections were reviewed again by Claude Opus
   restriction messages contradicted "as today"; a merge handed logins to
   the survivor's teammates; budgets were described wrongly; removal
   missed a session still starting.
+
+## As built
+
+Built in #1142, #1148, #1149, #1144 and #1143. Where the build differs from
+the plan above:
+
+- A merge moves the absorbed member's login directories after its
+  transaction commits, not in the step that moves the home; a crash between
+  the two, or a move or a member removal that fails to move or delete the
+  directories, is logged and settled by the next start's `ReconcileLogins`,
+  and the merge or removal still succeeds. Moved logins keep their Automatic
+  switch and go after the survivor's own, off for shares; a clashing name is
+  cut to fit 32 characters before its suffix.
+- A sign-in needs the launch permission and is admitted like a launch. Its
+  terminal must open within 10 minutes and its container start within 5; it
+  is stopped 15 minutes after its container started. Pending sign-ins and
+  their outcomes are kept in the server's memory and do not survive a
+  restart.
+- Besides a workspace or server variable, an `apiKeyHelper` or a sign-in
+  variable under `env` in the home's `~/.claude/settings.json` refuses a named
+  added login, and automatic choices skip added logins there. So does an
+  agent definition that gives `claude` its own executable. A launch naming
+  no login on the member's own account, where no login serves without being
+  named, is refused, naming each login and why.
+- In a session on an added login, each variable that signs Claude Code in,
+  and `ANTHROPIC_BASE_URL`, that no workspace or server variable sets is set
+  empty; a set value that does not sign Claude Code in stays.
+  `ANTHROPIC_PROFILE` is always set empty. Only a change of a login's kind is
+  refused; a session that can write a login's directory can put another
+  account's sign-in of the same kind there. A setting written into the home
+  after the launch checks, a repository's `.claude/settings.json` or
+  `.claude/settings.local.json`, and managed settings in an image can still
+  sign Claude Code in.
+- The mask over the legacy `~/.claude/.config.json` is a plain bind and is
+  not inode-checked; the inode check of the other mounts runs once, when the
+  container starts. Session VMs refuse every added login.
+- An Enhanced session's owed continuation prompt is dropped, with a notice
+  in the item log, when a person's prompt reaches the conversation first.
+  Only a session the server cannot reach, a prompt the agent host reports
+  unsent, or a failure to record durably that it is being sent leaves it
+  owed; any other error clears it. A Standard or Background session gets the
+  continuation as the prompt of the command that resumes the conversation.
+- A Background session that a restart finds sending its continuation is
+  settled from its log: ended with "the continuation prompt may not have
+  been delivered" when the log does not show the prompt, resumed when the
+  turn it started was cut short, and otherwise ended as that turn ended.
+- A teammate's run-out signal counts a report the vendor sent in the last 10
+  seconds as a fresh read.
+- A reopened session whose login is gone, off for shares or automatic off
+  for a member who does not own it is refused, not chosen for anew.
+- The owner of a login billed per use is not notified when a teammate's
+  session lands on it; the session's log, the room note and `per_use` on
+  `run.account` say so.
+- Three checks apply only to accounts whose owner keeps login rows, so a
+  member who keeps none sees no change; removing the last added login keeps
+  the default login's row when one of its switches is off: the fresh read of a teammate's
+  signal, the owner check in the revoke sweep, and the login check on wake.
+- The 30-minute pass-over of a login reported run out is kept in memory; a
+  restart forgets it.
+- The run repository's "account changed" check still compares members; a
+  move between one member's logins replaces the container, which the
+  execution check refuses.
