@@ -1,6 +1,7 @@
 package sshd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -416,5 +417,134 @@ func TestAnAssistantLaunchDoesNotWait(t *testing.T) {
 	}
 	if list := e.listed(e.member.ID); len(list) != 0 {
 		t.Fatalf("waiting launches after an assistant launch = %+v, want none", list)
+	}
+}
+
+func (e waitEnv) sessions() int {
+	e.t.Helper()
+	runs, err := e.db.ListRunsByWorkspace(e.t.Context(), e.ws.ID)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return len(runs)
+}
+
+// restart replaces the server with a new one on the same store, as a
+// restart does, and returns it.
+func (e waitEnv) restart() *Server {
+	e.t.Helper()
+	// The admission lock is the process's: one a killed server held is gone.
+	cfg := e.srv.cfg
+	cfg.AuthorizationMu = nil
+	srv, err := New(cfg)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	e.srv = srv
+	return srv
+}
+
+// A server killed after a try claimed a waiting launch and before its
+// session row was written leaves the launch claimed and no session. The
+// next server returns it to waiting and starts it, once.
+func TestAServerKilledBeforeTheSessionExistsStartsTheLaunchOnce(t *testing.T) {
+	e := newWaitEnv(t)
+	first, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: "wait", IdempotencyKey: "k-1", Wait: true})
+	if perr != nil || first.Waiting == nil {
+		t.Fatalf("a launch that asks to wait = %+v, %v", first, perr)
+	}
+	id, before := first.Waiting.ID, e.sessions()
+	created := e.intent(id).CreatedAt
+	e.setRoom(true)
+	// The killed server's try never goes on: it is held where it was until
+	// the test ends, which also lets that server close.
+	stalled, stallEnd := make(chan struct{}), make(chan struct{})
+	e.runs.mu.Lock()
+	e.runs.stalled, e.runs.stallEnd = stalled, stallEnd
+	e.runs.mu.Unlock()
+	killed, pass := e.srv, make(chan struct{})
+	go func() {
+		defer close(pass)
+		killed.startWaitingLaunches(context.WithoutCancel(t.Context()), created.Add(launchRetryEvery))
+	}()
+	<-stalled
+	if _, err := e.db.GetRun(t.Context(), domain.RunID(id)); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the session of a try held before its row = %v, want none", err)
+	}
+	if in := e.intent(id); in.State != domain.IntentStarting {
+		t.Fatalf("a launch being tried = %+v, want it claimed", in)
+	}
+
+	e.runs.mu.Lock()
+	e.runs.stalled = nil
+	e.runs.mu.Unlock()
+	tried := e.launches()
+	srv := e.restart()
+	// The key answers with the waiting launch, not a second one, before
+	// the new server has tried anything.
+	again, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: "wait", IdempotencyKey: "k-1", Wait: true})
+	if perr != nil || again.Waiting == nil || again.Waiting.ID != id || e.launches() != tried {
+		t.Fatalf("the key after the restart = %+v, %v, %d more launches; want the same waiting launch and none", again, perr, e.launches()-tried)
+	}
+	srv.startWaitingLaunches(t.Context(), created.Add(2*launchRetryEvery))
+	in := e.intent(id)
+	if run, err := e.db.GetRun(t.Context(), in.ID); err != nil || in.State != domain.IntentStarted || run.Task != "wait" {
+		t.Fatalf("after the restart: intent %+v, session %+v, %v; want it started as its session", in, run, err)
+	}
+	if e.launches() != tried+1 {
+		t.Fatalf("the new server launched %d times, want once", e.launches()-tried)
+	}
+	srv.startWaitingLaunches(t.Context(), created.Add(3*launchRetryEvery))
+	replay, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: "wait", IdempotencyKey: "k-1", Wait: true})
+	if perr != nil || replay.Run.ID != id || e.launches() != tried+1 {
+		t.Fatalf("a later pass and the key = %+v, %v, %d launches; want the one session and no second launch", replay, perr, e.launches()-tried)
+	}
+	// Were the killed server's try to go on after all, it changes nothing.
+	close(stallEnd)
+	<-pass
+	if in = e.intent(id); in.State != domain.IntentStarted {
+		t.Fatalf("after the dead try ended = %+v, want the launch still started", in)
+	}
+	if got := e.sessions(); got != before+1 {
+		t.Fatalf("the launch became %d sessions, want one", got-before)
+	}
+	if err := killed.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A server killed once the session row exists, while the session is still
+// being provisioned, leaves a started launch: the next server starts
+// nothing for it, and its key answers with that session.
+func TestAServerKilledAfterTheSessionExistsStartsNothingMore(t *testing.T) {
+	e := newWaitEnv(t)
+	first, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: "wait", IdempotencyKey: "k-1", Wait: true})
+	if perr != nil || first.Waiting == nil {
+		t.Fatalf("a launch that asks to wait = %+v, %v", first, perr)
+	}
+	id, before := first.Waiting.ID, e.sessions()
+	created := e.intent(id).CreatedAt
+	e.setRoom(true)
+	provisioning, release := e.runs.blockLaunch()
+	killed := e.srv
+	killed.startWaitingLaunches(t.Context(), created.Add(launchRetryEvery))
+	<-provisioning
+	t.Cleanup(func() {
+		close(release)
+		_ = killed.Close()
+	})
+
+	tried := e.launches()
+	srv := e.restart()
+	srv.startWaitingLaunches(t.Context(), created.Add(2*launchRetryEvery))
+	if in := e.intent(id); in.State != domain.IntentStarted {
+		t.Fatalf("after the restart = %+v, want the launch started", in)
+	}
+	replay, perr := e.launch(e.member.ID, protocol.RunLaunchParams{Task: "wait", IdempotencyKey: "k-1", Wait: true})
+	if perr != nil || replay.Run.ID != id || replay.Waiting != nil || e.launches() != tried {
+		t.Fatalf("the key after the restart = %+v, %v, %d more launches; want its session and no launch", replay, perr, e.launches()-tried)
+	}
+	if got := e.sessions(); got != before+1 {
+		t.Fatalf("the launch became %d sessions, want one", got-before)
 	}
 }
