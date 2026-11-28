@@ -62,10 +62,18 @@ func (c chAPI) shutdownVMM(ctx context.Context) error {
 	return c.call(ctx, http.MethodPut, "vmm.shutdown", nil, nil)
 }
 
-// counters maps each device ID to its counters, such as a disk's read_bytes
-// or a net device's rx_bytes.
-func (c chAPI) counters(ctx context.Context) (map[string]map[string]uint64, error) {
-	var out map[string]map[string]uint64
+// deviceCounters are the counters of one device the engine reports. Cloud
+// Hypervisor sends more, not all of them numbers.
+type deviceCounters struct {
+	RxBytes    uint64 `json:"rx_bytes"`
+	TxBytes    uint64 `json:"tx_bytes"`
+	ReadBytes  uint64 `json:"read_bytes"`
+	WriteBytes uint64 `json:"write_bytes"`
+}
+
+// counters maps each device ID to its counters.
+func (c chAPI) counters(ctx context.Context) (map[string]deviceCounters, error) {
+	var out map[string]deviceCounters
 	return out, c.call(ctx, http.MethodGet, "vm.counters", nil, &out)
 }
 

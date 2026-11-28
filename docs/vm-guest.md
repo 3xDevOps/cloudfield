@@ -570,13 +570,13 @@ which writes `MemoryMax` back from its own state: `systemctl daemon-reload`
 does that, and so does a start or stop of another unit in the slice that
 changes the slice's enabled controllers.
 
-Cloud Hypervisor v54.1 can load that memory on demand instead
+Cloud Hypervisor can load that memory on demand instead
 (`memory_restore_mode=ondemand`): it resumes at once and copies each page in
-through `userfaultfd` on its first use. That mode is not used. It takes a
-page that is already in the guest's memory as loaded
+through `userfaultfd` on its first use. That mode is not used. Through v55.0
+it takes a page that is already in the guest's memory as loaded
 (`UFFDIO_COPY` answers `EEXIST`), so a page anything read before the
 `userfaultfd` was registered keeps the zeros of that read instead of its
-saved bytes. On a hosted runner a host process reads each new process's
+saved bytes. Measured with v54.1: on a hosted runner a host process reads each new process's
 memory through `/proc/<pid>/mem`: of 31 restores of one saved 5 GiB VM
 whose memory file was read from disk, 12 came back with 11 to 419 saved
 pages zeroed at the start of the RAM past 4 GiB, and all 7 such VMs that

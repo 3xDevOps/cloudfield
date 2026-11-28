@@ -48,6 +48,9 @@ func TestKVMGuestFullOfMemoryKeepsItsVM(t *testing.T) {
 	if st.MemoryLimitBytes != limit || st.MemoryBytes > limit/16 {
 		t.Errorf("an idle session uses %d of %d bytes in its stats, want a few MiB of its limit %d", st.MemoryBytes, st.MemoryLimitBytes, limit)
 	}
+	if st.DiskReadBytes == 0 || st.DiskWriteBytes == 0 {
+		t.Errorf("a booted VM's disk counters read %d and wrote %d bytes, want both above zero", st.DiskReadBytes, st.DiskWriteBytes)
+	}
 
 	// The file is larger than the session's limit, so its page cache fills
 	// the session's memory.
