@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	edgeagent "github.com/3xDevOps/cloudfield/internal/edge/agent"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 )
@@ -45,6 +46,9 @@ type EdgeOwner interface {
 	// EdgeState is the edge's last reported state for this server,
 	// edgeproto.StateClaimed or StateUnclaimed, empty until it answers.
 	EdgeState() string
+	// Notices are the notices the edge holding the pinned key signed at
+	// the server's latest enrollment, verified.
+	Notices() (edgeagent.StoredNotices, error)
 	// IssueClaimCode replaces any claim code with a fresh one whose
 	// claim binds the claiming account to the existing admin member
 	// admin.
