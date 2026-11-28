@@ -41,10 +41,15 @@ func (d relayDirectory) Authenticate(ctx context.Context, token string) (edgepro
 // Admit and AdmitClaim record each admission, so that deleting the
 // account reaches every server that may hold its identity.
 func (d relayDirectory) Admit(ctx context.Context, serverID string, account edgeproto.Account) error {
-	if _, err := d.s.Admit(ctx, serverID, account); err != nil {
+	if err := d.Admitted(ctx, serverID, account); err != nil {
 		return err
 	}
 	return d.s.store.RecordReach(ctx, serverID, account)
+}
+
+func (d relayDirectory) Admitted(ctx context.Context, serverID string, account edgeproto.Account) error {
+	_, err := d.s.Admit(ctx, serverID, account)
+	return err
 }
 
 func (d relayDirectory) Known(ctx context.Context, serverID string) error {

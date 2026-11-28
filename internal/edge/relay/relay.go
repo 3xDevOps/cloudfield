@@ -35,6 +35,9 @@ type Directory interface {
 	// serverID, edgeproto.RefusalUnknownServer when serverID is not
 	// claimed, and edgeproto.RefusalNotMember otherwise.
 	Admit(ctx context.Context, serverID string, account edgeproto.Account) error
+	// Admitted answers as Admit does and records nothing: the relay asks
+	// it about connections that are already open.
+	Admitted(ctx context.Context, serverID string, account edgeproto.Account) error
 	// Known returns nil when serverID is claimed at this edge, and
 	// edgeproto.RefusalUnknownServer otherwise.
 	Known(ctx context.Context, serverID string) error

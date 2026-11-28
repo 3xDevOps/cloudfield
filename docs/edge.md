@@ -1854,7 +1854,7 @@ sudo -u aether-edge aether-edge reviewer --login <login> --server-id <server id>
 | Command | Effect |
 | --- | --- |
 | `servers remove` | Forgets the server's claim and directory and refuses new connections. The server learns it is unclaimed when it next connects, which also ends the connections relayed to it before the removal, and its administrator claims it again with a new code |
-| `servers block` | Does what `remove` does, and refuses the id at enrollment with `server is blocked by this edge's operator` |
+| `servers block` | Forgets the claim and directory and refuses new connections as `remove` does, and refuses the id at enrollment with `server is blocked by this edge's operator`; connections relayed to it before the block stay until they close |
 | `accounts block` | Deletes the account's sessions, device tokens and pending sign-ins, and refuses its sign-ins with `account is blocked by this edge's operator`. Servers it owns stay claimed |
 | `accounts delete` | What the person's own deletion does, except that it closes no live connection and each server receives the deletion at its next enrollment. A block stays |
 | `retiring` | Prints who the edge last saw on each origin pair ([Monitoring](#monitoring)). It changes nothing |

@@ -1,10 +1,15 @@
 package relay
 
 import (
+	"errors"
+	"io"
 	"net"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 )
@@ -131,6 +136,22 @@ func TestMemberOfARemovedServerIsCutWhenItEnrollsAgain(t *testing.T) {
 	roundTrip(t, client, server, "the new owner's connection")
 }
 
+// A claim connection is admitted by the server's claim code. The pass at
+// an unclaimed enrollment, which ends ssh connections to a server the edge
+// does not know, leaves it open.
+func TestClaimConnectionOutlivesTheServerEnrollingAgain(t *testing.T) {
+	e := newEnv(t)
+	signer := newSigner(t)
+	a := enroll(t, e, signer)
+	a.attach = true
+	go a.run()
+	_, token := e.addDevice(t, account("7"), "dev-7")
+	client, server := e.connectPath(t, a, edgeproto.ClaimConnectPath(a.id), token)
+
+	enroll(t, e, signer)
+	roundTrip(t, client, server, "the claim connection after its server enrolled again")
+}
+
 // When a server reports that its owner changed or that it has none, the
 // former owner's connection ends, unless the directory names them.
 func TestFormerOwnerIsCutUnlessTheDirectoryNamesThem(t *testing.T) {
@@ -154,16 +175,21 @@ func TestFormerOwnerIsCutUnlessTheDirectoryNamesThem(t *testing.T) {
 				if report == "ownerless" {
 					send(t, a.ws, edgeproto.Ownerless{})
 					eventually(t, "the owner dropped", func() bool { _, ok := e.dir.owner(a.id); return !ok })
-					// The answer to a refused transfer follows the end of
-					// the ownerless report's handling.
-					e.dir.mu.Lock()
-					e.dir.recordErr = edgeproto.Refusal("refused")
-					e.dir.mu.Unlock()
+				} else {
+					id := edgeproto.NewConnID()
+					send(t, a.ws, edgeproto.OwnerTransferred{ID: id, Owner: heir})
+					if got := next[edgeproto.OwnerTransferResult](t, a); got != (edgeproto.OwnerTransferResult{ID: id, Owner: heir}) {
+						t.Fatalf("transfer answered %+v, want it recorded", got)
+					}
 				}
-				id := edgeproto.NewConnID()
-				send(t, a.ws, edgeproto.OwnerTransferred{ID: id, Owner: heir})
-				if got := next[edgeproto.OwnerTransferResult](t, a); got.ID != id || (got.Error == "") != (report == "transfer") {
-					t.Fatalf("transfer answered %+v", got)
+				// The answer to a refused transfer follows the end of the
+				// report's handling, the pass over the connections included.
+				e.dir.mu.Lock()
+				e.dir.recordErr = edgeproto.Refusal("refused")
+				e.dir.mu.Unlock()
+				send(t, a.ws, edgeproto.OwnerTransferred{ID: edgeproto.NewConnID(), Owner: heir})
+				if got := next[edgeproto.OwnerTransferResult](t, a); got.Error == "" {
+					t.Fatalf("the second transfer answered %+v, want it refused", got)
 				}
 				if named {
 					roundTrip(t, client, server, "the former owner's connection, a member's still")
@@ -172,5 +198,66 @@ func TestFormerOwnerIsCutUnlessTheDirectoryNamesThem(t *testing.T) {
 				endedAs(t, server, edgeproto.RefusalNotMember)
 			})
 		}
+	}
+}
+
+// A connection whose access the edge cannot check ends, and the pass goes
+// on to the others.
+func TestConnectionTheEdgeCannotCheckIsEnded(t *testing.T) {
+	e := newEnv(t)
+	e.r.directoryInterval = 50 * time.Millisecond
+	a := claimedAgent(t, e)
+	alice, bob := account("1"), account("2")
+	e.dir.addMember(a.id, alice)
+	e.dir.addMember(a.id, bob)
+	_, aliceToken := e.addDevice(t, alice, "alice-laptop")
+	_, bobToken := e.addDevice(t, bob, "bob-laptop")
+	_, bobServer := e.connect(t, a, bobToken)
+	aliceClient, aliceServer := e.connect(t, a, aliceToken)
+
+	e.dir.mu.Lock()
+	e.dir.admittedErr = map[edgeproto.Principal]error{edgeproto.AccountPrincipal(bob): errors.New("store unavailable")}
+	e.dir.mu.Unlock()
+	both := []edgeproto.DirectoryEntry{
+		{Kind: edgeproto.EntryMember, Provider: alice.Provider, Subject: alice.Subject, Role: "admin"},
+		{Kind: edgeproto.EntryMember, Provider: bob.Provider, Subject: bob.Subject, Role: "admin"},
+	}
+	send(t, a.ws, edgeproto.Directory{Entries: both})
+	_ = bobServer.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := bobServer.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("the connection the edge could not check read %v; want it closed", err)
+	}
+	send(t, a.ws, edgeproto.Directory{Entries: append(both, later.Entries...)})
+	e.stores(t, 2)
+	roundTrip(t, aliceClient, aliceServer, "a checked member's connection")
+}
+
+// A connect the edge admitted before a directory dropped its account
+// registers after that directory's pass. It is checked again before the
+// server hears of it.
+func TestConnectAdmittedBeforeItsAccountWasDroppedIsRefused(t *testing.T) {
+	e := newEnv(t)
+	a := claimedAgent(t, e)
+	bob := account("2")
+	e.dir.addMember(a.id, bob)
+	_, token := e.addDevice(t, bob, "bob-laptop")
+	e.dir.mu.Lock()
+	e.dir.admitHook = func() {
+		e.dir.mu.Lock()
+		defer e.dir.mu.Unlock()
+		// The next Authenticate is the one after the connection registered.
+		e.dir.authHook = func() {
+			e.dir.mu.Lock()
+			defer e.dir.mu.Unlock()
+			e.dir.dirs[a.id] = nil
+		}
+	}
+	e.dir.mu.Unlock()
+	ws, resp, err := websocket.Dial(t.Context(), e.wsBase+edgeproto.ConnectPath(a.id), &websocket.DialOptions{HTTPHeader: bearerHeader(token)})
+	if ws != nil {
+		_ = ws.CloseNow()
+	}
+	if err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("a connect whose account was dropped while it opened: %v, %+v; want it refused as not a member", err, resp)
 	}
 }

@@ -279,11 +279,15 @@ func (r *Relay) register(kind, serverID string, account edgeproto.Account, devic
 // Revoking a device deletes its token and then closes the device's
 // connections in r.conns. c is in r.conns already, so a revocation that
 // raced serveConnect's token check is caught by that close or by this
-// check.
+// check; a directory or an owner that changed since serveConnect admitted
+// an ssh connection is caught by revoke or by the second check here.
 func (r *Relay) attachDevice(ctx context.Context, c *relayConn, msg edgeproto.Open, token string) (net.Conn, error) {
 	actx, cancel := context.WithTimeout(ctx, directoryTimeout)
 	_, _, err := r.dir.Authenticate(actx, token)
 	cancel()
+	if err == nil && c.kind == edgeproto.KindSSH {
+		err = r.admitted(ctx, c)
+	}
 	if err != nil {
 		c.cancel(err)
 		r.drop(c)

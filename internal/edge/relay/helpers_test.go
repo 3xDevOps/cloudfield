@@ -37,6 +37,9 @@ type fakeDir struct {
 	admitHook func()
 	// replaceHook, when set, runs at the start of every ReplaceDirectory.
 	replaceHook func()
+	// admittedErr fails Admit and Admitted for a principal, as a store
+	// that cannot be read does.
+	admittedErr map[edgeproto.Principal]error
 	// authHook, when set, runs once at the start of the next Authenticate.
 	authHook   func()
 	unenrolled []string
@@ -76,11 +79,9 @@ func (d *fakeDir) Authenticate(_ context.Context, token string) (edgeproto.Accou
 	return e.account, e.device, nil
 }
 
-// Admit reads members only, so a test can admit an account to a server
-// the relay itself must still refuse.
 // Admit admits as the edge's service does: the server's owner, and an
 // account its stored directory names.
-func (d *fakeDir) Admit(_ context.Context, serverID string, a edgeproto.Account) error {
+func (d *fakeDir) Admit(ctx context.Context, serverID string, a edgeproto.Account) error {
 	d.mu.Lock()
 	hook := d.admitHook
 	d.admitHook = nil
@@ -88,8 +89,15 @@ func (d *fakeDir) Admit(_ context.Context, serverID string, a edgeproto.Account)
 	if hook != nil {
 		hook()
 	}
+	return d.Admitted(ctx, serverID, a)
+}
+
+func (d *fakeDir) Admitted(_ context.Context, serverID string, a edgeproto.Account) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if err := d.admittedErr[edgeproto.AccountPrincipal(a)]; err != nil {
+		return err
+	}
 	entries, known := d.dirs[serverID]
 	if !known && !d.owners[serverID] {
 		return edgeproto.RefusalUnknownServer
