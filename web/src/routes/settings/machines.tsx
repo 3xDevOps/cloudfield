@@ -28,6 +28,8 @@ type CapacityClient = Pick<Api, 'serverCapacity'>
 function useCapacity(client: CapacityClient) {
   const connection = useStore((s) => s.connection)
   const identity = useStore((s) => s.identityKey)
+  // A super admin's answer names sessions and server errors a demoted member must not keep seeing.
+  const role = useStore((s) => s.info?.member.role)
   const [result, setResult] = useState<ServerCapacity | null>(null)
   const [readAt, setReadAt] = useState('')
   const [error, setError] = useState('')
@@ -38,7 +40,7 @@ function useCapacity(client: CapacityClient) {
   useEffect(() => {
     setResult(null)
     setError('')
-  }, [identity])
+  }, [identity, role])
 
   useEffect(() => {
     const onChange = () => setShown(document.visibilityState === 'visible')
@@ -50,37 +52,45 @@ function useCapacity(client: CapacityClient) {
     if (connection !== 'live' || !shown) return
     let stopped = false
     let timer: ReturnType<typeof setTimeout> | undefined
+    const abort = new AbortController()
+    let failures = 0
     const read = async () => {
       try {
-        const next = await client.serverCapacity()
+        const next = await client.serverCapacity(abort.signal)
         if (stopped) return
+        failures = 0
         setResult(next)
         setReadAt(new Date().toISOString())
         setError('')
       } catch (err) {
         if (stopped) return
+        failures++
         setError(message(err))
+        // A server that does not know the method never will: Try again asks once more.
+        if (message(err).includes('method not found')) return
       } finally {
         if (!stopped) setAsked(false)
       }
-      timer = setTimeout(() => void read(), readEveryMs)
+      // A failing server is asked less often, up to once a minute.
+      timer = setTimeout(() => void read(), Math.min(readEveryMs * 2 ** failures, 60_000))
     }
     void read()
     return () => {
       stopped = true
+      abort.abort()
       clearTimeout(timer)
     }
-  }, [client, connection, shown, identity, reads])
+  }, [client, connection, shown, identity, role, reads])
 
   const refresh = useCallback(() => {
     setAsked(true)
     setReads((n) => n + 1)
   }, [])
-  return { result, readAt, error, reading: asked, refresh }
+  return { result, readAt, error, reading: asked, refresh, live: connection === 'live' }
 }
 
 export function MachinesSection({ client = api }: { client?: CapacityClient }) {
-  const { result, readAt, error, reading, refresh } = useCapacity(client)
+  const { result, readAt, error, reading, refresh, live } = useCapacity(client)
   const failed = error && (
     <Callout tone="failed" role="alert" title={result ? 'Could not read the machine; the figures below are from the last good read' : 'Could not read the machine'} actions={<TryAgain onClick={refresh} />}>
       <p className="font-code text-ui-sm whitespace-pre-wrap [overflow-wrap:anywhere]">{error}</p>
@@ -89,27 +99,31 @@ export function MachinesSection({ client = api }: { client?: CapacityClient }) {
   if (!result) {
     return (
       <SettingsSection title="The server's machine" id="machine">
-        <SettingRow label="Machine capacity" help={error ? null : 'Reading the machine…'}>{failed}</SettingRow>
+        <SettingRow label="Machine capacity" help={error ? null : live ? 'Reading the machine…' : 'Not connected to the server, so the machine is not read.'}>{failed}</SettingRow>
       </SettingsSection>
     )
   }
-  return <Machine result={result} readAt={readAt} failed={failed} reading={reading} refresh={refresh} />
+  return <Machine result={result} readAt={readAt} failed={failed} reading={reading} refresh={refresh} live={live} />
 }
 
-function Machine({ result: r, readAt, failed, reading, refresh }: { result: ServerCapacity; readAt: string; failed: ReactNode; reading: boolean; refresh: () => void }) {
+function Machine({ result: r, readAt, failed, reading, refresh, live }: { result: ServerCapacity; readAt: string; failed: ReactNode; reading: boolean; refresh: () => void; live: boolean }) {
   const refused = refusalNow(r)
+  // stall_error joins the server's own read, whose failure refuses a launch, with the host's, which does not.
+  const unknown = refused === null && r.stall_error !== undefined && r.stall_error !== '' && r.server_stall === undefined
   return (
     <>
       <SettingsSection title="The server's machine" id="machine">
         <SettingRow
           label="Can a session launch now?"
-          help={<>Read <RelativeTime at={readAt} />, and again every {readEveryMs / 1000} seconds while this page is open.</>}
-          control={<Button size="sm" variant="secondary" disabled={reading} onClick={refresh}><RefreshCw />Refresh</Button>}
+          help={live
+            ? <>Read <RelativeTime at={readAt} />, and again every {readEveryMs / 1000} seconds while this page is open. The lines below are the least a launch needs: starts under way need more, and the server can free room for one.</>
+            : <>Last read <RelativeTime at={readAt} />. Not connected to the server, so this is not read again until it is.</>}
+          control={<Button size="sm" variant="secondary" disabled={reading || !live} onClick={refresh}><RefreshCw />Refresh</Button>}
         >
           <p className="flex items-start gap-2 text-ui">
-            {refused === null ? <Badge tone="done">Fits</Badge> : <Badge tone="failed">Refused</Badge>}
+            {unknown ? <Badge>Not known</Badge> : refused === null ? <Badge tone="done">Fits</Badge> : <Badge tone="failed">Refused</Badge>}
             <span className="min-w-0 flex-1">
-              {refused ?? fits(r)}
+              {unknown ? 'A memory stall could not be read. If it is the server\u2019s own, every launch is refused; the error is below.' : refused ?? fits(r)}
             </span>
           </p>
           {failed}
@@ -143,10 +157,7 @@ function fits(r: ServerCapacity): string {
 
 /** Why a launch would be refused now, as a sentence, or null when it would start. */
 function refusalNow(r: ServerCapacity): string | null {
-  // stall_error joins the server's own read, whose failure refuses a
-  // launch, with the host's, which does not: with no server figure it is
-  // taken as the server's.
-  const unmeasured = [r.memory_error && 'memory', r.disk_error && !r.disk_unchecked && 'disk or the runtime', r.stall_error && r.server_stall === undefined && "the server's memory stall"].filter((w): w is string => Boolean(w))
+  const unmeasured = [r.memory_error && 'memory', r.disk_error && !r.disk_unchecked && 'disk or the runtime'].filter((w): w is string => Boolean(w))
   const short: string[] = []
   if (!r.memory_error && r.memory_available_bytes < r.memory_floor_bytes + r.start_memory_bytes) short.push('memory is under the launch line')
   if (r.server_stall !== undefined && r.server_stall >= r.server_stall_limit) short.push("the server's memory stall is at its limit")
@@ -218,7 +229,8 @@ function StallRow({ r }: { r: ServerCapacity }) {
         ? <span className="text-muted">Not measured: {failed || missing}.</span>
         : (
             <span className={cn('tabular-nums', value >= limit ? 'text-state-failed' : 'text-muted')}>
-              {value.toFixed(1)}% · {acts}
+              {/* Rounded down, so a figure under its limit never reads as at it. */}
+              {(Math.floor(value * 10) / 10).toFixed(1)}% · {acts}
             </span>
           )}
     </li>
@@ -340,8 +352,9 @@ function idleShare(counts: ServerCapacityCount[]): string {
   const refusals = counts.filter(memoryRefusal)
   const used = refusals.reduce((sum, c) => sum + (c.used_bytes ?? 0), 0)
   if (used === 0) return '–'
-  // A refusal counted while memory could not be read adds idle bytes and no used ones.
-  return `${Math.min(100, Math.round((100 * refusals.reduce((sum, c) => sum + (c.idle_hour_bytes ?? 0), 0)) / used))}%`
+  const idle = refusals.reduce((sum, c) => sum + (c.idle_hour_bytes ?? 0), 0)
+  // A refusal counted while memory could not be read adds idle bytes and no used ones: no share can be given.
+  return idle > used ? '–' : `${Math.round((100 * idle) / used)}%`
 }
 
 /** The figure columns of both Counted tables, one width so their figures line up. */

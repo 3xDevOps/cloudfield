@@ -5633,8 +5633,9 @@ and applies again once there is room. Sections (`details.tsx`):
   error is waiting for room on the server: it reads **Waiting to start**
   with the waiting dot, the server's refusal text verbatim in a neutral
   box, **Open Machines**, which opens Settings › Machines when the
-  server answers `server.capacity`, and `Starts on its own when the server
-  has room.`; any other error is in the failed colour. **Open** opens a started subsession. Under the list: the cost of this session and all its
+  server answers `server.capacity`, and `The server tries it again until it
+  has room, for up to 24 hours from the request.`; any other error is in the
+  failed colour. **Open** opens a started subsession that is not waiting. Under the list: the cost of this session and all its
   descendants, "At least $X: N sessions report no cost" when some are unmetered
   and "Cost not reported" when none are metered, never $0; the split by
   paying account; tokens; and "1 of 8 busy, 1 queued" against the
