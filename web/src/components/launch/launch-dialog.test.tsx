@@ -235,6 +235,20 @@ describe('saved launch draft', () => {
     await waitFor(() => expect(useStore.getState().launchDraft).toBeNull())
   })
 
+  it('asks a server that keeps launches to wait, and opens the waiting launch when it has no room', async () => {
+    useStore.setState({ info: { ...serverInfo, features: ['launch-wait'] } })
+    vi.mocked(api.runLaunchOrWait).mockResolvedValue({
+      waiting: { id: 'run-w', workspace_id: workspace.id, harness: 'claude', state: 'waiting', refusal: 'scheduler: insufficient host memory headroom', attempts: 0, passed: 0, created_at: '2026-11-27T22:00:00Z', expires_at: '2026-11-28T22:00:00Z' },
+    })
+    render(<PaletteDialogs />)
+    await waitFor(() => expect(launchButton().disabled).toBe(false))
+    fireEvent.click(launchButton())
+    await waitFor(() => expect(api.runLaunchOrWait).toHaveBeenCalledOnce())
+    expect(api.runLaunch).not.toHaveBeenCalled()
+    await waitFor(() => expect(useStore.getState().route).toMatchObject({ name: 'run', params: { runId: 'run-w' } }))
+    expect(useStore.getState().runs['run-w']).toBeUndefined()
+  })
+
   it('keeps the task and refusal when a collapsed launch fails', async () => {
     let refuse!: (reason: Error) => void
     vi.mocked(api.runLaunch).mockImplementation(() => new Promise((_, reject) => { refuse = reject }))

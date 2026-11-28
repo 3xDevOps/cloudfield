@@ -2584,3 +2584,25 @@ export interface LinearIssue {
   assignee?: { name: string }
   updated_at?: string
 }
+
+/** A launch the server keeps because it has no memory or disk for it. It is
+ * not a session until `state` is `started`, when `id` is its session's. */
+export interface LaunchWaiting {
+  id: string
+  workspace_id: string
+  harness: string
+  task?: string
+  state: 'waiting' | 'starting' | 'started' | 'cancelled' | 'expired' | 'refused'
+  /** The server's last refusal, or why a launch that did not start ended. */
+  refusal: string
+  attempts: number
+  /** Launches the server admitted while this one waited. */
+  passed: number
+  idempotency_key?: string
+  created_at: string
+  expires_at: string
+  ended_at?: string
+}
+
+/** The `server.info` feature of a server that keeps launches with `wait`. */
+export const launchWaitFeature = 'launch-wait'

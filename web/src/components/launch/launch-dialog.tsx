@@ -21,7 +21,8 @@ import { LoaderCircle, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Callout } from '@/components/ui/callout'
 import { SlideOut } from '@/components/ui/slide-out'
-import { api } from '@/lib/api'
+import { api, type RunLaunchParams } from '@/lib/api'
+import { launchWaitFeature } from '@/lib/types'
 import { useClock } from '@/lib/clock'
 import { mobileScreen, useIsMobile } from '@/lib/breakpoints'
 import { message } from '@/lib/format'
@@ -106,6 +107,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const serverLimits = useServerRunLimits(api, limitsOffered)
   const [limits, setLimits] = useState(restored?.limits ?? emptyLimits)
   const permissionOffered = features?.includes(permissionFeature) ?? false
+  const launchWaits = features?.includes(launchWaitFeature) ?? false
   const [permission, setPermission] = useState<Permission>(restored?.permission ?? 'default')
   // A saved choice read after the member picked a tier must not replace it.
   const permissionPicked = useRef(false)
@@ -264,7 +266,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
     if (Object.keys(parsedLimits.limits).length && serverLimits.limits === null) {
       throw new Error(`Session limits need a server that answers server.run_limits: ${serverLimits.error ?? 'still reading the server limits, try again in a moment'}`)
     }
-    const run = await api.runLaunch({
+    const params: RunLaunchParams = {
       workspace_id: workspaceID,
       harness,
       ...(trimmed ? { task: trimmed } : {}),
@@ -278,13 +280,17 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
       ...extraRepos,
       ...(childRunsOffered && childRuns && mode !== 'headless' ? { children: childRuns } : {}),
       ...(Object.keys(parsedLimits.limits).length ? { limits: parsedLimits.limits } : {}),
-    })
+    }
+    // A server that keeps a launch it has no room for is asked to: the
+    // launch then waits, with the server's refusal, instead of failing.
+    const { run, waiting } = launchWaits ? await api.runLaunchOrWait(params) : { run: await api.runLaunch(params), waiting: undefined }
     if (!signedIn()) return
     rememberChoice(harness, mode, chosenModel)
-    upsertRun(run)
+    if (run) upsertRun(run)
     if (useStore.getState().launchDraft?.id === draftID) discard()
-    navigate('run', { runId: run.id })
-    toast.success('Session launched')
+    navigate('run', { runId: run?.id ?? waiting?.id ?? '' })
+    if (run) toast.success('Session launched')
+    else toast.message('The server has no room yet. The launch waits and starts by itself.')
   }
 
   const submit = async () => {

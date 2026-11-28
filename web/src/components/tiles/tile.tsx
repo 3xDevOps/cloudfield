@@ -64,7 +64,7 @@ export function Tile({ tile, phone, rect, parked, opening, narrow, room, linked,
         {!phone && <TabStrip tile={tile} opening={opening} narrow={narrow} room={room} />}
         {tab ? (
           <TabsContent ref={slot} value={tab.id} forceMount className="relative flex-1" {...(phone && { role: undefined, tabIndex: undefined, 'aria-labelledby': undefined })}>
-            {!run && <MissingRun tiled={!phone} />}
+            {!run && <MissingRun tiled={!phone} runId={tab.runId} />}
           </TabsContent>
         ) : (
           <div className={cn('flex min-h-0 flex-1 justify-center p-6', opening && 'opacity-0')}>
