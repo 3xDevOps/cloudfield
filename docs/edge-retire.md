@@ -6,7 +6,8 @@
 - A **retiring** pair works in full and says where to go: its edge pages
   show `This address of the edge is retiring on <date>. Its new address is
   <address>`, its answers carry the header `aether-edge-retiring: <new
-  relay origin>; date=<date>` (read it from `GET /v1/edge`), and on a
+  relay origin>; date=<date>` (read it from `GET /v1/edge`; `GET /healthz`
+  and `OPTIONS *` carry none), and on a
   server enrolled there `sudo cloudfield-server edge status` prints a
   `retiring` row with the command that moves it
   ([Moving a server](#moving-a-server)).
@@ -113,7 +114,10 @@ A build from before edge protocol 6 also serves connectors only at the
 address it is enrolled at. A connector added at the new address is then
 refused with `invalid_target`, `resource must be
 https://edge-old.example.com/mcp`, or `.../mcp/<server id>` for a server's
-own URL, until the server is updated (step 1).
+own URL, until the server is updated (step 1). At `/mcp`, a build from
+before edge protocol 4 is instead listed as `its aether-server is too old
+for this URL; an admin runs sudo aether-server update` and cannot be
+chosen.
 
 1. Update the server ([install.md](install.md#update-the-server)). The
    update restarts the service, which ends every relayed connection. It
@@ -145,7 +149,7 @@ own URL, until the server is updated (step 1).
    and adds `to move back:` with `sudo aether-server edge move
    https://edge-old.example.com`. With another options file, pass `--config
    <file>` after the address. A refusal prints one line, exits 1 and writes
-   nothing; the refusals are listed in
+   nothing on the server; the refusals are listed in
    [edge.md](edge.md#moving-to-another-address-of-the-edge).
 
 3. Apply it. The restart ends every relayed connection; clients connect
@@ -339,7 +343,7 @@ under the platform's config directory, which on Linux is
 ```sh
 d=${CLOUDFIELD_CONFIG_DIR:-${AETHER_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}}}
 [ -d "$d/cloudfield" ] && d=$d/cloudfield || d=$d/aether
-(umask 077; set -C; cat "$d/config.json" > "$d/config.json.before-move") &&
+[ -f "$d/config.json" ] && (umask 077; set -C; cat "$d/config.json" > "$d/config.json.before-move") &&
   cmp "$d/config.json" "$d/config.json.before-move" && echo "kept $d/config.json.before-move"
 jq -r '.edges | to_entries[] | "\(.key)  \(.value.account.login // .value.account.email)"' "$d/edge-tokens.json"
 jq '{default: {addr, key, edge_url, server_id}, links: [.links[]? | {name, addr, edge_url, server_id}]}' "$d/config.json"
@@ -348,9 +352,12 @@ cloudfield servers --edge https://edge-old.example.com
 
 No command prints a token. The second line keeps the whole links file,
 which the steps below rewrite, and must print `kept <file>`: go on only
-then. `set -C` refuses to overwrite: an error that the file exists means
-a copy from an earlier attempt is there. That copy is the original: keep
-it, and do not make another. The first `jq` prints each relay origin this
+then. It prints nothing on a computer that signed in and never linked,
+which has no `config.json` and nothing for step 2 to move. `set -C`
+refuses to overwrite: an error that the file exists means an earlier
+attempt left a file there. If that attempt printed `kept`, the file is
+the original: keep it, and do not make another. The first `jq` prints
+each relay origin this
 computer holds a token for, as the token file spells it, and the account.
 The second
 prints the default link, which is the top-level fields of `config.json`,
@@ -358,7 +365,9 @@ and each saved link: its name, direct address, edge address and server
 id. Note every entry that names the old relay host, and the whole default
 link. `https://edge-old.example.com:443` is the same address as
 `https://edge-old.example.com`, and the token file keeps the spelling it
-was signed in with: note it as printed. The last command asks the edge: it lists
+was signed in with: note it as printed, and give `--edge` that spelling
+in the last command, which under another finds no token and answers `not
+signed in to edge-old.example.com`. That command asks the edge: it lists
 your servers when the token for the old address still works. An entry in
 the file does not show that.
 
@@ -438,7 +447,10 @@ are these:
    4. Run the `jq` line for `config.json` again. Link any entry that still
       names the old address with `--name <its name>`, then repeat 3.
    5. A default link with no `server_id` was a direct link, which the
-      links above replaced without saving. Never restore it with
+      links above replaced without saving, or which, where its
+      `known_hosts` file holds, for its address, the host key of the first
+      server linked above, became that server's edge link. Never restore
+      it with
       `cloudfield link <addr>`: that dials before any `known_hosts` of
       the old link is back, checks the host key against
       `~/.ssh/known_hosts`, and trusts and records a host it does not
@@ -453,8 +465,10 @@ are these:
    What `link` does not carry over: except when it relinks the server the
    default link already names, it writes the link anew, without the
    `repo`, `known_hosts`, `user` and `key` the link had, and the default
-   link without `gui_server`. Compare with the copy and put back by hand,
-   in an editor, what differs beside `edge_url`:
+   link without `gui_server`. A `config.json` whose default link has
+   neither `addr` nor `server_id`, saved links only, is not read: the
+   first `link` writes it without them. Compare with the copy and put back
+   by hand, in an editor, what differs beside `edge_url`:
 
    ```sh
    diff <(jq -S . "$d/config.json.before-move") <(jq -S . "$d/config.json")
@@ -566,10 +580,15 @@ Device <device id> may still be signed in; revoke it on https://auth-new.example
 still signed in to edge-new.example.com; sign out there with: aether logout --edge https://edge-new.example.com
 ```
 
-A retired address answers `410` before it reads a token, so the refusal
-does not say whether the edge still holds this one. Revoke the device on
-the page the second line names, and never try the old token at another
-address. That line names
+A retired address answers `410` before it reads a token, so the CLI
+cannot tell whether the edge still holds this one. Revoke nothing on the
+page the second line names. That page shows no device id: a row is a
+label, a key fingerprint and the times it signed in and was last used,
+and the row with this computer's key there is its new sign-in, whose
+**Revoke** ends the access step 1 set up. The edge deleted the old token
+when the pair was retired, unless it had recorded it at a sign-in host
+that is still served ([At the retired start](#at-the-retired-start)).
+Never try the old token at another address. The second line names
 the sign-in origin this computer recorded when it signed in at the new
 address. Without that sign-in it ends `revoke it on the Devices page of the
 sign-in origin of https://edge-new.example.com` when this computer knows the
@@ -779,7 +798,7 @@ Entries are comma-separated. Every check is in
    date=2027-03-01`. From this start, and while this option or
    `--retired-pairs` stays set, it records the pair each device token and
    session is issued at, for one issued earlier the pair it is next used
-   at, and the pair each server enrolls at. A device sign-in that was
+   at, and the pair each claimed server enrolls at. A device sign-in that was
    pending at that restart, started before the edge recorded, is deleted
    and its person runs `cloudfield login` again.
 2. Wait while people move, at least 30 days. A device token never expires,
@@ -791,8 +810,9 @@ Entries are comma-separated. Every check is in
    A run with neither option, or of an image from before them, stops the
    recording: what it issues has no origin. Step 4 deletes it too, unless
    it was used once at a pair that stays after recording began again: any
-   request with the token records it there, a `cloudfield servers`
-   included. A connector request records only its server and relay
+   request the edge checks the token on records it there, a `cloudfield
+   servers` included; `GET /v1/edge` checks none. A connector request
+   records only its server and relay
    origin, and gives no token an origin.
 3. If the old pair is the first pair (`--signin-origin`, `--relay-origin`,
    `--github-client-id`), swap: make the new pair the first, move the old
@@ -807,8 +827,9 @@ Entries are comma-separated. Every check is in
 5. Keep the `--retired-pairs` entry for good, after the DNS records are gone
    too.
 
-Skip step 1 and step 4 refuses, when the database holds any sign-in with no
-recorded origin:
+Skip step 1 and step 4 refuses, when the edge has never recorded, for
+this pair or another, and the database holds any sign-in with no recorded
+origin:
 
 ```
 aether-edge: edge: --retired-pairs would delete, on every pair, the sign-ins with no recorded origin (device tokens <n>, browser sessions <n>, pending device sign-ins <n>), since this edge has never recorded which pair issued them. Serve the pair again (in --origin-pairs, with --retired-pairs unset) and run it with --retiring-pairs naming the pair, for as long as you give people to move, such as 30 days: each token or session used in that time is recorded and kept. A shorter run lets this start pass but signs out everyone who did not use the edge during it
@@ -961,9 +982,9 @@ whose recorded sign-in origin:
 - is missing, on every pair: the row was issued while the edge did not
   record and has not been used since while it did.
 
-It keeps every row recorded at a sign-in origin that stays, issued there
-or first seen there, used since or not: when a token was last used plays
-no part. Then it logs:
+It keeps every device token and session recorded at a sign-in origin that
+stays, issued there or first seen there, used since or not: when a token
+was last used plays no part. Then it logs:
 
 ```
 edge: deleted the sign-ins of retired pairs and those with no recorded origin devices=<n> sessions=<n> authorizations=<n>
@@ -980,9 +1001,12 @@ and in [edge.md](edge.md#retired), deleted nothing; it serves no pair
 until the options are put right.
 
 A retired host answers `410` before it reads a token, so a `410` says
-nothing about whether a token was deleted. A device that may still hold a
-valid one is revoked on the Devices page (`/devices`) of the sign-in
-origin that stays, never by sending its token to another host.
+nothing about whether a token was deleted; never send one to another
+host to find out. The Devices page (`/devices`) of the sign-in
+origin that stays lists an account's remaining tokens by label, key
+fingerprint, sign-in time and last use, without device ids: a person who
+signed in again there has a row for the new token, and nothing to revoke
+for one this start deleted.
 
 Check both old hosts from outside:
 
@@ -1024,24 +1048,24 @@ to an image that has both options (`aether-edge serve -h` lists
   between at a pair that stays while an image with the options recorded.
   It sends servers no notice, so a server cannot move itself off a
   retired address, and it answers a retired host `421`, not `410`, except
-  on `/healthz`.
-- A backup from before step 1 has no recorded origin on any row and no
-  record that the edge recorded, so an edge with `--retired-pairs` refuses
-  to start on it while it holds a sign-in, with the refusal under
-  [Order](#order).
+  to `GET /healthz` and `OPTIONS *`.
+- A backup from before the edge first recorded, for any pair, has no
+  recorded origin on any row and no record that the edge recorded, so an
+  edge with `--retired-pairs` refuses to start on it while it holds a
+  sign-in, with the refusal under [Order](#order).
 - On a backup taken while the pair was retiring the edge starts and
   deletes the same sign-ins again. A restore brings back only the rows
-  the backup holds: of the device tokens revoked since, those recorded at
-  a pair that stays are valid again, and the start deletes the others
-  with the retired pair's. It loses the accounts, sign-ins and claims
+  the backup holds: of the device tokens revoked since, the start deletes
+  again those of the retired pair and those with no recorded origin, and
+  the others are valid again. It loses the accounts, sign-ins and claims
   made since ([edge.md](edge.md#backup-and-recovery)).
-- An image without the options accepts every restored token at every
-  served pair.
+- An image without the options deletes none of the restored tokens.
 
 Take a backup right before step 4 and another once its checks pass.
 `aether-edge backup` copies `edge.db` only; `--with-key` also copies the
-edge key, a separate file the edge does not start without. Only the
-private key restores an edge. Check the offline copy by the fingerprint
+edge key, a separate file without which the edge refuses to start on a
+database that holds an account or a claimed server. Only the private key
+restores an edge. Check the offline copy by the fingerprint
 derived from it, not by its presence:
 
 ```sh
