@@ -85,7 +85,7 @@ func (s *Scheduler) applyRunOwnership(ws *domain.Workspace, run *domain.Run, hom
 			continue
 		}
 		if m.Subpath != "" {
-			if !s.addedLoginPath(m.HostPath) {
+			if owner, ok := s.addedLoginPath(m.HostPath); !ok || (owner != "" && owner != home) {
 				continue
 			}
 			if err := chownSubpath(m.HostPath, m.Subpath, uid, gid); err != nil {
@@ -141,7 +141,8 @@ func (s *Scheduler) applyLoginOwnership(entry *supervised, login domain.MemberID
 		return err
 	}
 	for _, m := range mounts {
-		if m.ReadOnly || m.Subpath == "" || m.HostPath != loginHome {
+		owner, added := s.addedLoginPath(m.HostPath)
+		if m.ReadOnly || m.Subpath == "" || (m.HostPath != loginHome && (!added || owner != login)) {
 			continue
 		}
 		if err := chownSubpath(m.HostPath, m.Subpath, uid, gid); err != nil {

@@ -225,6 +225,12 @@ type Scheduler struct {
 	// for it so overdue steers cannot claim before recovered PTYs are injectable.
 	recoveryReady     chan struct{}
 	recoveryReadyOnce sync.Once
+	// retainedListed is set once a pass over the terminal sidecars has read
+	// every one, so every retained container is in runs. Until then
+	// retainedUnread holds the latest pass's first sidecar it could not
+	// settle, with why.
+	retainedListed atomic.Bool
+	retainedUnread atomic.Value
 	// recovering is set while Start recovers runs.
 	recovering atomic.Bool
 	// superCtx bounds every supervision goroutine; cancelling it never stops a
@@ -411,6 +417,9 @@ type supervised struct {
 	// loginMember is the account owner whose login paths the container
 	// mounts; empty when none.
 	loginMember domain.MemberID
+	// loginID is loginMember's added login the container mounts; empty for
+	// their default login.
+	loginID domain.LoginID
 	// verifiedLogins are the account owners whose own login a container of
 	// this run was started with, as the runtime confirmed at start.
 	verifiedLogins []domain.Account
@@ -847,6 +856,7 @@ func New(cfg Config) (*Scheduler, error) {
 		slog.Warn("scheduler: remove the old one-VM-session records", "error", err)
 	}
 	s.useOMPBroker(cfg.OMPBrokers)
+	s.wg.Go(func() { s.countCapacityEvents(ctx) })
 	return s, nil
 }
 
@@ -920,7 +930,6 @@ func (s *Scheduler) Start(ctx context.Context) error {
 		defer close(memoryWatched)
 		s.watchVMMemory(watchCtx)
 	}()
-	go s.countCapacityEvents(watchCtx)
 	defer func() {
 		stopWatch()
 		<-watched

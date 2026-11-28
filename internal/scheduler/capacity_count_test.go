@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -94,6 +95,12 @@ func TestAGuardSaveAndARefusedWakeAreCounted(t *testing.T) {
 	if refused := e.counted(t, domain.CapacityRefusal, opWake, "memory", 1); refused.LastRun != run {
 		t.Fatalf("counted wake refusal = %+v, want it to name the session", refused)
 	}
+	// A wake the guard tries by itself is counted apart from one asked for.
+	if err = e.sched.WakeRun(context.WithValue(t.Context(), guardWake{}, true), run, ""); !errors.Is(err, ErrMemoryPressure) {
+		t.Fatalf("the guard's own wake one byte short = %v, want the memory refusal", err)
+	}
+	e.counted(t, domain.CapacityRefusal, opWakeRetry, "memory", 1)
+	e.counted(t, domain.CapacityRefusal, opWake, "memory", 1)
 }
 
 // The brake freezing the session VMs is counted once per shortage.

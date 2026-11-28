@@ -719,40 +719,56 @@ The server counts each time it was short of memory or disk and what it did
 about it, and logs each one:
 
 ```sh
-sudo journalctl -u aether-server | grep 'scheduler: capacity:'
+sudo journalctl -u aether-server | grep -E '(scheduler|subsessions): capacity:'
 ```
 
 ```
 INFO scheduler: capacity: refusal op=wake cause=memory run=<run id> available=... floor=... used=... idle_hour=... vm=0 text="scheduler: insufficient host memory headroom: ..."
 INFO scheduler: capacity: save op=idle cause="" run=<run id> available=... floor=... used=0 idle_hour=0 vm=... text=""
 INFO scheduler: capacity: freeze op="" cause="" run="" available=... floor=... used=0 idle_hour=0 vm=0 text="froze 3 session VMs"
+INFO subsessions: capacity: wait-end op=subsession cause=started run=<run id> waited=2m10s text=""
 ```
 
 The counts are kept in the database, in table `capacity_counts`, one row
-per hour and counter, so they outlast a restart. A counter is a `kind`, an
-`op` and a `cause`:
+per hour (UTC) and counter, so they outlast a restart. A server start
+deletes rows older than 90 days. A counter is a `kind`, an `op` and a
+`cause`:
 
 | `kind` | Counted when | `op` | `cause` |
 | --- | --- | --- | --- |
-| `refusal` | Admission refused a start | `launch`, `launch-retry` (the server trying a waiting subsession again), `wake`, `boot` (a stopped VM booted to commit its work), `start` (a login terminal, a browser, an agent update, a move to another account) | `memory`, `stall`, `disk`, `unknown` (a measurement failed) |
-| `wait` | A subsession the server had no room for went back to the queue | `subsession` | |
+| `refusal` | Admission refused a start | `launch`, `launch-retry` (the server trying a waiting subsession again), `wake`, `wake-retry` (the memory guard waking by itself a VM it saved while it worked), `boot` (a stopped VM booted to commit its work), `start` (a login terminal, a browser, an assistant sign-in, an agent update, a move to another account) | `memory`, `stall`, `disk`, `unknown` (a measurement failed or timed out behind other admissions) |
+| `wait` | A subsession the server had no room for went back to the queue, once for each | `subsession` | |
 | `wait-end` | A subsession that waited stopped waiting | `subsession` | `started`, `refused`, `cancelled` |
-| `freeze` | The memory brake froze the session VMs, once per shortage | | |
-| `save` | The memory guard, or an admission short of memory, saved a session VM to disk | `idle`, `paused` (it was paused in memory), `closed`, `working` | |
+| `freeze` | The memory brake froze at least one session VM, once each time it engages | | |
+| `save` | The memory guard, or an admission short of memory, saved a session VM to disk | `idle`, `paused` (it was paused in memory), `working`, `closed` (a closed session's VM, stopped and not saved) | |
 
 Each row holds the `count` and the sum of each event's figures, in bytes:
-`available_bytes` and `floor_bytes` (available memory and the floor
-admission keeps, for a memory refusal, a freeze and a save, measured before
-the save), `used_bytes` (memory in use at a memory or stall refusal),
-`idle_hour_bytes` (what session VMs idle for over an hour held of it) and
-`vm_bytes` (what a saved VM held). `waited_seconds` and
-`max_waited_seconds` are the total and the longest time between a
-subsession being asked for and its wait ending. `last_at`, `last_run` and
-`last_text` are the counter's latest event, with the refusal as its caller
-got it.
 
-A disk refusal's figures are in its text. A VM saved because it stayed
-paused for an hour is not counted: no shortage caused it.
+- `available_bytes` and `floor_bytes`: available memory and the floor
+  admission keeps, for a memory refusal, a freeze and a save (measured
+  before the save).
+- `used_bytes`: the memory in use at a memory or stall refusal, read a
+  moment after it.
+- `idle_hour_bytes`: what the session VMs idle for over an hour held of it.
+  It covers the VMs the memory guard may save: not a Background session,
+  one held awake, one with a question pending, or one whose save failed in
+  the last five minutes. A sleeping VM counts from when it fell asleep.
+- `vm_bytes`: what a saved VM held.
+- `waited_seconds` and `max_waited_seconds`: the total and the longest time
+  from a subsession's first refusal for room, when its parent was told it
+  waits, to the end of its wait. A subsession held behind a waiting sibling
+  that then starts at its first attempt is not counted.
+- `last_at`, `last_run` and `last_text`: the counter's latest event, with
+  the refusal as its caller got it.
+
+What the counts are not: `wake` counts attempts, so one session a person
+keeps trying to wake counts each time. A disk refusal's figures are in its
+text. A VM saved because it stayed paused for an hour is not counted: no
+shortage caused it. Counting never holds up a launch or a wake: events go
+to the database from a queue of 256, and one that finds it full is logged
+(`not counted, too many wait for the database`) and not counted. An event
+whose end falls in a server restart, such as a waiting subsession that
+started as the server stopped, can go uncounted.
 
 ## Where a launch or a wake spends its time
 
@@ -787,7 +803,7 @@ launch retried on an older image, is on the line twice.
 | `image_ms` | VM: finding the image's base disk, or pulling and converting it on first use. |
 | `disks_ms` | VM: creating the root, data and cache disks. |
 | `checkout_disk_ms` | VM: the checkout's disk, built from the base commit when no session has used it. |
-| `prepare_ms` | VM: the state disk, the VM's record and attaching the agent program disks. |
+| `prepare_ms` | VM: the state disk, the VM's record and attaching the agent program disks, and on a start after a stop a new cache disk. |
 | `helper_disk_ms` | VM: the helper disk ([vm-guest.md](vm-guest.md)): hashing a server binary not seen before, and building its disk when it has none. |
 | `network_ms` | VM: the host side of the VM network and its firewall. |
 | `unit_ms` | VM: `systemd-run` of the VM's unit. |
@@ -1050,7 +1066,7 @@ sooner:
   has not stopped yet, and the session stays awake. A save the server
   makes because the host is short of memory is not ended.
 - A closed session's VM is stopped as soon as the close finishes, whatever
-  `--run-sleep-after` is, and keeps its disks without its memory
+  `--run-sleep-after` is, and keeps its disks, except the cache disk, without its memory
   ([Relaunching a closed session](#relaunching-a-closed-session)). Closing
   or killing a sleeping session wakes it first, so its work is committed as
   for a running one.
@@ -1158,7 +1174,7 @@ next wake starts the agent and restores its conversation.
 
 | Action | Container | Checkout | Reopen |
 | --- | --- | --- | --- |
-| **Close** (`cloudfield close <session-id> --outcome merged` or `abandoned`) | Paused for the close's commit, then stopped with only its disks kept, for `--run-container-ttl` (30 days). A Standard or mode-switched session's container on a Docker host stays paused with its memory instead, kept 7 days by default ([Relaunching a closed session](#relaunching-a-closed-session)). | Kept while the container is kept. Removed after that, but no sooner than `--checkout-ttl` (72 hours) after the session ended: at 30 days with the defaults. | Yes, until the deadline: **Relaunch** or `cloudfield reopen <session-id>` ([Relaunching a closed session](#relaunching-a-closed-session)). The deadline is cleared while the session is live; the next close sets a new one. |
+| **Close** (`cloudfield close <session-id> --outcome merged` or `abandoned`) | Paused for the close's commit, then stopped with only its disks kept, a VM's cache disk excepted ([environments.md](environments.md#sessions-in-virtual-machines)), for `--run-container-ttl` (30 days). A Standard or mode-switched session's container on a Docker host stays paused with its memory instead, kept 7 days by default ([Relaunching a closed session](#relaunching-a-closed-session)). | Kept while the container is kept. Removed after that, but no sooner than `--checkout-ttl` (72 hours) after the session ended: at 30 days with the defaults. | Yes, until the deadline: **Relaunch** or `cloudfield reopen <session-id>` ([Relaunching a closed session](#relaunching-a-closed-session)). The deadline is cleared while the session is live; the next close sets a new one. |
 | No activity for 7 days in a live session, `needs-attention` included | As **Close**, with the outcome `completed`. Its timeline notes `Closed after 7 days without activity`. Only activity counts: a question waiting for an answer, a pause or a turn that made no progress does not keep it open, while an open exec or port forward, a change of mode or account, and a session the memory guard saved while it worked do. A sleeping session's 7 days run from its sleep; an awake one's restart with the server. A sleeping session VM is woken first to commit; while admission refuses the wake, it stays open until the next hourly check. | As **Close**. | As **Close**. Once its container is gone, launch a new session on its branch. |
 | A Background session finishes | Removed at once. | Kept for `--checkout-ttl` (72 hours) after the session ends. | No. |
 | **Kill run** (`cloudfield kill <session-id>`) | Stopped and removed. | Kept for `--checkout-ttl` after the session ends. | No. |
@@ -1255,7 +1271,7 @@ session's container or VM disks are deleted: its work is on its branch, and
 its transcript stays readable.
 
 A session VM, or the container of a session launched and closed as Enhanced,
-is stopped when its session closes. It keeps its disks and no memory; a VM
+is stopped when its session closes. It keeps its disks, except a VM's cache disk, and no memory; a VM
 with a checkout stays up with only its helper for the 10-minute linger
 first, which the memory guard leaves to end. Relaunch starts it from those
 disks:

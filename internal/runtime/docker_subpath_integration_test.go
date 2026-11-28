@@ -728,3 +728,39 @@ func TestDockerSubpathSwapBeforeStart(t *testing.T) {
 		startAfterSwap(t, d, h, id)
 	})
 }
+
+// TestDockerSubpathVolumeOutlivesItsContainer: destroying a container leaves
+// the named volume its subpath mount came from, and RemoveSubpathVolume
+// removes it, refusing while a container still uses it, and is a no-op once
+// it is gone. The base directory's files stay.
+func TestDockerSubpathVolumeOutlivesItsContainer(t *testing.T) {
+	t.Parallel()
+	d := newSubpathDocker(t)
+	h := newSubpathHomes(t)
+	writeTree(t, h.owner, map[string]string{loginRel: "owner-login"})
+	writeTree(t, h.launcher, map[string]string{loginRel: ""})
+	volume := subpathVolume(t, d, h.owner)
+	id := createContainer(t, d, subpathSpec("volume", h.home(), h.login()))
+	if err := d.Start(t.Context(), id); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+	if err := d.RemoveSubpathVolume(t.Context(), h.owner); err == nil {
+		t.Fatal("RemoveSubpathVolume() removed a volume a running container uses")
+	}
+	if err := d.Destroy(t.Context(), id); err != nil {
+		t.Fatalf("Destroy() error: %v", err)
+	}
+	if _, err := d.cli.VolumeInspect(t.Context(), volume, client.VolumeInspectOptions{}); err != nil {
+		t.Fatalf("VolumeInspect(%s) after Destroy: %v; want the volume left", volume, err)
+	}
+	if err := d.RemoveSubpathVolume(t.Context(), h.owner); err != nil {
+		t.Fatalf("RemoveSubpathVolume() error: %v", err)
+	}
+	if _, err := d.cli.VolumeInspect(t.Context(), volume, client.VolumeInspectOptions{}); !cerrdefs.IsNotFound(err) {
+		t.Fatalf("VolumeInspect(%s) after RemoveSubpathVolume: %v; want not found", volume, err)
+	}
+	if err := d.RemoveSubpathVolume(t.Context(), h.owner); err != nil {
+		t.Fatalf("RemoveSubpathVolume() of a removed volume: %v", err)
+	}
+	wantHostTree(t, h.owner, map[string]string{loginRel: "owner-login"})
+}
