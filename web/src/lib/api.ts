@@ -114,6 +114,7 @@ import type {
   FilesTreeResult,
   Permission,
   CloseOutcome,
+  LaunchWaiting,
   Run,
   RunCloseCheck,
   RunPatch,
@@ -507,6 +508,29 @@ export function browserStreamURL(params: DevBrowserStreamRequest): string {
 }
 
 
+/** What `run.launch` takes. */
+export interface RunLaunchParams {
+  /** A linear.app issue URL; the server links the run to it. */
+  linear_issue_url?: string
+  workspace_id: string
+  task?: string
+  harness: string
+  mode?: string
+  model?: string
+  effort?: string
+  permission?: Permission
+  account_member_id?: string
+  fallback_account_member_ids?: string[]
+  no_fallback?: boolean
+  extra_workspace_ids?: string[]
+  /** The run's own child-run setting; absent follows the owner's. */
+  children?: 'on' | 'off'
+  /** Overrides the server's run limits for this run. */
+  limits?: RunLimits
+  /** The same launch sent again under the same key is that launch, not a second. */
+  idempotency_key?: string
+}
+
 export const api = {
   serverInfo: () => call<ServerInfo>('server.info'),
   serverEdge: () => call<ServerEdge>('server.edge'),
@@ -541,25 +565,14 @@ export const api = {
     call<{ run: Run }>('run.get', { run_id: runID }).then((r) => r.run),
   runWithPullRequests: (runID: string) =>
     call<{ run: Run; pull_requests?: RecordedPullRequest[] }>('run.get', { run_id: runID }),
-  runLaunch: (params: {
-    /** A linear.app issue URL; the server links the run to it. */
-    linear_issue_url?: string
-    workspace_id: string
-    task?: string
-    harness: string
-    mode?: string
-    model?: string
-    effort?: string
-    permission?: Permission
-    account_member_id?: string
-    fallback_account_member_ids?: string[]
-    no_fallback?: boolean
-    extra_workspace_ids?: string[]
-    /** The run's own child-run setting; absent follows the owner's. */
-    children?: 'on' | 'off'
-    /** Overrides the server's run limits for this run. */
-    limits?: RunLimits
-  }) => call<{ run: Run }>('run.launch', params).then((r) => r.run),
+  runLaunch: (params: RunLaunchParams) => call<{ run: Run }>('run.launch', params).then((r) => r.run),
+  /** `runLaunch` on a server with the `launch-wait` feature: a launch it has
+   * no room for is kept, and the answer is `waiting` instead of `run`. */
+  runLaunchOrWait: (params: RunLaunchParams) =>
+    call<{ run?: Run; waiting?: LaunchWaiting }>('run.launch', { ...params, wait: true }),
+  launchWaitingList: (id?: string, signal?: AbortSignal) =>
+    call<{ waiting: LaunchWaiting[] }>('launch.waiting.list', id ? { id } : {}, signal).then((r) => r.waiting),
+  launchWaitingCancel: (id: string) => call<LaunchWaiting>('launch.waiting.cancel', { id }),
   linearStatus: () => call<LinearStatus>('linear.status'),
   linearConnect: (apiKey: string) => call<LinearStatus>('linear.connect', { api_key: apiKey }),
   linearDisconnect: () => call<unknown>('linear.disconnect'),

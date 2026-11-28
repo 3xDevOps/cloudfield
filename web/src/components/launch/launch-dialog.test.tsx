@@ -18,7 +18,7 @@ import { pickOption } from '@/test/select'
 
 vi.mock('@/lib/api', async () => {
   const { fakeApi } = await import('@/test/fixtures')
-  return { api: fakeApi(), API_BASE: '/api/v1', ApiError: Error }
+  return { api: fakeApi(), API_BASE: '/api/v1', ApiError: Error, codeUnavailable: -32004 }
 })
 
 const claude = (over: Parameters<typeof agentInfo>[0] = {}) =>
@@ -233,6 +233,49 @@ describe('saved launch draft', () => {
     expect(api.runLaunch).toHaveBeenCalledOnce()
     await act(async () => finish(run()))
     await waitFor(() => expect(useStore.getState().launchDraft).toBeNull())
+  })
+
+  it('asks a server that keeps launches to wait, and opens the waiting launch when it has no room', async () => {
+    useStore.setState({ info: { ...serverInfo, features: ['launch-wait'] } })
+    vi.mocked(api.runLaunchOrWait).mockResolvedValue({
+      waiting: { id: 'run-w', workspace_id: workspace.id, harness: 'claude', state: 'waiting', refusal: 'scheduler: insufficient host memory headroom', attempts: 0, passed: 0, created_at: '2026-11-27T22:00:00Z', expires_at: '2026-11-28T22:00:00Z' },
+    })
+    render(<PaletteDialogs />)
+    await waitFor(() => expect(launchButton().disabled).toBe(false))
+    fireEvent.click(launchButton())
+    await waitFor(() => expect(api.runLaunchOrWait).toHaveBeenCalledOnce())
+    expect(api.runLaunch).not.toHaveBeenCalled()
+    await waitFor(() => expect(useStore.getState().route).toMatchObject({ name: 'run', params: { runId: 'run-w' } }))
+    expect(useStore.getState().runs['run-w']).toBeUndefined()
+    expect(useStore.getState().waitingLaunches['run-w']?.state).toBe('waiting')
+  })
+
+  it('sends a launch whose answer was lost again under the same key, and a refused one under a new key', async () => {
+    useStore.setState({ info: { ...serverInfo, features: ['launch-wait'] } })
+    const keys = () => vi.mocked(api.runLaunchOrWait).mock.calls.map(([params]) => params.idempotency_key)
+    vi.mocked(api.runLaunchOrWait)
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      // The gateway's answer for a server that did not answer in time.
+      .mockRejectedValueOnce(Object.assign(new Error('run.launch: server did not answer run.launch within 1m0s'), { code: -32004 }))
+      .mockRejectedValueOnce(Object.assign(new Error('run.launch: workspace is being deleted'), { code: -32009 }))
+      .mockRejectedValueOnce(Object.assign(new Error('run.launch: workspace is being deleted'), { code: -32009 }))
+      .mockRejectedValueOnce(Object.assign(new Error('run.launch: the launch under idempotency_key "k" waited for room and ended expired: no room; use a new key to launch again'), { code: -32004 }))
+      .mockRejectedValueOnce(Object.assign(new Error('run.launch: workspace is being deleted'), { code: -32009 }))
+    render(<PaletteDialogs />)
+    await waitFor(() => expect(launchButton().disabled).toBe(false))
+    for (const calls of [1, 2, 3, 4, 5, 6]) {
+      fireEvent.click(launchButton())
+      await waitFor(() => expect(api.runLaunchOrWait).toHaveBeenCalledTimes(calls))
+      await waitFor(() => expect(launchButton().disabled).toBe(false))
+    }
+    const [lost, timedOut, refused, anew, ended, afterEnded] = keys()
+    expect(lost).toBeTruthy()
+    expect(timedOut).toBe(lost)
+    expect(refused).toBe(lost)
+    expect(anew).not.toBe(lost)
+    // A key whose launch waited and ended never launches again.
+    expect(ended).not.toBe(anew)
+    expect(afterEnded).not.toBe(ended)
   })
 
   it('keeps the task and refusal when a collapsed launch fails', async () => {

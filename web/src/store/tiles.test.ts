@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { ApiError } from '@/lib/api'
 import { capability } from '@/lib/capability'
 import { offeredViews, type RunView } from '@/routes/run/views'
 import { createRootStore } from '@/store'
@@ -33,7 +34,7 @@ import {
   type ViewContext,
   viewContext,
 } from '@/store/tiles'
-import { fakeApi, run, runRecords } from '@/test/fixtures'
+import { fakeApi, run, runRecords, serverInfo } from '@/test/fixtures'
 
 const tab = (id: string, runId: string, view?: RunView): TileTab => ({ id, runId, ...(view && { view }) })
 const tile = (id: string, ...tabs: TileTab[]): Tile => ({ id, tabs, active: tabs[0]?.id ?? '' })
@@ -468,6 +469,28 @@ describe('the tiles in the store', () => {
     await hydrate(store, fakeApi())
     expect(tabs(store.getState())).toEqual(['run_1:terminal'])
     expect(store.getState().savedTiles[store.getState().identityKey!]).toBe(store.getState().tiles)
+  })
+
+  it('keeps the tab of a launch waiting for room, which is no session yet, through a live hydration', async () => {
+    const waiting = {
+      id: 'run_waiting', workspace_id: 'ws_1', harness: 'claude', state: 'waiting' as const, refusal: 'no room',
+      attempts: 1, passed: 0, created_at: '2026-08-14T10:00:00Z', expires_at: '2026-08-15T10:00:00Z',
+    }
+    const client = fakeApi({
+      serverInfo: async () => ({ ...serverInfo, features: ['launch-wait'] }),
+      launchWaitingList: vi.fn(async (id?: string) => (id === 'run_gone' ? Promise.reject(new ApiError(404, 'launch.waiting.list: no waiting launch run_gone')) : [waiting])),
+    })
+    const store = createRootStore()
+    await hydrate(store, client)
+    store.setState({ staleSince: 1 })
+    store.getState().navigate('run', { runId: 'run_gone' })
+    store.setState((s) => ({ tiles: splitTile(s.tiles, s.tiles.focused, 'right') }))
+    store.getState().navigate('run', { runId: 'run_waiting' })
+    expect(tabs(store.getState())).toEqual(['run_gone', 'run_waiting'])
+
+    await hydrate(store, client)
+    expect(tabs(store.getState())).toEqual(['run_waiting'])
+    expect(client.launchWaitingList).toHaveBeenCalledWith('run_gone', undefined)
   })
 
   it('settles the live layout before a change, so a view that ended cannot repeat another', async () => {

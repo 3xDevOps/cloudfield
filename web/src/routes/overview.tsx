@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { RunList } from '@/components/run-list'
 import { ViewHeader } from '@/components/view-header'
+import { WaitingLaunches } from '@/components/waiting-launch'
 import { registerRoute } from '@/routes/registry'
 import { useListedRuns } from '@/store/hooks'
 import { withoutSettled } from '@/store/selectors'
@@ -16,6 +17,7 @@ function Overview() {
         titleAdornment={<Badge>{runs.length} sessions</Badge>}
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
+        <WaitingLaunches />
         <RunList runs={runs} empty="No sessions yet." />
       </div>
     </div>

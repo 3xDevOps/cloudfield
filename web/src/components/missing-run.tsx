@@ -2,13 +2,17 @@ import { ArrowLeft, CircleAlert } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
+import { useLaunchWait, WaitingLaunch } from '@/components/waiting-launch'
 import { useIsMobile } from '@/lib/breakpoints'
 import { useDelayed } from '@/lib/hooks'
 import { useKeybindings } from '@/lib/keybindings'
 import { useStore } from '@/store'
 
-/** Only a hydrated store with a live connection can tell a deleted run from an unread one. The tile area owns Escape, so a `tiled` one registers no `leave-run`. */
-export function MissingRun({ tiled }: { tiled?: boolean }) {
+/**
+ * Only a hydrated store with a live connection can tell a deleted run from an unread one. The tile area owns Escape, so a `tiled` one registers no `leave-run`.
+ * With `runId`, an ID that is a launch waiting for room shows that launch.
+ */
+export function MissingRun({ tiled, runId }: { tiled?: boolean; runId?: string }) {
   const hydrated = useStore((s) => s.hydrated)
   const error = useStore((s) => s.hydrationError)
   const dead = useStore((s) => s.streamDead)
@@ -18,6 +22,7 @@ export function MissingRun({ tiled }: { tiled?: boolean }) {
   useKeybindings('run', tiled ? {} : { 'leave-run': () => navigate('board') })
   const unreachable = error !== null
   const loading = useDelayed(!hydrated && !unreachable)
+  const waits = useLaunchWait()
 
   if (unreachable) {
     // A dead token is not an unreachable server: nothing retries, so show the recorded error.
@@ -78,7 +83,7 @@ export function MissingRun({ tiled }: { tiled?: boolean }) {
     ) : null
   }
 
-  return (
+  const notFound = (
     <section
       aria-label="Session not found"
       className="flex h-full min-w-0 w-full items-start px-3 py-3 sm:px-4 sm:py-4"
@@ -95,4 +100,5 @@ export function MissingRun({ tiled }: { tiled?: boolean }) {
       </div>
     </section>
   )
+  return waits && runId ? <WaitingLaunch key={runId} runId={runId} fallback={notFound} /> : notFound
 }

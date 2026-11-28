@@ -309,6 +309,25 @@ describe('hydrate', () => {
       expect(store.getState().route).toEqual({ name: 'board', params: {} })
     })
 
+    it('stays on the link to a launch waiting for room, which is no session yet', async () => {
+      window.history.replaceState({}, '', '/?run=run_waiting')
+      const store = createRootStore()
+      store.getState().setOnboarded(true)
+      const api = fakeApi({
+        serverInfo: vi.fn(async () => ({ ...serverInfoFixture, features: ['launch-wait'] })),
+        // Another member's launch, as a super admin's link opens it: only the read by ID has it.
+        launchWaitingList: vi.fn(async (id?: string) => (id ? [{
+          id: 'run_waiting', workspace_id: 'ws_1', harness: 'claude', state: 'waiting' as const, refusal: 'no room',
+          attempts: 1, passed: 0, created_at: '2026-08-14T10:00:00Z', expires_at: '2026-08-15T10:00:00Z',
+        }] : [])),
+      })
+      await hydrate(store, api)
+
+      expect(api.launchWaitingList).toHaveBeenCalledWith('run_waiting', undefined)
+      expect(store.getState().waitingLaunches.run_waiting?.state).toBe('waiting')
+      expect(store.getState().route).toEqual({ name: 'run', params: { runId: 'run_waiting' } })
+    })
+
     it('does not reopen the run when a reconnect re-hydrates', async () => {
       window.history.replaceState({}, '', '/?run=run_1')
       const store = createRootStore()

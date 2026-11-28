@@ -37,6 +37,8 @@ import { applyAssistantNotice, noteServerTime } from '@/store/assistant-notice'
 import { batchNotifications } from '@/store/batch'
 import { diffSnapshot } from '@/store/diff'
 import { coalesce } from '@/store/coalesce'
+import { tileList } from '@/store/tiles'
+import { keepsLaunches, launchUnsettled, loadWaitingLaunches, refreshWaitingLaunches } from '@/store/waiting-launches'
 import { isProvisional } from '@/store/collaboration'
 import { loadDevices } from '@/store/devices'
 import { applyWatchChanged } from '@/store/watch-notice'
@@ -236,7 +238,7 @@ export async function hydrate(
       store.getState().resetNotes()
       store.getState().resetAssistant()
       store.getState().setLinear(null)
-      store.setState({ invitations: null, revokingInvitations: [], agentModels: {}, mergedInto: {}, deletingRuns: {}, laneHistory: {}, laneBudget: historyBudget, watches: {}, watchNotices: {}, watchesFor: null, closeConfirmation: null })
+      store.setState({ invitations: null, revokingInvitations: [], agentModels: {}, mergedInto: {}, deletingRuns: {}, laneHistory: {}, laneBudget: historyBudget, watches: {}, watchNotices: {}, watchesFor: null, closeConfirmation: null, waitingLaunches: {}, ownLaunches: [] })
     }
     s.setCapabilities(capabilities)
     // Resolve Edge before restoring drafts: another app can serve script on
@@ -281,12 +283,22 @@ export async function hydrate(
     // Only the nav entry and the header link follow it, so a slow Linear must not hold hydration.
     void loadLinear(store, client).catch(ignore)
     if (signal?.aborted) return false
+    // A tab or a link may name a launch waiting for room, which is no session
+    // yet: read before the tabs of unknown sessions are closed.
+    const shown = store.getState()
+    const unknown = [...tileList(shown.tiles.root).flatMap((tile) => tile.tabs.map((tab) => tab.runId)), shown.route.params.runId]
+      .filter((id) => id && !shown.runs[id])
+    // A failed read leaves a link where it points: its page shows the error and asks again.
+    const launchesRead = await loadWaitingLaunches(store, client, [...new Set(unknown)], signal).then(() => true, () => false)
+    if (signal?.aborted) return false
     s.setHydrated(true)
     store.setState({ staleSince: null })
-    s.pruneTiles()
+    // Without that read a waiting launch's tab cannot be told from a deleted session's.
+    if (launchesRead) s.pruneTiles()
     const current = store.getState()
     const linked = current.route.params.runId
-    const unknownLink = first && current.route === s.route && !!linked && !current.runs[linked]
+    const unknownLink = first && current.route === s.route && !!linked && !current.runs[linked] &&
+      launchesRead && !current.waitingLaunches[linked]
     if (
       first &&
       (s.route.name === 'board' || s.route.name === 'needs-you' || unknownLink) &&
@@ -873,6 +885,8 @@ async function probeGateway(
  * time in sequence order. A reconnect with no cursor re-fetches.
  */
 const mergePollMs = 5000
+const waitingLaunchPollMs = 5000
+const waitingLaunchListMs = 60_000
 const saveDebounceMs = 10_000
 
 export function connect(store: RootStore, client: Api = api): () => void {
@@ -1047,6 +1061,18 @@ export function connect(store: RootStore, client: Api = api): () => void {
     void load()
   })
 
+  // A waiting launch publishes no event either: while the store holds one whose
+  // ending it has not seen it is asked after, and once a minute the list is
+  // read for one made from another device or the command line.
+  let launchTicks = 0
+  const launchTimer = setInterval(() => {
+    const s = store.getState()
+    launchTicks = (launchTicks + 1) % (waitingLaunchListMs / waitingLaunchPollMs)
+    if (keepsLaunches(s) && (launchTicks === 0 || Object.values(s.waitingLaunches).some(launchUnsettled))) {
+      refreshWaitingLaunches(store, client, signal)
+    }
+  }, waitingLaunchPollMs)
+
   // server.edge answers a super admin with more than a member; watchEdge drops the answer when the role changes.
   const stopRole = store.subscribe((state, previous) => {
     if (!signal.aborted && state.info?.member.role !== previous.info?.member.role) coalesce(store, 'edge', () => loadEdge(store, client).catch(ignore))
@@ -1107,6 +1133,7 @@ export function connect(store: RootStore, client: Api = api): () => void {
     window.removeEventListener('pagehide', saveNow)
     if (saveTimer) clearTimeout(saveTimer)
     clearInterval(mergeTimer)
+    clearInterval(launchTimer)
     stopSelection()
     stopOutcomeSeen()
     stopPush()
