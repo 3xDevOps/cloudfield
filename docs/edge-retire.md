@@ -115,9 +115,9 @@ address it is enrolled at. A connector added at the new address is then
 refused with `invalid_target`, `resource must be
 https://edge-old.example.com/mcp`, or `.../mcp/<server id>` for a server's
 own URL, until the server is updated (step 1). At `/mcp`, a build from
-before edge protocol 4 is instead listed as `its aether-server is too old
-for this URL; an admin runs sudo aether-server update` and cannot be
-chosen.
+before edge protocol 4 cannot be chosen; its member sees it listed, while
+it is connected, as `its aether-server is too old for this URL; an admin
+runs sudo aether-server update`.
 
 1. Update the server ([install.md](install.md#update-the-server)). The
    update restarts the service, which ends every relayed connection. It
@@ -148,8 +148,8 @@ chosen.
    A build from before the notices ends the first line at `keep working`
    and adds `to move back:` with `sudo aether-server edge move
    https://edge-old.example.com`. With another options file, pass `--config
-   <file>` after the address. A refusal prints one line, exits 1 and writes
-   nothing on the server; the refusals are listed in
+   <file>` after the address. A refusal prints one line, exits 1 and leaves
+   `edge-url` and the pinned key as they were; the refusals are listed in
    [edge.md](edge.md#moving-to-another-address-of-the-edge).
 
 3. Apply it. The restart ends every relayed connection; clients connect
@@ -366,8 +366,9 @@ id. Note every entry that names the old relay host, and the whole default
 link. `https://edge-old.example.com:443` is the same address as
 `https://edge-old.example.com`, and the token file keeps the spelling it
 was signed in with: note it as printed, and give `--edge` that spelling
-in the last command, which under another finds no token and answers `not
-signed in to edge-old.example.com`. That command asks the edge: it lists
+in the last command. Another spelling selects the token stored under
+it, or with none answers `not signed in to <host>; run: aether login
+--edge <origin>`. That command asks the edge: it lists
 your servers when the token for the old address still works. An entry in
 the file does not show that.
 
@@ -1056,7 +1057,9 @@ to an image that has both options (`aether-edge serve -h` lists
   edge with `--retired-pairs` refuses to start on it while it holds a
   sign-in, with the refusal under [Order](#order).
 - On a backup taken while the pair was retiring the edge starts and
-  deletes the same sign-ins again. A restore brings back only the rows
+  deletes again by the same rule, on the origins that backup records: a
+  token with no origin in the backup goes, even if it was used at the
+  kept pair afterwards. A restore brings back only the rows
   the backup holds: of the device tokens revoked since, the start deletes
   again those of the retired pair and those with no recorded origin, and
   the others are valid again. It loses the accounts, sign-ins and claims

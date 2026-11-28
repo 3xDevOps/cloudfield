@@ -58,9 +58,10 @@ either:
 
 - `--rollback` returns to the release in
   `/var/lib/aether-edge-update/previous`, which can be one from before
-  the retirement code. Such an image ignores
+  the retirement code. An image from before #1128 ignores
   `AETHER_EDGE_RETIRING_PAIRS` and `AETHER_EDGE_RETIRED_PAIRS`, unknown
-  variables to it. It records nothing, so every device token and browser
+  variables to it (one between #1128 and #1134 ignores only the second).
+  It records nothing, so every device token and browser
   session it issues, at either pair, has no recorded origin, and the
   start of step 17 deletes each of them that was not used again while the
   edge recorded. After step 17 it would also send servers no `retired`
@@ -489,8 +490,8 @@ Expect `Aether-Edge-Retiring: https://edge.cloudfield.ai; date=2026-12-15`
 there.</p>`. The same request to `https://edge.cloudfield.ai/v1/edge`
 carries no such header. Run the checks of step 4, and note `<time>`, this
 start, for step 15. Note too the `since` in the first line of `sudo docker
-exec aether-edge aether-edge retiring`, for steps 6 and 15: the edge sets
-it when it begins to record, after `<time>`.
+exec aether-edge aether-edge retiring`, for steps 6 and 15: those steps compare
+the `since` they print with this one.
 
 A server enrolled at `https://edge.onaether.dev` whose build has #1132
 shows the warning and the move command once it has connected again
@@ -901,7 +902,8 @@ too, and the edge closes an unclaimed server's connection after 30
 minutes, so it can differ for other reasons than this restart; the
 report's table of `https://edge.cloudfield.ai` lists the claimed servers
 last enrolled there, offline ones too, and those with a `LAST ENROLLED OR
-CLAIMED` later than `<time>` are back. The step's own checks:
+CLAIMED` later than `<time>` enrolled or were claimed since this start,
+which does not show that they are connected now. The step's own checks:
 
 ```sh
 sudo docker logs --since <time> aether-edge 2>&1 | grep -e 'edge: deleted the sign-ins' -e 'edge: keeping the sign-ins' -e 'aether-edge: retired' -e '^aether-edge:'
@@ -1072,9 +1074,9 @@ older release line. The owner promotes to `stable`
 any update by hand, and before `sudo aether-edge-update --rollback` on the
 release `sudo cut -d' ' -f2 /var/lib/aether-edge-update/previous` prints.
 Never add `--restore-backup` to a rollback across step 17: the third field
-of that file is the backup it restores when the previous release cannot
-run the current database, and one from before step 17 holds the deleted
-sign-ins.
+of that file is the backup it restores when its check of the previous
+release against the current database fails, and one from before step 17
+holds the deleted sign-ins.
 
 - Undo: `sudo systemctl disable --now aether-edge-update.timer
   aether-edge-update-recover.service`, after the checks at the top of
