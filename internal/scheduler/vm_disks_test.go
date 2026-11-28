@@ -275,7 +275,7 @@ func TestASavedVMWakesBelowTheDiskReserveAndTheDiskGuardStillHoldsIt(t *testing.
 	})
 	run := e.launchACP(t, "say pong").ID
 	waitItems(t, e.sched, run, "the task's turn", turnEnded("end_turn", 1))
-	e.saveRun(t, run)
+	e.sleepRun(t, run)
 	cid := e.cid(t, run)
 	rt.disks.mu.Lock()
 	rt.disks.use[cid] = 10 << 30

@@ -59,15 +59,6 @@ describe('SleepCallout', () => {
     expect(row.textContent).not.toContain('processes stopped')
   })
 
-  it('says a session paused in memory resumes, never that it was saved to disk', () => {
-    render(<SleepCallout run={record({ asleep_since: since, asleep_saved: true, asleep_in_memory: true })} />)
-    const row = screen.getByRole('button', { name: /Asleep since/ })
-    expect(row.textContent).not.toContain('processes stopped')
-    fireEvent.click(row)
-    expect(screen.getByText(/paused the idle session in the server’s memory.*press Wake to resume it/).hidden).toBe(false)
-    expect(screen.queryByText(/saved the idle session to disk/)).toBeNull()
-  })
-
   it('says on the folded row that a stopped container lost its processes', () => {
     render(<SleepCallout run={record({ asleep_since: since })} />)
     const row = screen.getByRole('button', { name: /Asleep since .* · processes stopped/ })

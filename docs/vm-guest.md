@@ -515,7 +515,7 @@ as nothing. A wake is admitted only when that fits
 
 A restored VM's clock stopped while it was saved. The server calls
 `SetClock`, through `guest.Client.SyncClock`, after every restore. Before a
-save of a running VM it calls `Sync`, which writes every filesystem's dirty data to its
+save it calls `Sync`, which writes every filesystem's dirty data to its
 disk, so the cache disk of a saved VM that is deleted without a restore
 holds what the session wrote. `Sync` then drops the guest's page cache.
 `CacheUse` returns how many blocks and inodes the cache volume has free
@@ -535,11 +535,7 @@ as each pass reports it, before the save ends. A VM frozen because the host
 was running out of memory
 ([failure-handling.md](failure-handling.md#recover-from-memory-pressure))
 is saved with neither `Sync` nor the wait, which would let its guest run:
-its saved state holds its page cache too. An idle VM is paused in memory
-after one `Sync`, so it holds what its processes use and not its page
-cache: a frozen session's guest kernel reports the freed pages after the
-pause, and a VM whose vCPUs stop waits for them first, as a save does. A
-later save of the paused VM writes it as it stands.
+its saved state holds its page cache too.
 
 ## Save and restore
 
@@ -766,8 +762,7 @@ what it creates to the checkout's owner, and keeps its staging under
 `/run/aether-guest/data/git/mutagen`. Live sync to a sleeping session wakes
 it and holds it awake while the overlay runs.
 
-While the VM does not run, because the session sleeps saved to disk or
-ended, its Files
+While the VM does not run, because the session sleeps or ended, its Files
 view and diffs come from the last snapshot the server recorded: nothing can
 have changed the checkout since. A Files write or upload to a sleeping
 session wakes it first; one to an ended session, whose VM was removed,

@@ -43,12 +43,18 @@ func TestAMemoryRefusalIsCountedWithWhatIdleSessionsHeld(t *testing.T) {
 	t.Parallel()
 	e, mr := newMemoryEnv(t)
 	old := e.launchVM(t, mr, "say pong", 2<<30)
-	fresh := e.launchVM(t, mr, "say pong", 1<<30)
+	e.launchVM(t, mr, "say pong", 1<<30)
 	e.launchVM(t, mr, acpmock.PromptWait, 4<<30)
-	e.pauseIdle(t, old, fresh)
 	oldRun := e.runOf(t, old)
 	e.sched.mu.Lock()
-	e.sched.runs[oldRun].asleepSince = time.Now().UTC().Add(-2 * idleHour)
+	asleep := e.sched.runs[oldRun]
+	e.sched.mu.Unlock()
+	// Recorded asleep and still running, as a restart takes a VM up.
+	if err := e.sched.markAsleep(asleep); err != nil {
+		t.Fatal(err)
+	}
+	e.sched.mu.Lock()
+	asleep.asleepSince = time.Now().UTC().Add(-2 * idleHour)
 	e.sched.mu.Unlock()
 
 	// Too little for saving every idle VM to admit a start, so none is saved.

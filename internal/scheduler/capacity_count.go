@@ -129,8 +129,6 @@ func (s *Scheduler) countSave(c memoryCandidate, available, floor uint64) {
 	switch {
 	case c.closed:
 		op = "closed"
-	case c.resident:
-		op = "paused"
 	case c.idle:
 		op = "idle"
 	}

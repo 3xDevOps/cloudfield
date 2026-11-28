@@ -625,7 +625,7 @@ type supervised struct {
 	sleepGen    uint64
 	waking      chan struct{}
 	wakeErr     error
-	// abortSleep, set while the sleep sweep saves or pauses a VM that still
+	// abortSleep, set while the sleep sweep saves a VM that still
 	// answers, makes it give up if its guest has yet to be paused.
 	// wakeWaits is set once a wake waits for the sleep, which a sleep that
 	// has yet to set abortSleep reads instead.
@@ -637,13 +637,9 @@ type supervised struct {
 	// memorySaving counts the saves running that sleeping does not mark: one
 	// the memory guard or an admission started, also once heldSave stopped
 	// waiting for it, and the save again after a failed wake.
-	asleepSaved bool
-	// asleepResident is set while a sleeping VM is paused in the host's
-	// memory, where the sleep sweep left it, until the memory guard saves
-	// it or it stops.
-	asleepResident bool
-	saveFailedAt   time.Time
-	memorySaving   int
+	asleepSaved  bool
+	saveFailedAt time.Time
+	memorySaving int
 	// frozenNotedAt is when the timeline last said the memory brake froze
 	// the session's VM. frozenSave is set while the memory guard saves the
 	// VM frozen, and admitting while a wake holding the lifecycle lock
