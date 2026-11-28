@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { api } from '@/lib/api'
+import { api, ApiError } from '@/lib/api'
 import { SessionFailureCallout } from '@/routes/run/session-failure'
 import type { RunShells } from '@/routes/run/shells'
 import { useStore } from '@/store'
@@ -87,6 +87,43 @@ describe('refused sign-in', () => {
   })
 })
 
+describe('a launched session whose agent failed to start', () => {
+  const ack = { ok: true as const, seq: 0, replay: 0, epoch: 0, has_control: false }
+  const failed = (description: string) => {
+    useStore.setState({ acpSessions: {}, agentList: null, info: serverInfo })
+    const store = useStore.getState()
+    store.acpAck('run_1', { ...ack, live: false, starting: true })
+    store.acpAck('run_1', { ...ack, seq: 1, replay: 1, live: false })
+    store.acpFrames('run_1', [{ seq: 1, item: { seq: 1, epoch: 0, time: '2026-11-27T10:00:00Z', turn: 0, kind: 'notice', notice: { severity: 'error', title: 'Enhanced agent failed', description } } }])
+    return useStore.getState().acpSessions.run_1!
+  }
+
+  it('offers a retry and Standard under the real error', () => {
+    renderCallout(failed('start the agent: exec: "claude-agent-acp": executable file not found in $PATH'))
+    expect(screen.getByText('Enhanced agent failed')).toBeDefined()
+    expect(screen.getByText(/executable file not found in \$PATH/)).toBeDefined()
+    for (const name of ['Retry Enhanced', 'Open in Standard']) expect(screen.getByRole('button', { name })).toBeDefined()
+  })
+
+  it('offers the sign-in steps when the agent refused the login', () => {
+    renderCallout(failed('the agent refused: Authentication required; sign in again on the Agents page'))
+    expect(screen.getByText('The agent is not signed in')).toBeDefined()
+    expect(screen.getByText(/Authentication required; sign in again on the Agents page/)).toBeDefined()
+    expect(screen.getByText(/then choose Retry Enhanced/)).toBeDefined()
+    for (const name of ['Sign in on Agents', 'Open a terminal', 'Retry Enhanced']) expect(screen.getByRole('button', { name })).toBeDefined()
+  })
+
+  it('keeps "send your message again" for a refused turn on an agent that is asleep', () => {
+    useStore.setState({ acpSessions: {}, agentList: null, info: serverInfo })
+    const store = useStore.getState()
+    store.acpAck('run_1', { ...ack, seq: 1, replay: 1, live: false })
+    store.acpFrames('run_1', [{ seq: 1, item: { seq: 1, epoch: 0, time: '2026-11-27T10:00:00Z', turn: 0, kind: 'notice', notice: { severity: 'error', title: 'Prompt failed', description: 'Authentication required' } } }])
+    renderCallout(useStore.getState().acpSessions.run_1!)
+    expect(screen.getByText(/then send your message again/)).toBeDefined()
+    expect(screen.queryByRole('button', { name: 'Retry Enhanced' })).toBeNull()
+  })
+})
+
 describe('open in Standard', () => {
   beforeEach(() => {
     vi.spyOn(api, 'runCloseCheck').mockResolvedValue([{ run_id: 'run_1', warnings: [] }])
@@ -131,6 +168,22 @@ describe('open in Standard', () => {
     expect(await relaunch({ account_member_id: 'mem-me', account_login: 'lgn-work0000001', account_login_name: 'work' })).not.toHaveProperty('login')
     expect(await relaunch({ account_member_id: 'mem-me', account_login: 'lgn-console0001', account_login_name: 'console', account_login_per_use: true })).not.toHaveProperty('login')
     expect(await relaunch({ account_member_id: 'mem-me', account_login: 'lgn-gone0000001' })).not.toHaveProperty('login')
+  })
+
+  it('starts a new Standard session when a switchable agent has no conversation to move', async () => {
+    const refusal = new ApiError(200, 'run.mode.switch: scheduler: invalid session state transition: the agent has not reported its conversation yet; it does on its first turn', -32002, { reason: 'session_not_reported' })
+    vi.spyOn(api, 'runModeSwitch').mockRejectedValue(refusal)
+    const launch = vi.spyOn(api, 'runLaunch').mockResolvedValue(run({ id: 'run_2', status: 'running' }))
+    vi.spyOn(api, 'runClose').mockResolvedValue(run({ id: 'run_1', status: 'abandoned' }))
+    const record = runRecords(run({ id: 'run_1', harness: 'claude', status: 'running' })).run_1!
+    const session = { turns: [{ items: [{ kind: 'notice', notice: { title: 'Enhanced agent failed' } }] }], live: false } as unknown as AcpSession
+    useStore.setState({ acpSessions: { run_1: session }, info: { member: { id: 'mem-me' } } as never })
+    const nav = { go: vi.fn(), reveal: vi.fn(), focusComposer: vi.fn(), focusRequest: vi.fn() }
+    render(<SessionFailureCallout run={record} session={session} switchable shells={{} as RunShells} nav={nav} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Standard' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Start a Standard session' }))
+    await waitFor(() => expect(launch).toHaveBeenCalledWith(expect.objectContaining({ mode: 'tui', task: record.task })))
+    expect(nav.go).not.toHaveBeenCalled()
   })
 
   it('lists close warnings before it closes the run it replaces', async () => {

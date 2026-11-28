@@ -114,6 +114,9 @@ func TestStandardCodexRunsThroughItsAppServer(t *testing.T) {
 	srv.SetStatus("thread-1", "active")
 	srv.SetStatus("thread-1", "idle")
 	e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
+	if reads := srv.Requests("thread/turns/list"); len(reads) != 0 {
+		t.Fatalf("thread/turns/list = %s, want no read of a session with no parent", reads)
+	}
 	waitFor(t, "the recorded session", func() bool {
 		r, err := e.db.GetRun(t.Context(), run.ID)
 		return err == nil && r.HarnessSessionID == "thread-1"
@@ -227,7 +230,7 @@ func TestStandardCodexKeepsAQuestionThroughAMailTurn(t *testing.T) {
 		defer e.sched.mu.Unlock()
 		return e.sched.runs[run.ID].agentReport.State == agentstatus.Working
 	})
-	srv.EndTurn("thread-1")
+	srv.EndTurn("thread-1", "completed")
 	waitFor(t, "the mail turn's end", func() bool {
 		e.sched.mu.Lock()
 		defer e.sched.mu.Unlock()
@@ -244,6 +247,39 @@ func TestStandardCodexKeepsAQuestionThroughAMailTurn(t *testing.T) {
 	if reason := e.idleReason(run.ID); reason != "" {
 		t.Fatalf("idle reason %q after the answer reached Codex, want none", reason)
 	}
+}
+
+// A Standard Codex subsession's finished turn forwards the last agent
+// message of its thread. A turn cut off with Esc forwards nothing.
+func TestStandardCodexChildForwardsItsLastMessage(t *testing.T) {
+	shortProvisionalGrace(t)
+	e, rt, coord := newCodexEnv(t)
+	parent, _ := e.launchFake(t, "parent")
+	child := launchChildRun(t, e, parent, "codex", domain.LaunchTUI)
+	srv, _ := rt.bridge(t, 1)
+	dialed(t, srv, 1)
+	srv.StartThread("thread-1", false, "")
+	waitFor(t, "the connected client", func() bool { return e.sched.Wakeable(child.ID) })
+	prompt := func() {
+		t.Helper()
+		if _, err := e.sched.Inject(t.Context(), child.ID, e.member.ID, domain.AgentPrompt{Text: "say pong"}, false, nil); err != nil {
+			t.Fatal(err)
+		}
+		e.waitAgentWorking(t, child.ID)
+	}
+	prompt()
+	srv.EndTurn("thread-1", "interrupted", "looking")
+	e.waitStoreStatus(t, child.ID, domain.RunNeedsAttention)
+	time.Sleep(provisionalGrace * 3 / 2)
+	if calls := coord.provisionalReports(); len(calls) != 0 {
+		t.Fatalf("provisional reports %+v after a turn cut off, want none", calls)
+	}
+	prompt()
+	srv.EndTurn("thread-1", "completed", "pong")
+	waitFor(t, "the thread's last message at the parent", func() bool {
+		calls := coord.provisionalReports()
+		return len(calls) == 1 && calls[0].run == child.ID && calls[0].message == "pong"
+	})
 }
 
 // A bridge whose attachment is lost while the terminal goes on is replaced.

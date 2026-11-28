@@ -244,7 +244,7 @@ func (s *Server) agentLoginRemove(ctx context.Context, member domain.MemberID, r
 			slices.Sort(own)
 			var parts []string
 			if len(own) > 0 {
-				parts = append(parts, "your sessions "+strings.Join(own, ", ")+" (end them)")
+				parts = append(parts, "your sessions "+strings.Join(own, ", ")+" (end them, or free the sandbox of one that has ended)")
 			}
 			if teammates > 0 {
 				parts = append(parts, fmt.Sprintf("%d of your teammates' sessions, which hold it until they end and their containers go (revoking the share you gave a teammate, with cloudfield account revoke <member-id>, moves their running sessions off it)", teammates))

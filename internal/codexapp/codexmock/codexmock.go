@@ -21,8 +21,9 @@ type thread struct {
 }
 
 type turn struct {
-	id     string
-	status string
+	id       string
+	status   string
+	messages []string
 }
 
 type Request struct {
@@ -89,6 +90,7 @@ func (s *Server) answer(method string, raw json.RawMessage) (any, string) {
 	var p struct {
 		ThreadID       string `json:"threadId"`
 		ExpectedTurnID string `json:"expectedTurnId"`
+		ItemsView      string `json:"itemsView"`
 	}
 	_ = json.Unmarshal(raw, &p)
 	t := s.threads[p.ThreadID]
@@ -107,7 +109,13 @@ func (s *Server) answer(method string, raw json.RawMessage) (any, string) {
 			return nil, fmt.Sprintf("thread %s is not materialized yet", p.ThreadID)
 		}
 		last := t.turns[len(t.turns)-1]
-		return map[string]any{"data": []any{map[string]any{"id": last.id, "status": last.status}}}, ""
+		items := []any{}
+		if p.ItemsView != "notLoaded" {
+			for _, text := range last.messages {
+				items = append(items, map[string]any{"type": "agentMessage", "text": text})
+			}
+		}
+		return map[string]any{"data": []any{map[string]any{"id": last.id, "status": last.status, "items": items}}}, ""
 	case "turn/start":
 		if t == nil {
 			return nil, "thread not found: " + p.ThreadID
@@ -177,12 +185,14 @@ func (s *Server) SetStatus(id, typ string, flags ...string) {
 	s.setStatus(s.threads[id], typ, flags...)
 }
 
-func (s *Server) EndTurn(id string) {
+// EndTurn ends the thread's last turn with status, "completed" or
+// "interrupted", and the agent messages it holds.
+func (s *Server) EndTurn(id, status string, messages ...string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t := s.threads[id]
 	if n := len(t.turns); n > 0 {
-		t.turns[n-1].status = "completed"
+		t.turns[n-1].status, t.turns[n-1].messages = status, messages
 	}
 	s.setStatus(t, "idle")
 }

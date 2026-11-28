@@ -140,6 +140,9 @@ func (s *Service) agentChoices(ctx context.Context, owner, account domain.Member
 		c := protocol.ChildChoice{AccountMemberID: string(account), AccountName: name, Harness: a.Name, DisplayName: a.DisplayName, Status: choiceReady}
 		c.Modes = []string{"standard", "background"}
 		c.DefaultMode = "standard"
+		if s.cfg.Runs.WakeRefusal(a.Name, domain.LaunchTUI) != nil {
+			c.Modes, c.DefaultMode = []string{"background"}, "background"
+		}
 		if a.EnhancedInstalled {
 			c.Modes = append([]string{"enhanced"}, c.Modes...)
 			c.DefaultMode = "enhanced"
@@ -278,6 +281,11 @@ func (s *Service) choose(ctx context.Context, p *policy, req protocol.ChildStart
 	}
 	if spec.mode == "" {
 		spec.mode = defaultMode
+		if s.cfg.Runs.WakeRefusal(spec.harness, spec.mode) != nil {
+			spec.mode = domain.LaunchHeadless
+		}
+	} else if refusal := s.cfg.Runs.WakeRefusal(spec.harness, spec.mode); refusal != nil {
+		return launchSpec{}, denied("%s", refusal.Error())
 	}
 	// Where the account's owner keeps logins, the default login's files
 	// decide nothing: a subsession is refused only when no login serves it.

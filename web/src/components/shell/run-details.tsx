@@ -7,12 +7,12 @@ import { useIsMobile } from '@/lib/breakpoints'
 import { coarsePointer, useMediaQuery } from '@/lib/hooks'
 import { memberName, resolveMember } from '@/lib/member-name'
 import { useRunAccountLine, useRunPayer } from '@/lib/run-account'
-import { clipLabel, runLabel, stateTitle, toneOf, type PresentationState } from '@/lib/status'
+import { clipLabel, runLabel, stateTitle, toneOf, type PresentationState, type StateCause } from '@/lib/status'
 import { cn, surface } from '@/lib/utils'
 import { modeLabel } from '@/routes/run/agent-name'
 import { useStore } from '@/store'
 import { isTerminal, type RunRecord } from '@/store/runs'
-import type { RunStatusCause, RunWait } from '@/lib/types'
+import type { RunWait } from '@/lib/types'
 
 interface Shown {
   run: RunRecord
@@ -21,7 +21,7 @@ interface Shown {
   waiting: boolean
   reason: string
   next?: string
-  cause?: RunStatusCause
+  cause?: StateCause
   wait?: RunWait
   since: string
   /** A run's child-run counts. */

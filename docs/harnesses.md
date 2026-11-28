@@ -509,8 +509,8 @@ Google sign-in inside a session sandbox.
 ### Install hooks by hand
 
 Claude Code, Copilot, pi, oh-my-pi and OpenCode load Cloudfield's inbox hooks
-for you on a Standard session that has a task. Codex needs none: its app-server
-hands it mail. Gemini CLI and Cursor CLI do not load hooks.
+for you on a Standard session, with or without a task. Codex needs none: its
+app-server hands it mail. Gemini CLI and Cursor CLI do not load hooks.
 Without hooks, mail reaches those agents only when they run
 `cloudfield-internal inbox`.
 
@@ -967,8 +967,8 @@ a finished tool call. **Idle wake** starts a new turn in a session that has been
 waiting. Which agents get which is in the table above. Both are managed for you,
 except where [Install hooks by hand](#install-hooks-by-hand) says otherwise.
 
-Hooks work only for a coordinated session that has a task, in Standard mode. A
-taskless launch, a Background session, a session with `--conflict-coordination=false`,
+Hooks work only for a coordinated session in Standard mode, with or without a
+task. A Background session, a session with `--conflict-coordination=false`,
 and an agent whose command an administrator overrode do not get them. Enhanced
 sessions do not use hooks: the server prompts the idle session instead. So does a
 Standard Codex run, through its app-server, with or without a task: the server
@@ -977,11 +977,14 @@ steer mid-turn. Without any of these, the agent reads mail only when it runs
 `cloudfield-internal inbox`.
 
 Claude Code is the one with a hook-based idle wake in Standard mode. Its wake
-starts a turn with no human input, and the terminal shows **Stop hook feedback**.
+starts a turn with no human input, also in a session you have not typed into
+yet, and the terminal shows **Stop hook feedback**.
 That wording is Claude Code's own framing, not an error. After you press Esc, a
 wake pauses until a turn completes. Copilot has no idle wake, so mail waits for
 the next hook boundary. pi, oh-my-pi and OpenCode wake only their main
-session, and only while idle.
+session, and only while idle. OpenCode's wake starts after the session's first
+turn, so a session opened without a task is not woken until you have prompted
+it once.
 
 Hooks that you installed yourself and Cloudfield's managed ones do not double up
 for Claude Code. If an OpenCode, pi or oh-my-pi setting disables extensions,
@@ -1009,8 +1012,20 @@ asking the agent to report
 ([coordination.md](coordination.md#lifecycle-status-is-separate)). Enhanced
 sessions get a [report reminder](enhanced-sessions.md#report-reminder) prompt
 instead. Standard sessions of other agents are not held: Codex sessions load no
-hooks, and the app-server reports an idle thread the same way after a
-finished turn and after you press Esc.
+hooks, and the app-server gives a thread the same `idle` status after a
+finished turn and after you press Esc. Only the turn's own status differs.
+
+When a Standard [subsession](teams.md#subsessions) of an agent with status
+reporting ends a turn without an outcome report, its parent gets a provisional
+report, as from an Enhanced subsession
+([coordination.md](coordination.md#subsessions)). It carries the agent's last
+message for Claude Code, from the Stop hook, and for Codex, from the
+app-server. pi, oh-my-pi and OpenCode report the turn end without a message,
+so the report reads `(none)`; it still wakes the parent. A Claude Code or
+Codex turn you cut off with Esc forwards nothing: Claude Code runs no Stop
+hook, and the app-server marks the turn `interrupted`. A turn that
+[a mode switch](enhanced-sessions.md#switching-a-running-agent) interrupts
+forwards nothing either. An agent without status reporting forwards nothing.
 
 ## Agent configuration: import and Files
 
@@ -1029,7 +1044,7 @@ mounts.
 - Codex subagents do not nest in the Enhanced timeline.
 - No idle wake exists for Copilot, Gemini or Cursor, and Antigravity has no
   hooks at all. A [subsession](teams.md#subsessions) refuses them Standard, so they run
-  Enhanced there.
+  Enhanced there, or Background for Antigravity.
 - Standard Codex needs Codex 0.131.0 or newer. Its app-server ends with its
   terminal, so a `codex resume` in the shell runs without Cloudfield's status
   and message delivery.

@@ -16,6 +16,7 @@ import { PhoneLaunchSheet } from '@/components/launch/phone-launch'
 import { LinkedIssue, OfferedIssue } from '@/components/launch/linked-issue'
 import { AgentOptions, needsTask, RunFields, useAgentChoice } from '@/components/launch/run-fields'
 import { emptyLimits, parseLimits, useServerRunLimits } from '@/components/launch/run-limits'
+import { useWarmBase } from '@/components/launch/warm-base'
 import { fallbackFromSaved, fallbackToSaved, SaveAccountDefault, SavedIssues, savedOwnLogins } from '@/components/launch/saved-defaults'
 import { AdoptCommand, adoptCommand, SetupOutput, setupOutput } from '@/components/launch/setup-output'
 import { LoaderCircle, X } from '@/components/icons'
@@ -158,6 +159,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const ownForm = severalLogins || (listMatters && !ownLogins)
   const accountName = accounts.find((member) => member.id === account)?.display_name ?? account
   const taskMissing = needsTask(mode, task)
+  useWarmBase(open && cap.hasMethod('workspace.mirror.warm') ? workspaceID : '', task)
   const dictating = useDictating()
   useEffect(() => {
     if (error) errorCallout.current?.scrollIntoView({ block: 'nearest' })

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
 	"github.com/3xDevOps/cloudfield/internal/fallback"
@@ -22,7 +23,7 @@ import (
 type Runs interface {
 	LaunchWithOptions(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode, opts domain.LaunchOptions) (*domain.Run, error)
 	WakeRefusal(agent string, mode domain.LaunchMode) error
-	StopForParent(ctx context.Context, run, parent domain.RunID) error
+	StopForParent(ctx context.Context, run, parent domain.RunID, attached func() error) error
 	CloseRun(ctx context.Context, run domain.RunID, actor domain.MemberID, outcome domain.RunStatus) error
 	Review(ctx context.Context, run domain.RunID, actor domain.MemberID, action string, reportedOnly bool) (*domain.Run, error)
 	DefaultMode(ctx context.Context, member, account domain.MemberID, harnessName string) (domain.LaunchMode, error)
@@ -79,7 +80,7 @@ type Config struct {
 	// Authorize is sshd.AuthorizeLaunch; AuthorizationMu the mutex callers
 	// hold across it and the launch's durable boundary.
 	Authorize       func(ctx context.Context, st store.Store, actor domain.MemberID, account string, workspaces []domain.WorkspaceID) (domain.MemberID, error)
-	AuthorizationMu *sync.Mutex
+	AuthorizationMu *ctxlock.Mutex
 	// Now is the clock the idle notice measures a quiet spell against;
 	// time.Now when unset.
 	Now func() time.Time

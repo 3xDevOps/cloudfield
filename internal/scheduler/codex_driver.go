@@ -355,14 +355,18 @@ func (d *appServerDriver) status(entry *supervised, r *appServerRun, thread stri
 	r.reporting = true
 	d.mu.Unlock()
 	go func() {
+		// A status seen while dialing waits for serve to store the client
+		// that reads its thread. A dial that fails stores none, and serve
+		// reports that failure instead.
+		<-r.ready
 		for {
 			d.mu.Lock()
-			if len(r.pending) == 0 || r.stopping {
+			if len(r.pending) == 0 || r.stopping || r.client == nil {
 				r.pending, r.reporting = nil, false
 				d.mu.Unlock()
 				return
 			}
-			thread, status := r.pending[0].thread, r.pending[0].status
+			thread, status, client := r.pending[0].thread, r.pending[0].status, r.client
 			r.pending = r.pending[1:]
 			d.mu.Unlock()
 			report := agentstatus.Report{State: agentstatus.Idle, Reason: agentstatus.ReasonIdle, SessionID: thread}
@@ -373,6 +377,16 @@ func (d *appServerDriver) status(entry *supervised, r *appServerRun, thread stri
 				report.Reason = appServerAskingReason
 			case codexapp.Failed:
 				report.Reason = agentstatus.ReasonFailed
+			case codexapp.Idle:
+				if d.s.hasParent(entry.runID) {
+					ctx, cancel := context.WithTimeout(r.ctx, acpSteerTimeout)
+					message, interrupted, err := client.LastMessage(ctx, thread)
+					cancel()
+					if err != nil {
+						slog.Warn("scheduler: read a Codex subsession's last message", "run", entry.runID, "error", err)
+					}
+					report.LastMessage, report.Interrupted = message, interrupted
+				}
 			}
 			if status == codexapp.Idle || status == codexapp.Failed {
 				d.serverTurn(entry.runID, false)

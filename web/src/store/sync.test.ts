@@ -234,6 +234,23 @@ describe('hydrate', () => {
     expect(Object.keys(store.getState().terminalControlSessions)).toEqual(['run_1'])
   })
 
+  it('drops a lane history that a view started for the member before, while the link status was awaited', async () => {
+    const store = createRootStore()
+    store.setState({ identityKey: 'someone-else' })
+    const client = fakeApi()
+    const link = Promise.withResolvers<LinkStatus>()
+    client.capabilities = vi.fn(async () => ({ gateway: 'local', methods: ['*'], ws: ['events'], local: ['link.status'] }))
+    client.localLinkStatus = vi.fn(() => link.promise)
+    const pending = hydrate(store, client)
+    await vi.waitFor(() => expect(client.localLinkStatus).toHaveBeenCalled())
+    // The identity change has cleared lane history; a mounted Lanes view starts its read again before the new identity is published.
+    store.getState().setLaneHistory(workspace.id, { loading: true })
+    link.resolve({ server_configured: true, linked: true, addr: 'a', user: 'u', repo: 'r' })
+    expect(await pending).toBe(true)
+    expect(store.getState().identityKey).not.toBe('someone-else')
+    expect(store.getState().laneHistory).toEqual({})
+  })
+
   it('does not publish link status or clear current errors after disposal during a local poll', async () => {
     const store = createRootStore()
     const staleClient = fakeApi()
@@ -2405,6 +2422,47 @@ describe('connect', () => {
     )
     expect(store.getState().lastSeq).toBe(7)
     stop()
+  })
+
+  it('drops the lane history of a workspace whose event could not be applied, so Lanes reads it again', async () => {
+    const client = fakeApi({
+      runList: vi.fn().mockResolvedValueOnce([]).mockResolvedValue([run({ id: 'run_9', status: 'running' })]),
+      runGet: vi.fn().mockRejectedValueOnce(new ApiError(500, 'run.get: store busy')),
+    })
+    const store = createRootStore()
+    const stop = connect(store, client)
+    try {
+      const socket = await subscribe()
+      await vi.waitFor(() => expect(store.getState().hydrated).toBe(true))
+      // A Lanes view holds two workspaces' histories; live events keep them current.
+      store.getState().holdLanes()
+      store.getState().setLaneHistory(workspace.id, { floor: -Infinity })
+      store.getState().setLaneHistory('wsp_other', { floor: -Infinity })
+
+      // A brand new run's first status: the fetch of the run fails, so the event is not applied.
+      deliver(socket, statusEvent({ seq: 10, run_id: 'run_9', payload: { to: 'running' } }))
+      await vi.waitFor(() => expect(client.runList).toHaveBeenCalledTimes(2))
+      // The snapshot repairs the session list; the history that missed the event must not stay as if complete.
+      expect(store.getState().runs.run_9).toBeDefined()
+      expect(store.getState().laneHistory[workspace.id]).toBeUndefined()
+      expect(store.getState().laneHistory.wsp_other).toBeDefined()
+
+      // Nor does a reread, which Lanes leaves out of its history.
+      store.getState().setLaneHistory(workspace.id, { floor: -Infinity })
+      vi.mocked(client.runGet).mockRejectedValueOnce(new ApiError(500, 'run.get: store busy'))
+      deliver(socket, statusEvent({ seq: 12, run_id: 'run_11', payload: { to: 'running', reread: true } }))
+      await vi.waitFor(() => expect(client.runList).toHaveBeenCalledTimes(3))
+      expect(store.getState().laneHistory[workspace.id]).toBeDefined()
+
+      // An event Lanes does not hold costs its history nothing when it cannot be applied.
+      store.getState().setLaneHistory(workspace.id, { floor: -Infinity })
+      vi.mocked(client.runGet).mockRejectedValueOnce(new ApiError(500, 'run.get: store busy'))
+      deliver(socket, { ...statusEvent({ seq: 13, run_id: 'run_10' }), type: 'run.title', payload: { title: 'x' } })
+      await vi.waitFor(() => expect(client.runList).toHaveBeenCalledTimes(4))
+      expect(store.getState().laneHistory[workspace.id]).toBeDefined()
+    } finally {
+      stop()
+    }
   })
 
   it('never advances the cursor past an event still waiting on a fetch', async () => {
