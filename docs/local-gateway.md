@@ -612,16 +612,19 @@ the server starts it when there is room
 ([A launch that waits for room](failure-handling.md#a-launch-that-waits-for-room)).
 `id` is the session ID reserved for it; no session has that ID until
 `state` is `started`. The same request with the same `idempotency_key`
-returns the same `waiting` object while it waits and its session, with
-`replayed`, once it started; after it ended `cancelled` it answers `-32003`,
-and after `expired` or `refused` `-32004`, each with why, and never launches
-again. `wait` is not part of what the key fingerprints. A server that does
+returns the same `waiting` object while it waits and its session once it
+started. Without `wait`, that key answers `-32004` with the refusal and that
+the launch waits, so a caller that did not ask to wait never gets a result
+without a `run`. For 7 days after it ended `cancelled` the key answers
+`-32003`, and after `expired` or `refused` `-32004`, each with why, and
+launches nothing. `wait` is not part of what the key fingerprints. A server that does
 not know `wait` refuses it as an unknown param, so send it only when
 `server.info` lists the `launch-wait` feature.
 
 `launch.waiting.list` (no params, or `{"id":"<id>"}` for one of any age)
 returns `{"waiting":[...]}`: the caller's launches that wait, and those that
-ended `expired` or `refused` in the last 24 hours. `launch.waiting.cancel`
+ended in the last 24 hours `expired`, `refused`, or `cancelled` by someone
+else. `launch.waiting.cancel`
 `{"id":"<id>"}` ends one `cancelled` and returns it; one that has started
 answers `-32002` and names the session to stop. Both act on the caller's own
 launches; a super admin may name anyone's by `id`.

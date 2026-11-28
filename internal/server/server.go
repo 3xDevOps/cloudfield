@@ -945,4 +945,7 @@ func (s *Server) offerRoom(ctx context.Context) {
 	for range sub.Events() {
 		s.ssh.RoomAppeared()
 	}
+	if ctx.Err() == nil {
+		slog.Warn("server: the session status subscription ended; waiting launches are tried on the clock only")
+	}
 }

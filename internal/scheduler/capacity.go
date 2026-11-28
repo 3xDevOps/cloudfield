@@ -26,7 +26,7 @@ var (
 	ErrCapacityUnknown    = errors.New("scheduler: host capacity unavailable")
 	// ErrLaunchesWaiting sends a launch that asked to wait behind the
 	// launches already waiting for room, without an admission of its own.
-	ErrLaunchesWaiting = errors.New("scheduler: launches asked for earlier are waiting for room")
+	ErrLaunchesWaiting = errors.New("scheduler: launches asked for earlier are waiting for room, and this one waits behind them")
 )
 
 // CapacityRefused reports whether err is a refusal for want of disk or

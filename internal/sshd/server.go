@@ -220,6 +220,11 @@ type Server struct {
 	// cannot acquire a replacement lock and recreate removed resources.
 	workspaceLocksMu sync.Mutex
 	workspaceLocks   map[domain.WorkspaceID]*sync.RWMutex
+	// launchReclaimed is when a try of a waiting launch last could free
+	// disk, in Unix nanoseconds.
+	launchReclaimed atomic.Int64
+	// launchPass keeps passes over the waiting launches from overlapping.
+	launchPass sync.Mutex
 	// launchRoom carries RoomAppeared to dispatchLaunchIntents.
 	launchRoom   chan struct{}
 	launchKeysMu sync.Mutex

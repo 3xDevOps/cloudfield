@@ -45,9 +45,14 @@ type LaunchIntentStore interface {
 	// PassLaunchIntents counts one more launch admitted ahead of every
 	// waiting intent, and returns how many it passed.
 	PassLaunchIntents(ctx context.Context) (int64, error)
+	// OpenLaunchIntents counts the intents of every member that wait or
+	// are being tried.
+	OpenLaunchIntents(ctx context.Context) (int, error)
+	// PruneLaunchIntents deletes the intents that ended before before.
+	PruneLaunchIntents(ctx context.Context, before time.Time) error
 }
 
-const launchIntentCols = `id, member_id, workspace_id, idempotency_key, method, params, base_commit, base_branch, base_source, base_checked_at, via, connector, state, refusal,
+const launchIntentCols = `id, member_id, workspace_id, idempotency_key, method, params, base_commit, base_branch, base_source, base_checked_at, via, connector, device, state, refusal,
 	attempts, passed, created_at, attempted_at, ended_at`
 
 func scanLaunchIntent(row interface{ Scan(...any) error }) (*domain.LaunchIntent, error) {
@@ -55,7 +60,7 @@ func scanLaunchIntent(row interface{ Scan(...any) error }) (*domain.LaunchIntent
 	var params string
 	var created, attempted, checked int64
 	var ended sql.NullInt64
-	if err := row.Scan(&in.ID, &in.MemberID, &in.WorkspaceID, &in.IdempotencyKey, &in.Method, &params, &in.Base.Commit, &in.Base.Branch, &in.Base.Source, &checked, &in.Via, &in.Connector,
+	if err := row.Scan(&in.ID, &in.MemberID, &in.WorkspaceID, &in.IdempotencyKey, &in.Method, &params, &in.Base.Commit, &in.Base.Branch, &in.Base.Source, &checked, &in.Via, &in.Connector, &in.Device,
 		&in.State, &in.Refusal, &in.Attempts, &in.Passed, &created, &attempted, &ended); err != nil {
 		return nil, err
 	}
@@ -101,8 +106,8 @@ func (d *DB) CreateLaunchIntent(ctx context.Context, in *domain.LaunchIntent, ma
 		out.IdempotencyKey = id
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO launch_intents (`+launchIntentCols+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, NULL)`,
-		out.ID, out.MemberID, out.WorkspaceID, out.IdempotencyKey, out.Method, string(out.Params), out.Base.Commit, out.Base.Branch, out.Base.Source, out.Base.CheckedAt.UTC().UnixNano(), out.Via, out.Connector,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, NULL)`,
+		out.ID, out.MemberID, out.WorkspaceID, out.IdempotencyKey, out.Method, string(out.Params), out.Base.Commit, out.Base.Branch, out.Base.Source, out.Base.CheckedAt.UTC().UnixNano(), out.Via, out.Connector, out.Device,
 		out.State, out.Refusal, ts.UnixNano(), ts.UnixNano()); err != nil {
 		return nil, false, fmt.Errorf("store: create launch intent: %w", mapConstraint(err, ErrNotFound))
 	}
@@ -223,4 +228,19 @@ func (d *DB) PassLaunchIntents(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("store: pass launch intents: %w", err)
 	}
 	return res.RowsAffected()
+}
+
+func (d *DB) OpenLaunchIntents(ctx context.Context) (int, error) {
+	var n int
+	if err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM launch_intents WHERE state IN ('waiting', 'starting')`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count open launch intents: %w", err)
+	}
+	return n, nil
+}
+
+func (d *DB) PruneLaunchIntents(ctx context.Context, before time.Time) error {
+	if _, err := d.db.ExecContext(ctx, `DELETE FROM launch_intents WHERE ended_at < ?`, before.UTC().UnixNano()); err != nil {
+		return fmt.Errorf("store: prune launch intents: %w", err)
+	}
+	return nil
 }

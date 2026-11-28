@@ -2754,6 +2754,7 @@ CREATE TABLE launch_intents (
 	base_checked_at INTEGER NOT NULL,
 	via             TEXT NOT NULL,
 	connector       TEXT NOT NULL,
+	device          TEXT NOT NULL,
 	state           TEXT NOT NULL CHECK (state IN ('waiting', 'starting', 'started', 'cancelled', 'expired', 'refused')),
 	refusal         TEXT NOT NULL,
 	attempts        INTEGER NOT NULL,

@@ -333,12 +333,12 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 		return nil, err
 	}
 	if opts.Queue {
-		ahead, listErr := s.cfg.Store.LaunchIntents(ctx, "", domain.IntentWaiting, domain.IntentStarting)
-		if listErr != nil {
-			return nil, listErr
+		ahead, countErr := s.cfg.Store.OpenLaunchIntents(ctx)
+		if countErr != nil {
+			return nil, countErr
 		}
-		if len(ahead) > 0 {
-			return nil, fmt.Errorf("%w: %d ahead of this one", ErrLaunchesWaiting, len(ahead))
+		if ahead > 0 {
+			return nil, ErrLaunchesWaiting
 		}
 	}
 	release, err := s.reserveLaunch(ctx, reservedID, opts.Retry)

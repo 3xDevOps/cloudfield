@@ -870,19 +870,29 @@ sends `wait` with `run.launch` has it kept instead: the launch waits and the
 server starts it when there is room. A wake of a sleeping session never
 waits: it stays asleep with the refusal shown.
 
-- **What is kept.** The request as its member sent it, the workspace's base
-  commit captured when it began to wait, and a session ID reserved for it.
+- **What is kept.** The request as its member sent it (64 KiB at most; a
+  larger one is refused as before), the workspace's base commit captured
+  when it began to wait, and a session ID reserved for it. Extra
+  repositories are captured when it starts.
   It is not a session: nothing can message, wake or report to that ID, and
   it holds no slot, until it has started.
 - **When it is tried.** The oldest waiting launch is tried every 30 seconds,
   and within 5 seconds of a session ending or falling asleep, so room that
-  appears is offered to waiting launches first. When one starts, the next is
-  tried in the same pass. A try the server makes by itself frees no disk
-  ([Recover from disk pressure](#recover-from-disk-pressure)).
+  appears is offered to waiting launches first. When one's session exists,
+  the next is tried in the same pass, without waiting for the first to
+  finish provisioning. One try in ten minutes may free disk as a launch
+  somebody asks for does
+  ([Recover from disk pressure](#recover-from-disk-pressure)); the others
+  leave what closed and sleeping sessions keep alone.
 - **What a try checks.** Everything a fresh launch checks, at that moment
   and as its member: membership and role, access to the workspace, the
   account and whether it is still shared, the agent's login, the budget.
-  A launch that fails one ends `refused` with that error.
+  What admitted the request must still admit it: a launch asked for from an
+  edge device is tried only while that device is admitted, and one asked
+  for through a connector as that connector, with the grant and scopes it
+  has then. A launch that fails a check ends `refused` with that error. A
+  try that fails on anything else, such as a database read, leaves it
+  waiting.
 - **Order.** Oldest first. Every launch needs the same room, so the oldest
   never holds up one that would fit. A launch that asks to wait while others
   wait goes behind them without a try of its own. A launch that does not ask
@@ -891,11 +901,12 @@ waits: it stays asleep with the refusal shown.
   every waiting one (`passed`).
 - **How it ends.** It becomes its session, in one database transaction with
   the session's row; or its member cancels it; or it finds no room for 24
-  hours and ends `expired` with the last refusal; or a check refuses it. An
-  ending that is not a start is pushed to its member's devices and stays in
-  `launch.waiting.list` for a day.
-- **Limits.** One member may have 8 launches waiting; one more is refused as
-  a launch always was.
+  hours and ends `expired` with the last refusal; or a check refuses it; or
+  a super admin cancels it. An ending its member did not choose is pushed
+  to their devices and stays in `launch.waiting.list` for a day. An ended
+  launch answers its idempotency key for 7 days.
+- **Limits.** One member may have 8 launches waiting; one more is refused
+  with `-32004`, the refusal and that the member already has 8 waiting.
 - **What removes it.** Deleting its workspace or its member deletes their
   waiting launches with them.
 - **A restart.** A waiting launch is in the database and waits on. One the

@@ -48,6 +48,9 @@ type LaunchIntent struct {
 	// one removed since ends the launch refused.
 	Via       string
 	Connector string
+	// Device is the edge device the request's connection signed in with,
+	// if one: a launch whose device no longer admits it ends refused.
+	Device DeviceID
 	State LaunchIntentState
 	// Refusal is the last refusal, as the caller got it; for a final state
 	// that is not started, why it ended.
