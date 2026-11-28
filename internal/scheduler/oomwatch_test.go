@@ -5,9 +5,54 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/3xDevOps/cloudfield/internal/events"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
+
+type pidRuntime struct {
+	*fakeRuntime
+}
+
+func (pidRuntime) InitPID(context.Context, runtime.ID) (int, error) { return 7, nil }
+
+func TestOOMWatcherTellsTheSessionsOwnLimitAndKeepsItsBaselineThroughAFailedRead(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t, func(cfg *Config) { cfg.Runtime = pidRuntime{newFakeRuntime()} })
+	proc, cg := t.TempDir(), t.TempDir()
+	dir := filepath.Join(cg, "run.scope")
+	for _, d := range []string{filepath.Join(proc, "7"), dir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(proc, "7", "cgroup"), []byte("0::/run.scope\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w := &e.sched.oom
+	w.enable()
+	w.enabled, w.cgroup, w.proc = true, cg, proc
+	target := oomTarget{"container", e.ws.ID, "run"}
+	check := func(counters string) time.Time {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "memory.events"), []byte(counters), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, at := e.sched.checkOOMKill(t.Context(), target)
+		return at
+	}
+	sub := e.subscribe(t)
+	check("oom 0\noom_kill 0\n")
+	check("low 0\n")
+	if at := check("oom 0\noom_kill 1\n"); !at.IsZero() {
+		t.Fatalf("a kill by the host's OOM killer was put down to the session's own limit at %v", at)
+	}
+	waitTimelineEvent(t, sub, target.run, events.TimelineNote)
+	if at := check("oom 1\noom_kill 2\n"); time.Since(at) > time.Minute {
+		t.Fatalf("a kill at the session's own limit was last seen at %v", at)
+	}
+}
 
 func TestReadMemoryStatsAndMessage(t *testing.T) {
 	proc, cg := t.TempDir(), t.TempDir()

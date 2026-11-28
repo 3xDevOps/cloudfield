@@ -133,7 +133,7 @@ func (r *acpRuntime) StartExecPipe(_ context.Context, id runtime.ID, spec runtim
 		_, _ = io.WriteString(readyOut, "ready\n")
 		_ = k.Pump(hostIn)
 		<-e.done
-		k.Exited(0)
+		k.Exited(int(e.exitCode.Load()))
 	}()
 	return e, nil
 }
@@ -267,6 +267,8 @@ type acpExec struct {
 	done     chan struct{}
 	stopErr  error
 	wire     acpWire
+	// exitCode is what the adapter's keeper reports once the adapter ends.
+	exitCode atomic.Int32
 }
 
 func (e *acpExec) Identity() runtime.ExecIdentity { return e.identity }

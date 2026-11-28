@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
@@ -19,20 +20,27 @@ import (
 )
 
 // oomWatcher tracks each live container's cgroup v2 oom_kill counter. The
-// first reading is the baseline; a later increase is reported.
+// first reading is the baseline; a later increase is reported, and killedAt
+// keeps when one came with the session at its own limit.
 type oomWatcher struct {
-	checked bool
-	enabled bool
-	cgroup  string
-	proc    string
-	paths   map[runtime.ID]string
-	kills   map[runtime.ID]uint64
+	mu        sync.Mutex
+	checked   bool
+	enabled   bool
+	cgroup    string
+	proc      string
+	paths     map[runtime.ID]string
+	kills     map[runtime.ID]uint64
+	limitHits map[runtime.ID]uint64
+	killedAt  map[runtime.ID]time.Time
 }
 
+// memoryStats counts in oomKills the kills by any OOM killer, the host's
+// included, and in limitHits the times the session ran out at its own limit.
 type memoryStats struct {
-	oomKills uint64
-	peak     uint64
-	max      uint64
+	oomKills  uint64
+	limitHits uint64
+	peak      uint64
+	max       uint64
 }
 
 func (w *oomWatcher) enable() bool {
@@ -43,6 +51,8 @@ func (w *oomWatcher) enable() bool {
 		w.enabled = err == nil
 		w.paths = map[runtime.ID]string{}
 		w.kills = map[runtime.ID]uint64{}
+		w.limitHits = map[runtime.ID]uint64{}
+		w.killedAt = map[runtime.ID]time.Time{}
 	}
 	return w.enabled
 }
@@ -51,21 +61,18 @@ func (w *oomWatcher) enable() bool {
 // cannot block the sweep loop.
 const oomProbeTimeout = 5 * time.Second
 
+type oomTarget struct {
+	container runtime.ID
+	workspace domain.WorkspaceID
+	run       domain.RunID
+}
+
 func (s *Scheduler) checkOOMKills(ctx context.Context) {
-	pids, ok := s.cfg.Runtime.(runtime.InitPIDRuntime)
-	if !ok || !s.oom.enable() {
-		return
-	}
-	type target struct {
-		container runtime.ID
-		workspace domain.WorkspaceID
-		run       domain.RunID
-	}
 	s.mu.Lock()
-	var targets []target
+	var targets []oomTarget
 	for _, e := range s.runs {
 		if !e.finalizing && e.containerID != "" {
-			targets = append(targets, target{e.containerID, e.workspaceID, e.runID})
+			targets = append(targets, oomTarget{e.containerID, e.workspaceID, e.runID})
 		}
 	}
 	s.mu.Unlock()
@@ -73,22 +80,10 @@ func (s *Scheduler) checkOOMKills(ctx context.Context) {
 	seen := map[runtime.ID]bool{}
 	for _, t := range targets {
 		seen[t.container] = true
-		probeCtx, cancel := context.WithTimeout(ctx, oomProbeTimeout)
-		stats, err := s.oom.read(probeCtx, pids, t.container)
-		cancel()
-		if err != nil {
-			s.oom.forget(t.container)
-			if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, runtime.ErrNotFound) {
-				slog.Warn("scheduler: read container memory events", "run", t.run, "container", t.container, "error", err)
-			}
-			continue
-		}
-		prev, known := s.oom.kills[t.container]
-		s.oom.kills[t.container] = stats.oomKills
-		if known && stats.oomKills > prev {
-			s.publishTimeline(ctx, t.workspace, t.run, "", events.TimelineNote, oomMessage(stats))
-		}
+		s.checkOOMKill(ctx, t)
 	}
+	s.oom.mu.Lock()
+	defer s.oom.mu.Unlock()
 	for id := range s.oom.kills {
 		if !seen[id] {
 			s.oom.forget(id)
@@ -96,16 +91,59 @@ func (s *Scheduler) checkOOMKills(ctx context.Context) {
 	}
 }
 
+// checkOOMKill reads t's counter, notes an increase on its timeline, and
+// returns the session's memory limit, 0 for none, with when it last saw an
+// increase that came with the session at that limit. It holds the watcher
+// for one probe at most, so the sweep never keeps an agent's restart waiting
+// for longer. A read that fails on a container that still exists keeps the
+// baseline, so the next one still reports the kill.
+func (s *Scheduler) checkOOMKill(ctx context.Context, t oomTarget) (limit uint64, killedAt time.Time) {
+	pids, ok := s.cfg.Runtime.(runtime.InitPIDRuntime)
+	s.oom.mu.Lock()
+	defer s.oom.mu.Unlock()
+	if !ok || !s.oom.enable() {
+		return 0, time.Time{}
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, oomProbeTimeout)
+	stats, err := s.oom.read(probeCtx, pids, t.container)
+	cancel()
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, runtime.ErrNotFound) {
+			s.oom.forget(t.container)
+		} else {
+			slog.Warn("scheduler: read container memory events", "run", t.run, "container", t.container, "error", err)
+		}
+		return 0, time.Time{}
+	}
+	prev, known := s.oom.kills[t.container]
+	atLimit := stats.limitHits > s.oom.limitHits[t.container]
+	s.oom.kills[t.container], s.oom.limitHits[t.container] = stats.oomKills, stats.limitHits
+	if known && stats.oomKills > prev {
+		if atLimit {
+			s.oom.killedAt[t.container] = time.Now()
+		}
+		s.publishTimeline(ctx, t.workspace, t.run, "", events.TimelineNote, oomMessage(stats))
+	}
+	return stats.max, s.oom.killedAt[t.container]
+}
+
+// oomKillWindow is how long after the kernel killed a process in a session
+// at its memory limit the death of its agent by signal 9 is put down to that.
+const oomKillWindow = 2 * time.Minute
+
 func (w *oomWatcher) forget(id runtime.ID) {
 	delete(w.paths, id)
 	delete(w.kills, id)
+	delete(w.limitHits, id)
+	delete(w.killedAt, id)
 }
 
 func (w *oomWatcher) read(ctx context.Context, pids runtime.InitPIDRuntime, id runtime.ID) (memoryStats, error) {
 	if guest, ok := pids.(runtime.MemoryEventsRuntime); ok {
 		events, own, err := guest.MemoryEvents(ctx, id)
 		if own {
-			return memoryStats{oomKills: events.OOMKills, max: events.LimitBytes}, err
+			// A guest's kernel kills only at the session's own limit.
+			return memoryStats{oomKills: events.OOMKills, limitHits: events.OOMKills, max: events.LimitBytes}, err
 		}
 	}
 	path, ok := w.paths[id]
@@ -159,6 +197,11 @@ func readMemoryStats(dir string) (memoryStats, error) {
 				return st, fmt.Errorf("parse oom_kill in %s: %w", dir, err)
 			}
 			found = true
+		}
+		if v, ok := strings.CutPrefix(line, "oom "); ok {
+			if st.limitHits, err = strconv.ParseUint(strings.TrimSpace(v), 10, 64); err != nil {
+				return st, fmt.Errorf("parse oom in %s: %w", dir, err)
+			}
 		}
 	}
 	if !found {

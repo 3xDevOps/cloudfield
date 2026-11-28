@@ -180,9 +180,14 @@ func (d *acpDriver) watch(entry *supervised, r *acpRun) {
 		return
 	}
 	var cause error
+	var killedBy int
 	switch exit := r.exit(); {
 	case exit != nil:
 		cause = fmt.Errorf("the agent's ACP server exited with code %d", exit.Code)
+		// The keeper reports a death by signal as 128 plus the signal.
+		if exit.Code > 128 && exit.Code < 128+64 {
+			killedBy = exit.Code - 128
+		}
 		_, _ = r.stderr.Write([]byte(exit.Stderr))
 		_, _ = r.exec.Wait(ctx)
 	case r.keeper != nil:
@@ -212,7 +217,25 @@ func (d *acpDriver) watch(entry *supervised, r *acpRun) {
 	}
 	d.s.mu.Lock()
 	stopped := entry.stopNoticeLocked()
+	restart := killedBy != 0 && stopped == "" && entry.launchMode != domain.LaunchHeadless
+	again := restart && time.Since(entry.sessionLostAt) < acpLostAgain
+	if restart {
+		entry.sessionLostAt = time.Now()
+	}
 	d.s.mu.Unlock()
+	switch {
+	case again:
+		cause = fmt.Errorf("%w; it was killed within %d minutes of its last restart, so Cloudfield did not restart it again", cause, int(acpLostAgain.Minutes()))
+	case restart:
+		// An agent started on a host short of memory takes back what its
+		// kill freed, and the next kill may land on another session.
+		available, floor, err := d.s.hostMemory()
+		if err != nil || available >= floor {
+			d.restartKilled(entry, killedBy)
+			return
+		}
+		cause = fmt.Errorf("%w; the host has %s of memory available, under the %s every launch keeps free, so Cloudfield did not restart it", cause, formatGiB(available), formatGiB(floor))
+	}
 	idle := agentstatus.Report{State: agentstatus.Idle, Reason: acpEndedReason + cause.Error()}
 	if stopped != "" {
 		d.notice(entry.runID, "info", "Enhanced agent stopped", stopped)
@@ -225,6 +248,39 @@ func (d *acpDriver) watch(entry *supervised, r *acpRun) {
 		return
 	}
 	d.report(entry.runID, idle)
+}
+
+// restartKilled starts the agent a signal killed again and restores its
+// conversation, under the run's op lock. watch's acpLostAgain guard keeps an
+// agent that is killed on every start from restarting in a loop.
+func (d *acpDriver) restartKilled(entry *supervised, sig int) {
+	why := "The agent's ACP server was killed"
+	// The kernel's OOM killer sends signal 9.
+	if sig == 9 {
+		d.s.mu.Lock()
+		target := oomTarget{entry.containerID, entry.workspaceID, entry.runID}
+		d.s.mu.Unlock()
+		if limit, at := d.s.checkOOMKill(context.Background(), target); time.Since(at) < oomKillWindow {
+			why = "This session ran out of memory"
+			if limit > 0 {
+				why += " at its " + formatGiB(limit) + " limit"
+			}
+			why += ", and the kernel killed the agent's ACP server"
+		}
+	}
+	d.notice(entry.runID, "warning", "Agent killed", fmt.Sprintf("%s (signal %d). Cloudfield is restarting the agent and restoring the conversation from its history. A turn that was in flight shows Turn interrupted and was lost with its commands and background tasks: send that message again.", why, sig))
+	defer d.needGuest(entry)()
+	ctx, cancel := context.WithTimeout(context.Background(), acpConnectTimeout)
+	defer cancel()
+	how := openRestore
+	// The restore is likeliest to fail right after a kill for memory, and a
+	// new conversation would replace the one the run records.
+	if run, err := d.s.cfg.Store.GetRun(ctx, entry.runID); err == nil && d.s.resumes(run.Harness) {
+		how = openWake
+	}
+	if err := d.open(ctx, entry, how); err != nil {
+		d.fail(entry, err)
+	}
 }
 
 // takenOver restarts the agent of a run whose keeper another attacher took
