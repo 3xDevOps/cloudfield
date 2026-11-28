@@ -774,6 +774,17 @@ func (q *qualify) previousServer(bin, worktree string, c *client) {
 		q.t.Fatalf("the previous release's server did not enroll:\n%s%s", &log, &stderr)
 	}
 	q.claim(c, id, code)
+	// The server reports its claim to the edge on its control connection,
+	// and answers the claim without waiting for the edge to record it.
+	eventually(q.t, "the edge records the claim", func() error {
+		list := q.edge("servers", "list")
+		for line := range strings.Lines(list) {
+			if f := strings.Fields(line); len(f) > 1 && f[0] == id && f[1] == "claimed" {
+				return nil
+			}
+		}
+		return fmt.Errorf("servers list has no claimed %s:\n%s", id, list)
+	})
 	ctl := q.h.control(c, &serverNode{id: id})
 	if info := call[protocol.ServerInfoResult](q.t, ctl, protocol.MethodServerInfo, struct{}{}); info.Member.Role != string(domain.RoleSuperAdmin) {
 		q.t.Fatalf("server.info on the previous release's server = %+v", info.Member)

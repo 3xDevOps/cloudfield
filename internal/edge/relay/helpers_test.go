@@ -31,11 +31,21 @@ type fakeDir struct {
 	ownerOf   map[string]edgeproto.Principal
 	policies  map[string]edgeproto.AccessPolicy
 	blocked   map[string]bool
-	members   map[string][]edgeproto.Account
 	dirs      map[string][]edgeproto.DirectoryEntry
 	dirWrites int
 	// admitHook, when set, runs once at the start of the next Admit.
 	admitHook func()
+	// replaceHook, when set, runs at the start of every ReplaceDirectory.
+	replaceHook func()
+	// admittedErr fails Admit and Admitted for a principal, as a store
+	// that cannot be read does.
+	admittedErr map[edgeproto.Principal]error
+	// admittedHook, when set, runs at the start of every Admitted.
+	admittedHook func()
+	// admits counts the Admit calls, which record the account's reach.
+	admits int
+	// admittedCalls counts the Admit and Admitted calls for a principal.
+	admittedCalls map[edgeproto.Principal]int
 	// authHook, when set, runs once at the start of the next Authenticate.
 	authHook   func()
 	unenrolled []string
@@ -75,9 +85,9 @@ func (d *fakeDir) Authenticate(_ context.Context, token string) (edgeproto.Accou
 	return e.account, e.device, nil
 }
 
-// Admit reads members only, so a test can admit an account to a server
-// the relay itself must still refuse.
-func (d *fakeDir) Admit(_ context.Context, serverID string, a edgeproto.Account) error {
+// Admit admits as the edge's service does: the server's owner, and an
+// account its stored directory names.
+func (d *fakeDir) Admit(ctx context.Context, serverID string, a edgeproto.Account) error {
 	d.mu.Lock()
 	hook := d.admitHook
 	d.admitHook = nil
@@ -86,13 +96,34 @@ func (d *fakeDir) Admit(_ context.Context, serverID string, a edgeproto.Account)
 		hook()
 	}
 	d.mu.Lock()
+	d.admits++
+	d.mu.Unlock()
+	return d.Admitted(ctx, serverID, a)
+}
+
+func (d *fakeDir) Admitted(_ context.Context, serverID string, a edgeproto.Account) error {
+	d.mu.Lock()
+	hook := d.admittedHook
+	d.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	d.mu.Lock()
 	defer d.mu.Unlock()
-	members, ok := d.members[serverID]
-	if !ok {
+	d.admittedCalls[edgeproto.AccountPrincipal(a)]++
+	if err := d.admittedErr[edgeproto.AccountPrincipal(a)]; err != nil {
+		return err
+	}
+	entries, known := d.dirs[serverID]
+	if !known && !d.owners[serverID] {
 		return edgeproto.RefusalUnknownServer
 	}
-	for _, m := range members {
-		if sameAccount(m, a) {
+	if d.ownerOf[serverID] == edgeproto.AccountPrincipal(a) {
+		return nil
+	}
+	now := time.Now()
+	for _, e := range entries {
+		if e.Matches(a, now) {
 			return nil
 		}
 	}
@@ -199,6 +230,12 @@ func (d *fakeDir) owner(serverID string) (edgeproto.Principal, bool) {
 
 func (d *fakeDir) ReplaceDirectory(_ context.Context, serverID string, entries []edgeproto.DirectoryEntry) error {
 	d.mu.Lock()
+	hook := d.replaceHook
+	d.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.dirs[serverID] = entries
 	d.dirWrites++
@@ -212,10 +249,11 @@ func (d *fakeDir) Unenroll(_ context.Context, serverID string) error {
 	return nil
 }
 
+// addMember names a as a member in serverID's stored directory.
 func (d *fakeDir) addMember(serverID string, a edgeproto.Account) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.members[serverID] = append(d.members[serverID], a)
+	d.dirs[serverID] = append(d.dirs[serverID], edgeproto.DirectoryEntry{Kind: edgeproto.EntryMember, Provider: a.Provider, Subject: a.Subject, Role: "admin"})
 }
 
 type fakeEgress struct {
@@ -269,14 +307,14 @@ func newEnvWith(t *testing.T, budget int64, egress *fakeEgress) *env {
 	port := ts.Listener.Addr().(*net.TCPAddr).Port
 	e := &env{
 		dir: &fakeDir{
-			tokens:   map[string]tokenEntry{},
-			owners:   map[string]bool{},
-			ownerOf:  map[string]edgeproto.Principal{},
-			policies: map[string]edgeproto.AccessPolicy{},
-			blocked:  map[string]bool{},
-			members:  map[string][]edgeproto.Account{},
-			dirs:     map[string][]edgeproto.DirectoryEntry{},
-			pending:  map[string][]edgeproto.AccountDeleted{},
+			tokens:        map[string]tokenEntry{},
+			owners:        map[string]bool{},
+			ownerOf:       map[string]edgeproto.Principal{},
+			policies:      map[string]edgeproto.AccessPolicy{},
+			blocked:       map[string]bool{},
+			dirs:          map[string][]edgeproto.DirectoryEntry{},
+			admittedCalls: map[edgeproto.Principal]int{},
+			pending:       map[string][]edgeproto.AccountDeleted{},
 		},
 		egress:  egress,
 		edgeKey: key,
