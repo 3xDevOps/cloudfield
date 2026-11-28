@@ -43,10 +43,14 @@ func (w *agentWakeups) note(c *ToolCall, at time.Time) {
 	case "ScheduleWakeup":
 		w.later(at.Add(time.Duration(in.DelaySeconds * float64(time.Second))))
 	case "CronCreate":
+		// robfig/cron v3.0.1 panics on a zone prefix with no space after it.
+		bareZone := (strings.HasPrefix(in.Cron, "TZ=") || strings.HasPrefix(in.Cron, "CRON_TZ=")) && !strings.Contains(in.Cron, " ")
 		if in.Recurring == nil || *in.Recurring {
 			w.crons[c.ID] = string(c.RawOutput) + c.Output
-		} else if schedule, err := cron.ParseStandard(in.Cron); err == nil {
-			w.later(schedule.Next(at))
+		} else if !bareZone {
+			if schedule, err := cron.ParseStandard(in.Cron); err == nil {
+				w.later(schedule.Next(at))
+			}
 		}
 	case "CronDelete":
 		// A delete that names no job known here keeps the session awake.
