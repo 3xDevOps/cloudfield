@@ -1,62 +1,60 @@
 name: VM tests
 
-# make test-kvm on a hosted x86-64 runner, which exposes /dev/kvm through
-# nested virtualization. ci-suite.yml calls it in the merge queue for a
-# change that can affect the VM tests and in every nightly run;
-# `gh workflow run kvm.yml --ref <branch>` runs it for any branch. The guest
-# kernel takes up to six minutes to build, so it builds only when its
-# inputs change: the cache is keyed by their hash and written on main. It
-# saves no compiler cache for its static builds: the repository's Actions
-# cache is already over its size limit.
+# Scratch probe, never merged: which sibling unit makes systemd write a
+# unit's MemoryMax back, on the runner's systemd.
 on:
-  workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  kvm:
-    name: make test-kvm
+  probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: false
-      - uses: ./.github/actions/go-cache
-        with:
-          mode: restore
-      # The config, the build script and the container recipe make kernel
-      # runs are everything that decides the kernel's bytes.
-      - name: Hash the guest kernel's inputs
-        id: kernel
-        run: echo "key=kernel-v1-$({ cat images/kernel/*; make -n kernel; } | sha256sum | cut -c1-32)" >> "$GITHUB_OUTPUT"
-      - id: kernel-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: dist/aether-vmlinux-x86_64
-          key: ${{ steps.kernel.outputs.key }}
-      - name: Build the guest kernel
-        if: ${{ steps.kernel-cache.outputs.cache-hit != 'true' }}
-        run: make kernel
-      - uses: actions/cache/save@v4
-        if: ${{ steps.kernel-cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
-        with:
-          path: dist/aether-vmlinux-x86_64
-          key: ${{ steps.kernel.outputs.key }}
-      # The install a server runs, so the job uses the Cloud Hypervisor pin
-      # and the tool list servers get.
-      - name: Install what session VMs need (aether-server vm install)
+      - name: Probe
         run: |
-          CGO_ENABLED=0 go build -o "$RUNNER_TEMP/aether-server" ./cmd/aether-server
-          sudo "$RUNNER_TEMP/aether-server" vm install --vm-kernel "$PWD/dist/aether-vmlinux-x86_64"
-      - name: VM tests (real Cloud Hypervisor VMs)
-        env:
-          GOFLAGS: -v
-        # The runner is thrown away, so a test may reload its systemd.
-        run: sudo env "PATH=$PATH" "HOME=$HOME" "GOFLAGS=$GOFLAGS" AETHER_VM_TEST_DAEMON_RELOAD=1 make test-kvm
+          sudo bash -s <<'EOF'
+          set -u
+          systemctl --version | head -1
+          uname -r
+          S=aether.slice; A=probe-a.service; B=probe-b.service; R=/sys/fs/cgroup/$S
+          mm() { cat $R/$A/memory.max 2>&1; }
+          sc() { tr '\n' ' ' <$R/cgroup.subtree_control; }
+          for mode in direct setprop; do
+            for props in "IOWeight=50" "AllowedCPUs=0" "IOWeight=50 AllowedCPUs=0" "CPUWeight=50" "TasksMax=10" "MemoryLow=1M" "Delegate=yes" "DevicePolicy=closed" "IPAddressDeny=any" "IOWeight=50 CPUWeight=50 TasksMax=10 Delegate=yes DevicePolicy=closed"; do
+              systemd-run --quiet --collect --unit=$A --slice=$S -p Type=exec -p MemoryMax=100M -p MemorySwapMax=0 -p CPUQuota=150% -p DevicePolicy=closed -p KillMode=control-group sleep infinity
+              if [ $mode = direct ]; then echo max >$R/$A/memory.max; else systemctl set-property --runtime $A MemoryMax=infinity; fi
+              before="$(mm) [$(sc)]"
+              args=""; for p in $props; do args="$args -p $p"; done
+              systemd-run --quiet --collect --unit=$B --slice=$S $args sleep infinity
+              now=$(mm); sleep 1; started="$now then $(mm) [$(sc)]"
+              [ $mode = direct ] && echo max >$R/$A/memory.max
+              systemctl stop $B
+              now=$(mm); sleep 1; stopped="$now then $(mm) [$(sc)]"
+              echo "PROBE mode=$mode sibling='$props' lifted=$before | after-start=$started | after-stop=$stopped"
+              systemctl stop $A
+            done
+          done
+          echo "--- two VM-like units already in the slice, then a third starts and stops"
+          for n in a c; do systemd-run --quiet --collect --unit=probe-$n.service --slice=$S -p MemoryMax=100M -p MemorySwapMax=0 -p CPUQuota=150% sleep infinity; done
+          echo max >$R/$A/memory.max
+          systemd-run --quiet --collect --unit=probe-d.service --slice=$S -p MemoryMax=100M -p MemorySwapMax=0 -p CPUQuota=150% sleep infinity
+          sleep 1; echo "PROBE same-shape sibling start: $(mm)"
+          echo max >$R/$A/memory.max
+          systemctl stop probe-d.service probe-c.service
+          sleep 1; echo "PROBE same-shape siblings stop: $(mm)"
+          echo "--- risk 4 at the system manager"
+          systemctl set-property --runtime $A MemoryMax=infinity
+          systemctl show -p DropInPaths -p MemoryMax $A
+          systemctl daemon-reload; echo "PROBE after daemon-reload with set-property: $(mm)"
+          systemctl stop $A
+          systemctl show -p LoadState -p DropInPaths -p MemoryMax $A
+          ls -d /run/systemd/transient/$A.d /run/systemd/system.control/$A.d /etc/systemd/system.control/$A.d 2>&1
+          systemd-run --quiet --collect --unit=$A --slice=$S -p MemoryMax=100M sleep infinity
+          echo "PROBE next unit of the name: $(mm)"; systemctl show -p DropInPaths -p MemoryMax $A
+          echo max >$R/$A/memory.max
+          systemctl daemon-reload; echo "PROBE after daemon-reload with a direct write: $(mm)"
+          systemctl stop $A
+          EOF
