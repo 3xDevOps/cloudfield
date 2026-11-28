@@ -16,6 +16,8 @@ type CapacityStore interface {
 	// CapacityCounts returns the counters of the hours from since on, the
 	// oldest hour first.
 	CapacityCounts(ctx context.Context, since time.Time) ([]domain.CapacityCount, error)
+	// PruneCapacityCounts deletes the counters of the hours before before.
+	PruneCapacityCounts(ctx context.Context, before time.Time) error
 }
 
 func (d *DB) CountCapacityEvent(ctx context.Context, e domain.CapacityEvent) error {
@@ -33,12 +35,21 @@ ON CONFLICT(hour, kind, op, cause) DO UPDATE SET
 	vm_bytes = vm_bytes + excluded.vm_bytes,
 	waited_seconds = waited_seconds + excluded.waited_seconds,
 	max_waited_seconds = max(max_waited_seconds, excluded.max_waited_seconds),
-	last_at = excluded.last_at, last_run = excluded.last_run, last_text = excluded.last_text`,
+	last_run = CASE WHEN excluded.last_at >= last_at THEN excluded.last_run ELSE last_run END,
+	last_text = CASE WHEN excluded.last_at >= last_at THEN excluded.last_text ELSE last_text END,
+	last_at = max(last_at, excluded.last_at)`,
 		e.At.UTC().Truncate(time.Hour).Unix(), e.Kind, e.Op, e.Cause,
 		int64(e.AvailableBytes), int64(e.FloorBytes), int64(e.UsedBytes), int64(e.IdleHourBytes), int64(e.VMBytes),
 		waited, e.At.UTC().UnixNano(), e.Run, e.Text)
 	if err != nil {
 		return fmt.Errorf("store: count a capacity event: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) PruneCapacityCounts(ctx context.Context, before time.Time) error {
+	if _, err := d.db.ExecContext(ctx, `DELETE FROM capacity_counts WHERE hour < ?`, before.UTC().Truncate(time.Hour).Unix()); err != nil {
+		return fmt.Errorf("store: prune capacity counts: %w", err)
 	}
 	return nil
 }

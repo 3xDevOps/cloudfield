@@ -235,7 +235,9 @@ type Scheduler struct {
 
 	// capacityGate protects admission probes/accounting, never lifecycle state.
 	capacityGate chan struct{}
-	reclaimMu    sync.Mutex
+	// capacityCounts carries capacity events to countCapacityEvents.
+	capacityCounts chan capacityCount
+	reclaimMu      sync.Mutex
 	// reclaimSweptAt is when reclaim last swept caches, images and scratch
 	// above the low watermark. Guarded by reclaimMu.
 	reclaimSweptAt       time.Time
@@ -263,6 +265,8 @@ type Scheduler struct {
 	// runs again, and vmBrakeTargets are the VMs its next check freezes;
 	// only the brake's own goroutine touches them.
 	vmMemoryBraked bool
+	// vmFreezeCounted is set once that freeze was counted.
+	vmFreezeCounted bool
 	vmBrakeTargets []runtime.ID
 	// vmMemoryWaking holds, under mu, while a wake the guard started runs.
 	vmMemoryWaking bool
@@ -819,6 +823,7 @@ func New(cfg Config) (*Scheduler, error) {
 		frozenTTL:            frozenTTL,
 		harnesses:            harnesses,
 		capacityGate:         make(chan struct{}, 1),
+		capacityCounts:       make(chan capacityCount, capacityCountBacklog),
 		checkoutSweepGate:    make(chan struct{}, 1),
 		captureBootGate:      make(chan struct{}, 1),
 		superCtx:             ctx,
@@ -915,6 +920,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 		defer close(memoryWatched)
 		s.watchVMMemory(watchCtx)
 	}()
+	go s.countCapacityEvents(watchCtx)
 	defer func() {
 		stopWatch()
 		<-watched

@@ -14,35 +14,91 @@ const (
 	opLaunch      = "launch"
 	opLaunchRetry = "launch-retry"
 	opWake        = "wake"
+	opWakeRetry   = "wake-retry"
 	opBoot        = "boot"
 	opStart       = "start"
 )
+
+// guardWake marks the context of a wake the memory guard makes by itself,
+// of a VM it saved while it worked, so its refusals are counted apart from
+// the wakes somebody asked for.
+type guardWake struct{}
 
 // idleHour is how long a session VM has been idle before the memory it
 // holds counts as idle in a refusal's figures.
 const idleHour = time.Hour
 
-// countCapacity logs e and adds it to its counter. A count that cannot be
-// written is logged: what was counted has already happened.
-func (s *Scheduler) countCapacity(e domain.CapacityEvent) {
+// capacityCount is an event on its way to the counters; memory asks for
+// the memory in use and what idle session VMs hold of it.
+type capacityCount struct {
+	event  domain.CapacityEvent
+	memory bool
+}
+
+// capacityCountsKept is how long a counter's hour is kept. A server start
+// deletes older ones.
+const capacityCountsKept = 90 * 24 * time.Hour
+
+// capacityCountBacklog is how many events may wait for the database. More
+// than that at once are dropped with a warning: counting never holds up
+// what it counts.
+const capacityCountBacklog = 256
+
+// countCapacity hands e to countCapacityEvents and returns at once.
+func (s *Scheduler) countCapacity(e domain.CapacityEvent, memory bool) {
 	e.At = time.Now().UTC()
-	slog.Info("scheduler: capacity: "+e.Kind, "op", e.Op, "cause", e.Cause, "run", e.Run, "available", e.AvailableBytes, "floor", e.FloorBytes,
-		"used", e.UsedBytes, "idle_hour", e.IdleHourBytes, "vm", e.VMBytes, "text", e.Text)
-	ctx, cancel := context.WithTimeout(context.Background(), capacityProbeTimeout)
-	defer cancel()
-	if err := s.cfg.Store.CountCapacityEvent(ctx, e); err != nil {
-		slog.Warn("scheduler: capacity: count "+e.Kind, "error", err)
+	select {
+	case s.capacityCounts <- capacityCount{event: e, memory: memory}:
+	default:
+		slog.Warn("scheduler: capacity: not counted, too many wait for the database", "kind", e.Kind, "op", e.Op, "cause", e.Cause, "run", e.Run, "text", e.Text)
 	}
 }
 
-// countRefusal counts the admission of claim that err refused. A memory
-// refusal carries the host memory in use and what session VMs idle for
-// idleHour held of it.
+// countCapacityEvents logs each event and adds it to its counter until ctx
+// ends. A count that cannot be written is logged: what was counted has
+// already happened. The memory figures of a refusal are measured here, a
+// moment after it, and cover the session VMs the memory guard may save.
+func (s *Scheduler) countCapacityEvents(ctx context.Context) {
+	if err := s.cfg.Store.PruneCapacityCounts(ctx, time.Now().Add(-capacityCountsKept)); err != nil {
+		slog.Warn("scheduler: capacity: prune old counts", "error", err)
+	}
+	for {
+		var c capacityCount
+		select {
+		case <-ctx.Done():
+			return
+		case c = <-s.capacityCounts:
+		}
+		e := c.event
+		if c.memory {
+			if total, available, err := s.hostMemoryTotal(); err == nil {
+				e.UsedBytes = total - available
+			}
+			candidates, _ := s.memoryCandidates(ctx)
+			for _, candidate := range candidates {
+				if candidate.idle && !candidate.since.IsZero() && e.At.Sub(candidate.since) >= idleHour {
+					e.IdleHourBytes += candidate.memory
+				}
+			}
+		}
+		slog.Info("scheduler: capacity: "+e.Kind, "op", e.Op, "cause", e.Cause, "run", e.Run, "available", e.AvailableBytes, "floor", e.FloorBytes,
+			"used", e.UsedBytes, "idle_hour", e.IdleHourBytes, "vm", e.VMBytes, "text", e.Text)
+		writeCtx, cancel := context.WithTimeout(ctx, capacityProbeTimeout)
+		err := s.cfg.Store.CountCapacityEvent(writeCtx, e)
+		cancel()
+		if err != nil {
+			slog.Warn("scheduler: capacity: count "+e.Kind, "error", err)
+		}
+	}
+}
+
+// countRefusal counts the admission of claim that err refused. A refusal
+// that only says its caller gave up is not one.
 func (s *Scheduler) countRefusal(ctx context.Context, claim *memoryClaim, err error) {
 	e := domain.CapacityEvent{Kind: domain.CapacityRefusal, Op: claim.op, Run: claim.run}
 	var short *memoryShortage
 	switch {
-	case err == nil || ctx.Err() != nil:
+	case err == nil:
 		return
 	case errors.As(err, &short):
 		e.Cause, e.AvailableBytes, e.FloorBytes = "memory", short.available, short.floor
@@ -50,29 +106,17 @@ func (s *Scheduler) countRefusal(ctx context.Context, claim *memoryClaim, err er
 		e.Cause = "stall"
 	case errors.Is(err, ErrDiskFull):
 		e.Cause = "disk"
-	case errors.Is(err, ErrCapacityUnknown):
+	case errors.Is(err, ErrCapacityUnknown) && ctx.Err() == nil:
 		e.Cause = "unknown"
 	default:
 		return
 	}
 	e.Text = err.Error()
-	if e.Cause == "memory" || e.Cause == "stall" {
-		if total, available, memErr := s.hostMemoryTotal(); memErr == nil {
-			e.UsedBytes = total - available
-		}
-		candidates, _ := s.memoryCandidates(ctx)
-		now := time.Now()
-		for _, c := range candidates {
-			if c.idle && now.Sub(c.since) >= idleHour {
-				e.IdleHourBytes += c.memory
-			}
-		}
-	}
-	s.countCapacity(e)
+	s.countCapacity(e, e.Cause == "memory" || e.Cause == "stall")
 }
 
-// countSave counts the save of c's VM for want of memory, with the host
-// memory measured before it.
+// countSave counts the save of c's VM for want of memory, or the stop of a
+// closed session's, with the host memory measured before it.
 func (s *Scheduler) countSave(c memoryCandidate, available, floor uint64) {
 	op := "working"
 	switch {
@@ -83,5 +127,5 @@ func (s *Scheduler) countSave(c memoryCandidate, available, floor uint64) {
 	case c.idle:
 		op = "idle"
 	}
-	s.countCapacity(domain.CapacityEvent{Kind: domain.CapacitySave, Op: op, Run: c.e.runID, AvailableBytes: available, FloorBytes: floor, VMBytes: c.memory})
+	s.countCapacity(domain.CapacityEvent{Kind: domain.CapacitySave, Op: op, Run: c.e.runID, AvailableBytes: available, FloorBytes: floor, VMBytes: c.memory}, false)
 }
