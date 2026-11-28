@@ -443,7 +443,8 @@ func launchTemplate(ctx context.Context, c calls, in connectorLaunchInput) (stri
 			return "", nil, err
 		}
 	}
-	res, finished, err := launch[protocol.TemplateLaunchResult](ctx, c, protocol.MethodTemplateLaunch, withReason(params, in.Reason, c.surface, savedFill{}), done)
+	res, finished, err := launch(ctx, c, protocol.MethodTemplateLaunch, withReason(params, in.Reason, c.surface, savedFill{}),
+		func(_ protocol.TemplateLaunchResult, err error) { done(err) })
 	if err != nil && finished {
 		return "", nil, retryable(err, params.IdempotencyKey)
 	}

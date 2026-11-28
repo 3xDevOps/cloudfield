@@ -401,8 +401,12 @@ key, and `waiting` with the server's refusal and when the wait ends, and no
 session exists yet
 ([A launch that waits for room](failure-handling.md#a-launch-that-waits-for-room)).
 Call the same tool again with the same arguments and that key to learn
-whether it started; a call without the key, more than 60 seconds later,
-launches a second one. Without a key, a session launch with
+whether it started. A call without a key and with the same arguments returns
+the same waiting launch for as long as it waits and this server process
+runs; after a server restart only the key does, and such a call launches a
+second one. A key whose launch ended without a session (`cancelled`,
+`expired` or `refused`) is refused with how it ended and never launches
+again. A template launch does not wait: it is refused as before. Without a key, a session launch with
 the same workspace, agent, task, mode, model, account, fallback policy and
 extra repositories within 60 seconds returns your earlier session, unless it
 failed, was interrupted or was abandoned, instead

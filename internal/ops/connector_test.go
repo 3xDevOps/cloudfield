@@ -1106,4 +1106,36 @@ func TestConnectorLaunchWaitsForRoom(t *testing.T) {
 		!strings.Contains(text, waiting.Refusal) || !strings.Contains(text, "idempotency_key k-w") || !strings.Contains(text, "nothing started") {
 		t.Fatalf("a launch with no room = %q %v; want it waiting, with the refusal and the key to repeat", text, out)
 	}
+
+	// Without a key, a repeat is the same waiting launch, then its session,
+	// and not a second launch.
+	delete(args, "idempotency_key")
+	waiting.ExpiresAt = time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+	f.calls = nil
+	_, out = run(t, cs, "aether_launch_session", args)
+	key, _ := out["idempotency_key"].(string)
+	if out["state"] != "waiting" || key == "" {
+		t.Fatalf("a keyless launch with no room = %v, want it waiting under a derived key", out)
+	}
+	f.calls = nil
+	_, out = run(t, cs, "aether_launch_session", args)
+	if got := f.acted(); out["state"] != "waiting" || !strings.Contains(got.params, key) {
+		t.Fatalf("a keyless repeat of a waiting launch sent %s and got %v, want the first launch's key %s", got.params, out, key)
+	}
+	f.answers[protocol.MethodRunLaunch] = returns(protocol.RunLaunchResult{Run: testRun, Replayed: true})
+	f.calls = nil
+	_, out = run(t, cs, "aether_launch_session", args)
+	if got := f.acted(); out["run_id"] != testRun.ID || out["duplicate"] != true || !strings.Contains(got.params, key) {
+		t.Fatalf("a keyless repeat once it started sent %s and got %v, want the session under the key %s", got.params, out, key)
+	}
+
+	// A key whose launch ended is not offered as a retry.
+	f.answers[protocol.MethodRunLaunch] = func(json.RawMessage) (any, error) {
+		return nil, &protocol.Error{Code: protocol.CodeUnavailable, Message: `run.launch: the launch under idempotency_key "k-w" waited for room and ended expired: no room; use a new key to launch again`}
+	}
+	args["idempotency_key"] = "k-w"
+	text, _, failed := try(t, cs, "aether_launch_session", args)
+	if !failed || !strings.Contains(text, "use a new key") || strings.Contains(text, "retry with idempotency_key") {
+		t.Fatalf("a key whose launch ended = %q, want the server's refusal and no retry with the key", text)
+	}
 }
