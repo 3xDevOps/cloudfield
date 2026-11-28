@@ -23,6 +23,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/agentstatus"
 	"github.com/3xDevOps/cloudfield/internal/control"
 	"github.com/3xDevOps/cloudfield/internal/coordtransport"
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/disk"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
@@ -224,6 +225,12 @@ type Scheduler struct {
 	// for it so overdue steers cannot claim before recovered PTYs are injectable.
 	recoveryReady     chan struct{}
 	recoveryReadyOnce sync.Once
+	// retainedListed is set once a pass over the terminal sidecars has read
+	// every one, so every retained container is in runs. Until then
+	// retainedUnread holds the latest pass's first sidecar it could not
+	// settle, with why.
+	retainedListed atomic.Bool
+	retainedUnread atomic.Value
 	// recovering is set while Start recovers runs.
 	recovering atomic.Bool
 	// superCtx bounds every supervision goroutine; cancelling it never stops a
@@ -406,6 +413,9 @@ type supervised struct {
 	// loginMember is the account owner whose login paths the container
 	// mounts; empty when none.
 	loginMember domain.MemberID
+	// loginID is loginMember's added login the container mounts; empty for
+	// their default login.
+	loginID domain.LoginID
 	// verifiedLogins are the account owners whose own login a container of
 	// this run was started with, as the runtime confirmed at start.
 	verifiedLogins []domain.Account
@@ -476,7 +486,7 @@ type supervised struct {
 	// lifecycleMu serializes close, relaunch, expiry and steering admission for
 	// this container. It is separate from Scheduler.mu: runtime and git calls
 	// must not run under the scheduler lock.
-	lifecycleMu sync.Mutex
+	lifecycleMu ctxlock.Mutex
 	// runUser is the resolved "uid:gid" for the container and ownership pass;
 	// empty means root (no ownership pass).
 	runUser string
@@ -524,6 +534,9 @@ type supervised struct {
 	// started there, which does not answer a shown question.
 	appServer  bool
 	serverTurn bool
+	// idleWake marks a Standard run whose terminal loads an idle wake
+	// (harness.NativeLaunch.IdleWake).
+	idleWake bool
 	// switching is the mode a mode switch is moving the run to, empty when
 	// none is in flight. The switch holds lifecycleMu throughout.
 	switching    domain.LaunchMode
@@ -555,9 +568,11 @@ type supervised struct {
 	turnStartedAt time.Time
 	// reportAsked is the turnStartedAt of the last turn whose end was held
 	// for a missing report (HoldTurnEnd), and stopHeld marks a Standard run
-	// whose held stop no idle report has followed yet.
+	// whose held stop no idle report has followed yet. heldMessage is the
+	// agent's last message at that stop, until a turn starts.
 	reportAsked time.Time
 	stopHeld    bool
+	heldMessage string
 	// relaunchedAt is when the last relaunch reopened the run; a report
 	// finalized before it belongs to the launch that relaunch ended.
 	relaunchedAt time.Time
@@ -606,6 +621,12 @@ type supervised struct {
 	sleepGen    uint64
 	waking      chan struct{}
 	wakeErr     error
+	// abortSleep, set while the sleep sweep saves or pauses a VM that still
+	// answers, makes it give up if its guest has yet to be paused.
+	// wakeWaits is set once a wake waits for the sleep, which a sleep that
+	// has yet to set abortSleep reads instead.
+	abortSleep context.CancelFunc
+	wakeWaits  bool
 	// asleepSaved is set while a sleeping VM holds its saved memory, which
 	// a wake restores with every process. saveFailedAt is the last failed
 	// save, which the sleep sweep waits a full sleep delay after.

@@ -139,8 +139,7 @@ func (s *Server) runRepoAuthority(ctx context.Context, member domain.MemberID, r
 			if current.AccountMember() != account {
 				return fmt.Errorf("%w: session account changed; refresh before acting", permissions.ErrDenied)
 			}
-			_, accountErr := fallback.ResolveLaunchAccount(ctx, s.cfg.Store, member, string(account))
-			return accountErr
+			return fallback.ResolveRunLogin(ctx, s.cfg.Store, member, current, nil)
 		})
 	}
 	if authorityErr := authorize(ctx, mutation); authorityErr != nil {

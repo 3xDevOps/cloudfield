@@ -423,6 +423,7 @@ type sidecar struct {
 	Mode            domain.LaunchMode `json:"mode,omitempty"`
 	AppServer       bool              `json:"app_server,omitempty"`
 	ServerTurn      bool              `json:"server_turn,omitempty"`
+	IdleWake        bool              `json:"idle_wake,omitempty"`
 	Paused          bool              `json:"paused"`
 	DiskHeld        bool              `json:"disk_held,omitempty"`
 	MemorySaved     uint64            `json:"memory_saved,omitempty"`
@@ -437,6 +438,8 @@ type sidecar struct {
 	// LoginMember is the account owner whose login paths the container
 	// mounts, empty when it mounts none.
 	LoginMember string `json:"login_member,omitempty"`
+	// LoginID is LoginMember's added login the container mounts.
+	LoginID domain.LoginID `json:"login_id,omitempty"`
 	// VerifiedLogins are the account owners whose own login the runtime
 	// confirmed in a container of this run.
 	VerifiedLogins      []domain.Account         `json:"verified_logins,omitempty"`
@@ -528,6 +531,7 @@ func (e *supervised) sidecar() sidecar {
 		Mode:                e.launchMode,
 		AppServer:           e.appServer,
 		ServerTurn:          e.serverTurn,
+		IdleWake:            e.idleWake,
 		Paused:              e.paused,
 		DiskHeld:            e.diskHeld,
 		MemorySaved:         e.memorySaved,
@@ -540,6 +544,7 @@ func (e *supervised) sidecar() sidecar {
 		RunUser:             e.runUser,
 		Home:                e.home,
 		LoginMember:         string(e.loginMember),
+		LoginID:             e.loginID,
 		VerifiedLogins:      e.verifiedLogins,
 		Reporter:            e.reporter,
 		Egress:              e.egress,

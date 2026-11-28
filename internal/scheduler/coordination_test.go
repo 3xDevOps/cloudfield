@@ -596,9 +596,7 @@ func TestEveryLaunchCarriesTheRoleCard(t *testing.T) {
 					t.Fatalf("%s = %q in a %s launch", coordtransport.BackgroundEnv, env[coordtransport.BackgroundEnv], tc.mode)
 				}
 				g.Wake = env[coordtransport.WakeEnv] == "1"
-				// The server wakes a terminal attached to its app-server, with or
-				// without a task.
-				native := profile.Capabilities.IdleWake && tc.mode == domain.LaunchTUI && (tc.task != "" || profile.Capabilities.Steer)
+				native := profile.Capabilities.IdleWake && tc.mode == domain.LaunchTUI
 				if g.Wake != native {
 					t.Fatalf("%s = %q, want it only on a native launch (%v)", coordtransport.WakeEnv, env[coordtransport.WakeEnv], native)
 				}
@@ -700,13 +698,18 @@ func TestOpenCodeDiscoveryReferencesOnlyProvisionedAssets(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			spec := e.rt.byName(string(run.ID)).spec
+			body, wantPlugins := []byte(e.rt.byName(string(run.ID)).spec.Env["OPENCODE_CONFIG_CONTENT"]), 0
+			if enabled {
+				// The launch wrapper exports this file to OpenCode 1; it adds
+				// the reporter and the mailbox plugin.
+				body, wantPlugins = coord.file(run.ID, "opencode-native-v1.json"), 2
+			}
 			var config struct {
 				Plugins      []string `json:"plugin"`
 				Instructions []string `json:"instructions"`
 				Permission   string   `json:"permission"`
 			}
-			if err := json.Unmarshal([]byte(spec.Env["OPENCODE_CONFIG_CONTENT"]), &config); err != nil {
+			if err := json.Unmarshal(body, &config); err != nil {
 				t.Fatal(err)
 			}
 			if config.Permission != "allow" {
@@ -715,12 +718,8 @@ func TestOpenCodeDiscoveryReferencesOnlyProvisionedAssets(t *testing.T) {
 			if len(config.Instructions) != 1 {
 				t.Fatalf("instruction files = %v", config.Instructions)
 			}
-			wantPlugins := 0
-			if enabled {
-				wantPlugins = 1
-			}
 			if len(config.Plugins) != wantPlugins {
-				t.Fatalf("status plugins = %v with policy enabled=%v", config.Plugins, enabled)
+				t.Fatalf("plugins = %v with policy enabled=%v", config.Plugins, enabled)
 			}
 			for _, path := range append(config.Instructions, config.Plugins...) {
 				path = strings.TrimPrefix(path, "file://")

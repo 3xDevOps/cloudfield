@@ -90,7 +90,7 @@ line. The base coordination method set is:
 | `coord.inbox` | optional `ack_token`, optional `wait_seconds`, optional `ack_only` | oldest-first `messages`, the `ack_token` for that batch, and `more`, the unacknowledged messages after it |
 | `coord.ask` | `to_run_id`, `body`, `idempotency_key` | `question_id`, `recipient_status` |
 | `coord.reply` | `question_id`, `body`, `idempotency_key` | `message_id` |
-| `coord.report` | `outcome`, `summary`, optional `waiting_for`, `until` and `evidence_refs`, `idempotency_key` | outcome, summary and next action; for success, failure and blocked also the durable `report_id`, evidence references, and automatic `evidence_ref` |
+| `coord.report` | `outcome`, `summary`, optional `body`, `waiting_for`, `until` and `evidence_refs`, `idempotency_key` | outcome, summary and next action; for success, failure and blocked also the durable `report_id`, evidence references, automatic `evidence_ref`, and `body_bytes` when a body was stored |
 
 The six advertised coordination methods are unchanged. Native hooks use
 `coord.hook.status`, an internal endpoint with a separate request budget, not
@@ -447,7 +447,30 @@ kind, delivery (Sent, Delivered, Acknowledged), and a search over the loaded
 bodies. Sender, Recipient and Thread narrow it; **Show all** reads older
 pages. The ordinary Activity feed shows each send as a row without the body.
 
-Members read agent mail on the control channel with `coord.messages.list`.
+From a terminal, `cloudfield messages` prints the workspace's mail, and
+`cloudfield messages <session-id>` the mail that session sent or received:
+
+```text
+$ cloudfield messages run-child
+2026-11-26 04:25:51  run-child -> run-parent  question  acknowledged  thread msg-wkvws2www3
+  which branch do I target?
+2026-11-26 04:25:51  run-parent -> run-child  reply  delivered  thread msg-wkvws2www3
+  target main
+2026-11-26 04:25:52  run-child -> run-parent  report  sent  thread rpt-b5hv1drf21
+  tests pass, fix pushed
+  outcome: success
+  next action: review the branch
+```
+
+It prints the newest 50, oldest first, with control characters in a body
+replaced by spaces. `--thread <id>` keeps one question and its replies, or
+one report, `--limit` takes up to 100, and `--workspace <name>` picks the
+workspace when there are several. When older mail remains, the last line, on
+stderr, is `older messages: add --before <cursor>`. `--json` prints the
+rows described below. A person's `cloudfield message` reaches the agent as a
+prompt, not as mail, and is not listed.
+
+The command reads `coord.messages.list` on the control channel.
 It needs View on the workspace, so every member of the workspace can read
 message bodies, the same audience the workspace timeline has.
 
@@ -465,7 +488,9 @@ Each row has `id`, `workspace_id`, `from_run_id`, `to_run_id`,
 `kind`, `correlation_id`, `body`, `created_at`, `delivered_at`, and
 `acked_at`. `kind` is `message`, `question`, `reply`, or `report`: a subsession
 session's report forwarded to its parent lists as `report` and adds the report's
-`outcome`, `summary`, and `next_action`. `delivered_at` is when the
+`outcome`, `summary`, and `next_action`. A row from a session to itself is
+server-written: the wake for a [session wait](watches.md#session-waits) or a
+[relayed watch notice](watches.md#relaying-notices). `delivered_at` is when the
 recipient's inbox first returned the batch and `acked_at` when the agent
 acknowledged it; neither proves the model read the body.
 
@@ -482,7 +507,8 @@ the kind, then sender → recipient and, once the message is loaded, its
 delivery word, such as `run-child → run-parent · Delivered`. An
 acknowledgement shows as `run-child → run-parent · Acknowledged`.
 `cloudfield timeline` prints the send as `<from-run> -> <to-run> · question`.
-Neither shows the body. Bodies come from `coord.messages.list`.
+Neither shows the body. Bodies come from `cloudfield messages` and
+`coord.messages.list`.
 Board > **Lanes** marks each send on the sender's and recipient's lanes at
 the time it was sent, draws it as a link for the focused lane, and clicking
 it shows the bodies
@@ -499,6 +525,8 @@ the time of the event at `older_seq`: the page covers everything after it,
 including events a filter left out. A session snapshot's
 `unacked_messages` counts mail addressed to the session that it has not
 acknowledged, and `oldest_unacked_at` is when the oldest of it was sent.
+`cloudfield sessions` shows the count in its `MAIL` column, and `cloudfield
+sessions <session-id>` shows both on its `mail` line.
 
 Mail stays as history until its session is explicitly deleted, including through
 workspace deletion. When a session's sandbox is released, mail it never
@@ -675,7 +703,8 @@ user; a session with extra repositories (`--repo`) gets a line naming them.
 
 The `waiting` line appears only where Cloudfield resumes an idle session when
 mail arrives: Enhanced sessions and Standard sessions that load a native Claude
-Code, pi, omp or OpenCode integration. A protected session is never woken, so its line tells it
+Code, pi, omp or OpenCode integration or attach Codex to its app-server. A
+protected session is never woken, so its line tells it
 to wait in its turn while `coord.status` returns `protected: true`. Any other
 launch is told instead to wait for subsessions,
 peers or mail inside its turn with `cloudfield-internal inbox --wait 30` and never to report
@@ -792,7 +821,8 @@ See [agent installation](harnesses.md#incoming-coordination-hooks) for each
 destination, and [authoring an integration](harness-integration.md) for an
 unsupported agent.
 
-Coordinated, task-bearing Claude Code Standard sessions need no installation:
+Coordinated Claude Code Standard sessions, with or without a task, need no
+installation:
 their [managed launch](harnesses.md#incoming-coordination-hooks) loads the
 `claude.json` hooks next to the status reporter and an idle-wake waiter. It
 leaves out the inbox `Stop` hook: Claude Code runs all `Stop` hooks in
@@ -1274,7 +1304,10 @@ are on by default and go one level deep: a subsession cannot start subsessions, 
 Background one may start subsessions. A parent must wake when
 mail arrives, so `subsession start` from a Standard session of an agent with no idle
 wake is refused with `<agent> in Standard mode has no idle wake; start it in
-Enhanced`. Who may turn them off is in [teams.md](teams.md#subsessions).
+Enhanced`, or for Antigravity, which has no Enhanced mode, with `antigravity
+in Standard mode has no idle wake, and it has no Enhanced mode; as a
+subsession it runs only in Background, and a session that waits for mail needs
+another agent`. Who may turn them off is in [teams.md](teams.md#subsessions).
 
 ```sh
 /usr/local/bin/aether-internal subsession options
@@ -1293,11 +1326,16 @@ Enhanced`. Who may turn them off is in [teams.md](teams.md#subsessions).
   its quota used), `not-installed`, `not-signed-in` or `off` (the owner turned it
   off for subsessions, [teams.md](teams.md#choose-the-agents-subsessions-use)),
   with the sentence that says how to fix it. A `ready` login the server found signed out says so
-  in its sentence. `--harness` adds that agent's models.
+  in its sentence. Each agent lists its `modes` and `default_mode`; an agent
+  with no idle wake has no `standard`. `--harness` adds that agent's models.
 - `subsession start` takes `--harness`, `--purpose` (3-8 words, shown in the
   dashboard) and `--task` or `--task-file` (at most 24 KiB, so the escaped request fits the socket's 64 KiB; `-` reads
   standard input), plus optional `--model`, `--mode
-  standard|enhanced|background` and `--account <member-id>`. Without
+  standard|enhanced|background` and `--account <member-id>`. Without `--mode`
+  the subsession runs Enhanced where the agent's Enhanced mode is installed.
+  Where it is not, the subsession runs Standard, or Background if the agent
+  has no idle wake. `--mode standard` for an agent with no idle wake is
+  refused with the same message as a Standard parent of that agent. Without
   `--account`, a subsession of the parent's agent starts on the parent's
   account, and any other agent on the owner's own account. A parent handed over
   from another member is refused: it still runs the previous owner's agent on
@@ -1331,13 +1369,20 @@ Parent and subsession may always message each other with `send`, `ask` and
 state `lineage`. A subsession's success,
 failure or blocked report reaches its parent's inbox with kind `report`:
 `from_run_id` is the subsession, `outcome` is the reported outcome, `body` is
-its complete report summary, and `correlation_id` is the report ID. It uses the same durable delivery and
+its complete report summary, `report_body` is the report's body when it has
+one, and `correlation_id` is the report ID. It uses the same durable delivery and
 acknowledgement as peer messages; if the inbox is full, report publication
 retries until it fits. A turn that ends without a success,
 failure or blocked report forwards the subsession's
 last message to the parent as a provisional report, which names the session's
 last `needs-input`, `waiting` or `answered` report if it made one; the subsession's own later
-success, failure or blocked report retires it while unread. A subsession that ends without a final report sends
+success, failure or blocked report retires it while unread. A Standard
+subsession forwards Claude Code's and Codex's last message; pi, oh-my-pi and
+OpenCode give none, so their report reads `(none)` and still wakes the parent
+([what a turn end sends](#lifecycle-status-is-separate)). A Standard
+subsession of an agent without
+[status reporting](harnesses.md#status-reporting) forwards nothing. A
+subsession that ends without a final report sends
 one message saying so, with its latest report of any outcome (summary and
 time) and its branch. A live attached subsession that has been waiting (for
 anything), `answered`, or waiting on a `needs-input` answer for over an hour
@@ -1400,6 +1445,32 @@ and is valid only with `waiting`, as is `--until` (see the waiting report
 below). A non-empty summary is required. `--evidence-ref` may be
 repeated, and `--summary-file` accepts a file or `-` for standard input. The result contains a durable
 `report_id` and the server-created `evidence_ref`.
+
+A success, failure or blocked report may carry a body beside its summary:
+`--body <text>` or `--body-file <path>`, at most 12 KiB. The body is the full
+result, such as a review's findings; the summary stays the one-line outcome
+shown on the session. A subsession's parent reads the body in the report's
+own inbox message, as `report_body`, so one result is one message and one
+wake: put findings in the report, not in messages sent before it. The body is stored
+as sent, with CRLF line ends made LF: one that is not valid UTF-8 or has a
+control character other than a line break or a tab, such as a terminal's color
+codes, is refused. So is a report whose summary and body would print as more
+than 16 KiB in the parent's inbox read, where quotes, backslashes and line
+breaks print as two bytes each and `<`, `>` and `&` as six: the parent's harness must be able to show the
+report whole before the next read acknowledges it. A longer body is
+refused, by the command with `body exceeds 12288 bytes` and by the server
+with `body is <n> bytes and exceeds 12288`, and a body on another
+outcome with `body is only valid with the "success", "failure" or "blocked"
+outcome`. The body is stored with the report and read through the parent's inbox. In the
+dashboard a report with a body has a **Full report** button on its row under
+Agent messages, which opens the body in place; whoever may see that message may
+open it. `coord.messages.list` gives each report's `report_body_bytes`, and the
+body itself as `report_body` when called with `report_bodies`. Nothing is
+redacted from a summary or a body: write no secret into either. A report's body counts toward the 16 KiB of an inbox batch, so a report
+with a long body is read in a batch of its own. A parent whose command or bridge predates report bodies gets the body after
+the summary in `body`, which it shows. A server older than report bodies stores the report without the
+body; the command and the `aether_report` tool then fail with `the report was
+recorded WITHOUT its body`, so the agent can send it another way.
 
 **A `success` or `failure` report is refused while mail is unread.** Mail is
 unread until an inbox read returns it. The refusal is `CodeInvalidState`
@@ -1505,8 +1576,9 @@ What a report does depends on the session:
   stops short (for example on `max_tokens`) drops it, and the session shows that
   turn's own reason. `--for` with another outcome, or an unknown `--for`
   value, is refused with `CodeInvalidParams`. Report it only where mail
-  resumes the idle session (Enhanced sessions, managed Claude Code launches and
-  native pi, omp or OpenCode integrations); elsewhere nothing wakes the
+  resumes the idle session (Enhanced sessions, managed Claude Code launches,
+  Standard Codex on its app-server and native pi, omp or OpenCode
+  integrations); elsewhere nothing wakes the
   agent when a reply arrives, so it waits inside its turn with
   `inbox --wait 30`, and a Background session's turn end finishes the session.
   Nothing re-prompts the agent when a process finishes. For a pull request,
@@ -1638,6 +1710,27 @@ nor terminal output follows the hold for a minute, as when the answer never
 reached Claude Code, the server ends the turn itself. Enhanced sessions get
 the same rule as a [report reminder](enhanced-sessions.md#report-reminder)
 prompt. Background sessions, and Standard sessions of other agents, are not held.
+
+`run.report` carries the agent's last message in one case: the turn end of a
+Standard subsession, which the server forwards to its parent as the
+provisional report ([subsessions](#subsessions)). The server sets
+`AETHER_SUBSESSION=1` in the container of a session another session started.
+Only there does a Claude Code `Stop` hook's `run.report` carry `last_message`,
+the first 4 KiB of the payload's `last_assistant_message`. For a stop that was
+held, the server forwards the held stop's message, not the one that follows
+the reminder, unless a prompt started a new turn first, typed into the
+reminder's continuation or after Esc: that turn's end forwards its own
+message. The server keeps the held message in memory only, so after a server
+restart the stop that follows the reminder forwards its own. A Claude Code
+`SessionEnd` hook's `run.report` carries `session_end: true` and forwards
+nothing: `/clear` and `/exit` end no turn, and a turn cut off with Esc sends
+no `Stop`. For Codex, which loads no hooks, the server reads the thread's
+last turn from the app-server, for a subsession only. A `completed` turn
+forwards its last agent message, and an `interrupted` one, as after Esc,
+forwards nothing. If the read fails, the report reads `(none)` and the server
+logs the error. A session with no parent sends and reads neither. A
+subsession that a handoff detached from its parent still does, and the server
+discards the message.
 
 Coordination also does not provide a universal inbound terminal hook. When a
 human messages a Standard session, Cloudfield delivers the message through the

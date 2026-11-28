@@ -15,6 +15,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 
 	"github.com/3xDevOps/cloudfield/internal/acphost"
+	"github.com/3xDevOps/cloudfield/internal/acphost/acpmock"
 	"github.com/3xDevOps/cloudfield/internal/agentstatus"
 	"github.com/3xDevOps/cloudfield/internal/control"
 	"github.com/3xDevOps/cloudfield/internal/coordtransport"
@@ -326,6 +327,56 @@ func TestSwitchEnhancedRunToStandardAndBack(t *testing.T) {
 	waitItems(t, e.sched, run.ID, "a turn after switching back", turnEnded("end_turn", 2))
 }
 
+// A switch cuts a subsession's turn off, so the parent gets no turn end for
+// it, whichever way the switch goes.
+func TestSwitchingASubsessionMidTurnForwardsNoTurnEnd(t *testing.T) {
+	shortProvisionalGrace(t)
+	e := newSwitchEnv(t)
+	parent := e.launch(t, "parent", domain.LaunchACP)
+	child := launchChildRun(t, e.testEnv, parent, "omp", domain.LaunchACP)
+	e.sup.run = child.ID
+	waitFor(t, "the task's turn at the parent", func() bool { return len(e.coord.provisionalReports()) == 1 })
+	switchTo := func(mode domain.LaunchMode) {
+		t.Helper()
+		if err := e.sched.SwitchMode(t.Context(), child.ID, e.member.ID, mode, admitNow); err != nil {
+			t.Fatalf("switch to %s: %v", modeName(mode), err)
+		}
+	}
+	cutOffBy := func(mode domain.LaunchMode) {
+		t.Helper()
+		e.waitAgentWorking(t, child.ID)
+		switchTo(mode)
+		time.Sleep(provisionalGrace * 3 / 2)
+		if calls := e.coord.provisionalReports(); len(calls) != 1 {
+			t.Fatalf("provisional reports %+v after the switch to %s cut a turn off, want only the task's turn", calls, modeName(mode))
+		}
+	}
+
+	switchTo(domain.LaunchTUI)
+	if err := e.sched.ReportAgentState(t.Context(), child.ID, agentstatus.Report{State: agentstatus.Working, TurnStart: true}); err != nil {
+		t.Fatal(err)
+	}
+	// The restored session's idle report races the switch's end, so the
+	// switch waits here until it has arrived.
+	e.coord.mu.Lock()
+	e.coord.onWake = func(r domain.RunID) {
+		if r == child.ID {
+			waitFor(t, "the restored session's idle report", func() bool {
+				e.sched.mu.Lock()
+				defer e.sched.mu.Unlock()
+				return e.sched.runs[r].agentReport.State == agentstatus.Idle
+			})
+		}
+	}
+	e.coord.mu.Unlock()
+	cutOffBy(domain.LaunchACP)
+
+	if _, err := e.sched.Inject(t.Context(), child.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptWait}, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	cutOffBy(domain.LaunchTUI)
+}
+
 func TestSwitchToStandardRestoresEnhancedWhenTheTerminalExits(t *testing.T) {
 	t.Parallel()
 	e := newSwitchEnv(t)
@@ -509,10 +560,16 @@ func TestRestartRecordsAModeTheRunRowMissed(t *testing.T) {
 	if sc, err := e.sched.readSidecar(run.ID); err != nil || sc.Mode != domain.LaunchTUI || sc.Switch == nil {
 		t.Fatalf("sidecar %+v (%v), want Standard with the switch kept", sc, err)
 	}
+	if bodies := e.sup.ran(); len(bodies) != 1 || !strings.Contains(bodies[0], "export "+coordtransport.WakeEnv+"='1'\n") {
+		t.Fatalf("supervisor ran %q, want the taskless terminal's idle wake", bodies)
+	}
 
 	s2 := e.restart(t)
 	if row, _ := e.db.GetRun(t.Context(), run.ID); row.Mode != domain.LaunchTUI || row.ACP {
 		t.Fatalf("row mode %q acp %v, want the switch recorded on restart", row.Mode, row.ACP)
+	}
+	if sc, err := s2.readSidecar(run.ID); err != nil || !sc.IdleWake {
+		t.Fatalf("sidecar %+v (%v), want the terminal's idle wake recorded on restart", sc, err)
 	}
 	if s2.acp.session(run.ID) != nil {
 		t.Fatal("recovery started an ACP server beside the resumed terminal")
@@ -732,7 +789,7 @@ func TestStandardCommandKeepsTheOpenCodeConfig(t *testing.T) {
 	entry := e.sched.runs[run.ID]
 	e.sched.mu.Unlock()
 	sw := modeSwitch{s: e.sched, c: e.sched.coordinationSeam(), entry: entry, run: run, profile: profile, session: "ses_1"}
-	if _, _, err := sw.writeTerminal(t.Context()); err != nil {
+	if _, _, _, err := sw.writeTerminal(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	var config string

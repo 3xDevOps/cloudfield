@@ -125,7 +125,7 @@ func (s *Server) developmentAuthority(ctx context.Context, member domain.MemberI
 			current, err = s.cfg.Store.GetRun(ctx, domain.RunID(runID))
 		}
 		if err == nil {
-			_, err = fallback.ResolveLaunchAccount(ctx, s.cfg.Store, member, string(current.AccountMember()))
+			err = fallback.ResolveRunLogin(ctx, s.cfg.Store, member, current, nil)
 		}
 		if err != nil {
 			if memberErr := s.checkMember(ctx, member); memberErr != nil {

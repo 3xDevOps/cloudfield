@@ -528,6 +528,8 @@ type fakeHelper struct {
 	bootHangs bool
 	syncErr   error
 	syncs     int
+	// onSync, when set, runs during each Sync.
+	onSync func()
 	// cacheUse and cacheUseErr are what CacheUse answers.
 	cacheUse    guest.CacheUse
 	cacheUseErr error
@@ -681,7 +683,11 @@ func (g *fakeHelper) Sync(context.Context) error {
 	}
 	g.mu.Lock()
 	g.syncs++
+	onSync := g.onSync
 	g.mu.Unlock()
+	if onSync != nil {
+		onSync()
+	}
 	return g.syncErr
 }
 

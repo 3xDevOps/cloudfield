@@ -261,27 +261,36 @@ func (m *Manager) LoginStamp(member domain.MemberID, rels []string) (string, err
 		return "", err
 	}
 	defer func() { _ = home.Close() }()
+	stamp, err := stampIn(home, rels)
+	if err != nil {
+		return "", fmt.Errorf("memberhome: %q: %w", member, err)
+	}
+	return stamp, nil
+}
+
+// stampIn is LoginStamp for the paths rels below root.
+func stampIn(root *os.Root, rels []string) (string, error) {
 	var stamp strings.Builder
 	for _, rel := range rels {
-		info, err := home.Stat(rel)
+		info, err := root.Stat(rel)
 		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 			continue
 		}
 		if err != nil {
-			return "", fmt.Errorf("memberhome: login path %s in %q: %w", rel, member, err)
+			return "", fmt.Errorf("login path %s: %w", rel, err)
 		}
 		fmt.Fprintf(&stamp, "%s %d %d\n", rel, info.Size(), info.ModTime().UnixNano())
 		if !info.IsDir() {
 			continue
 		}
-		dir, err := home.Open(rel)
+		dir, err := root.Open(rel)
 		if err != nil {
-			return "", fmt.Errorf("memberhome: open login directory %s: %w", rel, err)
+			return "", fmt.Errorf("open login directory %s: %w", rel, err)
 		}
 		entries, err := dir.ReadDir(-1)
 		_ = dir.Close()
 		if err != nil {
-			return "", fmt.Errorf("memberhome: read login directory %s: %w", rel, err)
+			return "", fmt.Errorf("read login directory %s: %w", rel, err)
 		}
 		for _, entry := range entries {
 			// An entry removed since the listing is one the next stamp omits.

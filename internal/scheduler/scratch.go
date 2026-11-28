@@ -17,7 +17,10 @@ import (
 const (
 	scratchDirName       = "scratch"
 	accountConfigDirName = "account-config"
-	terminalScratchTag   = "terminal-"
+	// accountConfigVolume, in a run's account config directory, marks one a
+	// session's mounts came through a volume of.
+	accountConfigVolume = "volume"
+	terminalScratchTag  = "terminal-"
 	// A directory is planned before its owner is registered.
 	scratchOrphanAge = time.Hour
 )
@@ -161,8 +164,24 @@ func (s *Scheduler) accountConfigRoot() string {
 	return filepath.Join(s.cfg.StateDir, accountConfigDirName)
 }
 
+// removeAccountConfig removes a run's account config directory and the
+// volume a session on an added login mounted it through, when it marked
+// one. A directory whose volume stays is kept, so the orphan sweep tries
+// both again.
 func (s *Scheduler) removeAccountConfig(run domain.RunID) {
-	if err := os.RemoveAll(filepath.Join(s.accountConfigRoot(), string(run))); err != nil {
+	dir := filepath.Join(s.accountConfigRoot(), string(run))
+	if remover, ok := s.cfg.Runtime.(subpathVolumeRemover); ok {
+		if _, err := os.Lstat(filepath.Join(dir, accountConfigVolume)); err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			err = remover.RemoveSubpathVolume(ctx, dir)
+			cancel()
+			if err != nil {
+				slog.Warn("scheduler: remove account config volume", "run", run, "error", err)
+				return
+			}
+		}
+	}
+	if err := os.RemoveAll(dir); err != nil {
 		slog.Warn("scheduler: remove account config directory", "run", run, "error", err)
 	}
 }

@@ -21,8 +21,10 @@ var heldStopGrace = time.Minute
 // it owes a report: the run takes reports, and none arrived since the turn
 // started. It holds each turn at most once, so the caller asks the agent for
 // the report once, and returns "" otherwise. A Background run is never
-// held: its turn end finishes it.
-func (s *Scheduler) HoldTurnEnd(ctx context.Context, run domain.RunID) (string, error) {
+// held: its turn end finishes it. message is the agent's last message at a
+// Standard run's stop, which the turn's end forwards to a parent in place
+// of the reminded continuation's.
+func (s *Scheduler) HoldTurnEnd(ctx context.Context, run domain.RunID, message string) (string, error) {
 	c := s.coordinationSeam()
 	s.mu.Lock()
 	entry := s.runs[run]
@@ -30,9 +32,7 @@ func (s *Scheduler) HoldTurnEnd(ctx context.Context, run domain.RunID) (string, 
 		s.mu.Unlock()
 		return "", nil
 	}
-	// Mail wakes an Enhanced session, and a Standard launch with a task
-	// loads the idle-wake hook; a taskless one does not.
-	started, wake := entry.turnStartedAt, entry.launchMode == domain.LaunchACP || entry.task != ""
+	started, wake := entry.turnStartedAt, entry.launchMode == domain.LaunchACP || entry.idleWake
 	s.mu.Unlock()
 	last, err := s.cfg.Store.LastCoordReportAt(ctx, run)
 	if err != nil {
@@ -49,7 +49,7 @@ func (s *Scheduler) HoldTurnEnd(ctx context.Context, run domain.RunID) (string, 
 	}
 	entry.reportAsked = started
 	if entry.launchMode == domain.LaunchTUI {
-		entry.stopHeld = true
+		entry.stopHeld, entry.heldMessage = true, message
 		heldAt := time.Now().UTC()
 		time.AfterFunc(heldStopGrace, func() { s.applyHeldStop(entry, started, heldAt) })
 	}

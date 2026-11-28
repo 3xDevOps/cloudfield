@@ -17,6 +17,7 @@ import (
 
 	"github.com/3xDevOps/cloudfield/internal/attribution"
 	"github.com/3xDevOps/cloudfield/internal/control"
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	edgeclient "github.com/3xDevOps/cloudfield/internal/edge/client"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
@@ -138,7 +139,7 @@ type Config struct {
 	Config ConfigBackend
 	// AuthorizationMu is shared with child run admission so account and role
 	// revocation cannot race a run launch. New allocates one when omitted.
-	AuthorizationMu *sync.Mutex
+	AuthorizationMu *ctxlock.Mutex
 	// Services carries the team-feature service seams; see services.go.
 	// Each nil field disables its methods with CodeUnavailable.
 	Services Services
@@ -203,7 +204,7 @@ type Server struct {
 	// makes either admission or revocation the linearization point. Handlers
 	// that also need registerMu acquire registerMu first; authorizationMu
 	// paths never acquire registerMu or mu, so the lock order cannot cycle.
-	authorizationMu *sync.Mutex
+	authorizationMu *ctxlock.Mutex
 	handoffSeq      atomic.Uint64
 	// accessGen counts workspace access changes; see accessChanged.
 	accessGen atomic.Uint64
@@ -273,7 +274,7 @@ func New(cfg Config) (*Server, error) {
 		return nil, errors.New("sshd: config requires Store, Bus, Git, PTY, and Runs")
 	}
 	if cfg.AuthorizationMu == nil {
-		cfg.AuthorizationMu = &sync.Mutex{}
+		cfg.AuthorizationMu = &ctxlock.Mutex{}
 	}
 	policy, err := edgeproto.ParseAccessPolicy(string(cfg.EdgeAccess))
 	if err != nil {

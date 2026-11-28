@@ -3,6 +3,7 @@ package collab
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"testing"
@@ -87,6 +88,41 @@ func TestNotSentSteerRecordsTheDeliveryError(t *testing.T) {
 		want := cmp.Or(tc.want, tc.err.Error())
 		if result.Message.State != store.RoomMessageNotSent || f == nil || f.Code != tc.code || f.Message != want {
 			t.Fatalf("inject error %q: state %s failure %+v, want not_sent with code %s and the error", tc.err, result.Message.State, f, tc.code)
+		}
+	}
+}
+
+func TestHeldSteerTheServerCouldNotHandOverRecordsWhy(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		code string
+	}{
+		{acphost.ErrUnsupportedImage, "unsupported_image"},
+		{fmt.Errorf("%w: scheduler: read prompt image: gone", domain.ErrPromptNotSent), "prompt_not_sent"},
+		{fmt.Errorf("%w: the agent is not installed", ptyhost.ErrNoSession), "session_unavailable"},
+		{errors.New("the agent refused the prompt"), "agent_refused"},
+	} {
+		st, clock, ws, owner, _, run := setupCollab(t)
+		service, err := New(Config{
+			Store: st, Runs: st, Workspaces: st, Control: control.New(control.Config{Now: clock.Now}), Now: clock.Now,
+			Inject: func(_ context.Context, _ domain.RunID, _ domain.MemberID, _ domain.AgentPrompt, _ bool, delivered func(error)) (string, error) {
+				delivered(tc.err)
+				return acphost.OutcomeQueued, nil
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := service.Post(context.Background(), MessageInput{WorkspaceID: ws.ID, RunID: run.ID, ActorID: owner.ID, Kind: store.RoomMessageSteerRequest, Body: "hello", IdempotencyKey: tc.code})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := st.GetRoomMessage(context.Background(), result.Message.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.State != store.RoomMessageNotSent || got.Failure == nil || got.Failure.Code != tc.code || got.Failure.Message != tc.err.Error() {
+			t.Fatalf("held steer settled with %q: state %s failure %+v, want not_sent with code %s", tc.err, got.State, got.Failure, tc.code)
 		}
 	}
 }
