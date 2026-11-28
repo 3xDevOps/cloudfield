@@ -205,8 +205,11 @@ func TestMemoryChainFollowsReplacements(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 	w := mustCreateWorkspace(t, db)
+	// One creation time for every note, as a coarse clock gives notes made
+	// together: the chain then keeps the order they were made in.
+	at := time.Now().UTC()
 	note := func(body string) *Memory {
-		return &Memory{WorkspaceID: w.ID, Kind: MemoryConvention, Source: MemoryFromMember, Body: body}
+		return &Memory{WorkspaceID: w.ID, Kind: MemoryConvention, Source: MemoryFromMember, Body: body, CreatedAt: at}
 	}
 	supersede := func(old *Memory, body string) *Memory {
 		t.Helper()
