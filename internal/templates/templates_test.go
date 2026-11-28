@@ -211,7 +211,7 @@ func TestImpossibleCronRuleIsRefusedAndNeverFires(t *testing.T) {
 func TestBareTimeZonePrefixIsRefused(t *testing.T) {
 	ctx := context.Background()
 	e := newGateEnv(t, &fakeClock{t: time.Date(2026, 8, 13, 3, 0, 0, 0, time.UTC)})
-	for _, spec := range []string{"TZ=UTC", "CRON_TZ=Europe/Berlin", "TZ=UTC\t0 9 * * *"} {
+	for _, spec := range []string{"TZ=UTC", "CRON_TZ=Europe/Berlin", "TZ=UTC\t0\t9\t*\t*\t*"} {
 		if _, err := e.svc.SaveSchedule(ctx, e.ws, e.tpl, spec, e.owner, false); !errors.Is(err, ErrInvalidDefinition) {
 			t.Fatalf("SaveSchedule(%q) error = %v, want ErrInvalidDefinition", spec, err)
 		}
