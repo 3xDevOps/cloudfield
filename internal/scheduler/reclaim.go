@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"math"
 	"sort"
 	"time"
@@ -10,19 +11,42 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/disk"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
+	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
 
 // reclaimStartUsed and reclaimTargetUsed are the percentages of a filesystem
 // in use at which reclaim starts and down to which it frees what nobody
-// loses, at most every reclaimSweepEvery.
+// loses, at most every reclaimSweepEvery. A pass that left the filesystem
+// short is not repeated sooner either, unless what it read of the sessions
+// changed.
 const (
 	reclaimStartUsed  = 85
 	reclaimTargetUsed = 80
 	reclaimSweepEvery = 5 * time.Minute
 )
 
-// reclaimDisk waits for any running pass, then runs one. keep names a member
-// whose kept terminal is being opened, which the pass must not remove.
+// reclaimRun is what the ladder below the floor reads of one session: its
+// sandbox, and whether a pass may free that sandbox, its saved memory or
+// its checkout.
+type reclaimRun struct {
+	sandbox                 runtime.ID
+	closed, saved, finished bool
+}
+
+// reclaimPass is what the ladder below the floor reads as a pass starts:
+// every session, the running environment terminals and the member whose
+// terminal the pass keeps. Two passes that read the same have the same
+// things to free. at is when a pass that left the filesystem short ended.
+type reclaimPass struct {
+	runs      map[domain.RunID]reclaimRun
+	terminals map[domain.MemberID]runtime.ID
+	keep      domain.MemberID
+	at        time.Time
+}
+
+// reclaimDisk waits for any running pass, then runs one unless a pass
+// already found nothing more to free. keep names a member whose kept
+// terminal is being opened, which the pass must not remove.
 func (s *Scheduler) reclaimDisk(ctx context.Context, keep domain.MemberID) {
 	s.reclaimMu.Lock()
 	defer s.reclaimMu.Unlock()
@@ -36,6 +60,10 @@ func (s *Scheduler) reclaimDisk(ctx context.Context, keep domain.MemberID) {
 // it then frees the checkout disks kept for the next launch, what sessions
 // and members would lose, and every cache, until that headroom is back. It stops as soon as it is. The caller holds
 // reclaimMu.
+//
+// A pass that reached the end of that ladder with the filesystem still short
+// is spent: a request that reads what it read returns at once, so refused
+// launches and wakes share one pass instead of each running their own.
 func (s *Scheduler) reclaimDiskLocked(ctx context.Context, keep domain.MemberID) {
 	if s.cfg.MinFreeBytes < 0 || ctx.Err() != nil {
 		return
@@ -63,6 +91,26 @@ func (s *Scheduler) reclaimDiskLocked(ctx context.Context, keep domain.MemberID)
 	if _, low, ok := s.reclaimLevel(ctx, 100); !ok || !low {
 		return
 	}
+	s.mu.Lock()
+	pass := reclaimPass{
+		runs:      make(map[domain.RunID]reclaimRun, len(s.runs)),
+		terminals: make(map[domain.MemberID]runtime.ID, len(s.terminals)),
+		keep:      keep,
+	}
+	for id, e := range s.runs {
+		pass.runs[id] = reclaimRun{sandbox: e.containerID, closed: s.closedRetainedLocked(e), saved: s.savedLocked(e), finished: e.status.Terminal()}
+	}
+	for member, terminal := range s.terminals {
+		pass.terminals[member] = terminal.containerID
+	}
+	s.mu.Unlock()
+	// The spent pass found what this one would unless it had a terminal to
+	// keep that this one may remove, or a cache, a scratch directory or a
+	// failed cleanup has had time to come due.
+	if spent := s.reclaimSpent; s.cfg.Now().Sub(spent.at) < reclaimSweepEvery && (spent.keep == "" || spent.keep == keep) &&
+		maps.Equal(spent.runs, pass.runs) && maps.Equal(spent.terminals, pass.terminals) {
+		return
+	}
 	floor := func(step string) bool { return recovered(step, 100) }
 	if vms, ok := s.cfg.Runtime.(vmImageSweeper); ok {
 		if err := vms.DropKeptCheckoutDisks(); err != nil {
@@ -80,7 +128,10 @@ func (s *Scheduler) reclaimDiskLocked(ctx context.Context, keep domain.MemberID)
 		return
 	}
 	s.sweepScratch(ctx)
-	floor("scratch")
+	if !floor("scratch") {
+		pass.at = s.cfg.Now()
+		s.reclaimSpent = pass
+	}
 }
 
 // reclaimSessions frees, in order, closed sessions' containers, sleeping
@@ -187,12 +238,17 @@ func (s *Scheduler) savedByAge() []*supervised {
 	defer s.mu.Unlock()
 	var entries []*supervised
 	for _, entry := range s.runs {
-		if _, saving := s.saver(entry.containerID); saving && entry.asleepSaved && !entry.sleeping && entry.memorySaved == 0 {
+		if s.savedLocked(entry) {
 			entries = append(entries, entry)
 		}
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].asleepSince.Before(entries[j].asleepSince) })
 	return entries
+}
+
+func (s *Scheduler) savedLocked(entry *supervised) bool {
+	_, saving := s.saver(entry.containerID)
+	return saving && entry.asleepSaved && !entry.sleeping && entry.memorySaved == 0
 }
 
 // dropSavedState stops entry's saved VM, which deletes its memory and keeps
@@ -226,14 +282,15 @@ func (s *Scheduler) dropSavedState(ctx context.Context, entry *supervised) (stri
 	return "Deleted this sleeping session's saved memory because disk space was low; it starts again from its disk when it next wakes, and restores its conversation", nil
 }
 
-// closedRetainedByAge returns closed runs that still hold a container and
-// are not being relaunched, the one expiring soonest first.
+// closedRetainedByAge returns closed runs that still hold a container a pass
+// may remove, the one expiring soonest first. One whose evidence capture
+// failed before comes after the others, which never wait for its next try.
 func (s *Scheduler) closedRetainedByAge() []*supervised {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var entries []*supervised
 	for _, entry := range s.runs {
-		if entry.retained && entry.status.Terminal() && entry.relaunching == 0 {
+		if s.closedRetainedLocked(entry) {
 			entries = append(entries, entry)
 		}
 	}
@@ -243,8 +300,20 @@ func (s *Scheduler) closedRetainedByAge() []*supervised {
 		}
 		return *e.retainedUntil
 	}
-	sort.Slice(entries, func(i, j int) bool { return until(entries[i]).Before(until(entries[j])) })
+	sort.Slice(entries, func(i, j int) bool {
+		if a, b := entries[i].captureRetry.attempts > 0, entries[j].captureRetry.attempts > 0; a != b {
+			return b
+		}
+		return until(entries[i]).Before(until(entries[j]))
+	})
 	return entries
+}
+
+// closedRetainedLocked leaves out a run whose evidence capture is backing
+// off or was given up: its sandbox cannot go yet, and the runs behind it
+// must not wait for another failed try.
+func (s *Scheduler) closedRetainedLocked(entry *supervised) bool {
+	return entry.retained && entry.status.Terminal() && entry.relaunching == 0 && !s.captureWaitingLocked(entry)
 }
 
 // reclaimRetained expires entry's container only if it is still a closed
@@ -254,7 +323,7 @@ func (s *Scheduler) reclaimRetained(ctx context.Context, entry *supervised) (boo
 	entry.lifecycleMu.Lock()
 	defer entry.lifecycleMu.Unlock()
 	s.mu.Lock()
-	closed := s.runs[entry.runID] == entry && entry.retained && entry.status.Terminal() && entry.relaunching == 0
+	closed := s.runs[entry.runID] == entry && s.closedRetainedLocked(entry)
 	entry.reclaimed = closed
 	s.mu.Unlock()
 	if !closed {

@@ -76,6 +76,18 @@ func (e *Engine) IsVMCheckout(run domain.RunID) bool {
 	return err == nil && meta.VM
 }
 
+// HostCheckout reports that run's checkout is a directory on the server,
+// which outlives the session's sandbox. It is false when that cannot be
+// read, so a caller never takes a VM's only copy for one the server holds.
+func (e *Engine) HostCheckout(run domain.RunID) bool {
+	meta, err := e.readRunMeta(run)
+	if err != nil || meta.VM {
+		return false
+	}
+	_, err = e.existingCheckoutPath(run)
+	return err == nil
+}
+
 // VMCheckoutDisk returns the qcow2 disk of the checkout at path, a checkout
 // path CreateRunCheckoutAt returned, which the VM mounts at target, making it
 // on first use: a copy-on-write disk over the prepared disk of the

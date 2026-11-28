@@ -355,6 +355,10 @@ func (s *Scheduler) sweepRetained(ctx context.Context) {
 	now := time.Now().UTC()
 	for _, entry := range entries {
 		s.mu.Lock()
+		if s.captureWaitingLocked(entry) {
+			s.mu.Unlock()
+			continue
+		}
 		pending := s.runs[entry.runID] == entry && entry.destroyPending
 		due := s.runs[entry.runID] == entry && entry.retainedUntil != nil &&
 			!now.Before(*entry.retainedUntil)
@@ -519,8 +523,7 @@ func (s *Scheduler) expireRetainedLocked(ctx context.Context, entry *supervised,
 	if identity == "" {
 		identity = evidenceCommitIdentity(run.LastCommit, "", -1)
 	}
-	if err = s.captureFinishEvidence(ctx, entry.runID, run.Status, identity); err != nil {
-		logEvidenceFailure(entry.runID, err)
+	if err = s.captureRetained(ctx, entry, run.Status, identity); err != nil {
 		s.retainAfterEvidenceFailure(entry)
 		return err
 	}

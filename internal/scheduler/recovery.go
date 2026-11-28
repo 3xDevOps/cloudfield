@@ -476,6 +476,7 @@ func (s *Scheduler) Relaunch(ctx context.Context, run domain.RunID, actor domain
 	entry.asleepSince, entry.wakeErr = time.Time{}, nil
 	entry.destroyPending = false
 	entry.cleanupError = ""
+	entry.captureRetry, entry.captureWaived = cleanupRetry{}, false
 	s.publish(ctx, events.Event{
 		WorkspaceID: fresh.WorkspaceID,
 		RunID:       run,
@@ -1315,12 +1316,27 @@ func (s *Scheduler) preserveRecoveryWork(ctx context.Context, run domain.RunID, 
 	if err := s.persistEvidenceIdentity(run, identity); err != nil {
 		return err
 	}
-	if captureErr := s.captureFinishEvidence(ctx, run, domain.RunInterrupted, identity); captureErr != nil {
-		logEvidenceFailure(run, captureErr)
-		s.persistEvidencePending(run, identity)
-		return captureErr
+	return s.captureRecovery(ctx, run, domain.RunInterrupted, identity)
+}
+
+// captureRecovery captures run's final state before a recovery path removes
+// its sandbox, through captureRetained's bounded tries while run has an
+// owner.
+func (s *Scheduler) captureRecovery(ctx context.Context, run domain.RunID, outcome domain.RunStatus, identity string) error {
+	s.mu.Lock()
+	entry := s.runs[run]
+	s.mu.Unlock()
+	var err error
+	if entry != nil {
+		err = s.captureRetained(ctx, entry, outcome, identity)
+	} else {
+		err = s.captureFinishEvidence(ctx, run, outcome, identity)
+		logEvidenceFailure(run, err)
 	}
-	return nil
+	if err != nil {
+		s.persistEvidencePending(run, identity)
+	}
+	return err
 }
 
 // recoverUnstarted destroys any container before interrupting, or a live
@@ -1625,12 +1641,7 @@ func (s *Scheduler) preserveRecoveryEvidence(ctx context.Context, run *domain.Ru
 		s.recordRunCleanupError(run.ID, cleanupStateError)
 		return err
 	}
-	if err := s.captureFinishEvidence(ctx, run.ID, run.Status, identity); err != nil {
-		logEvidenceFailure(run.ID, err)
-		s.persistEvidencePending(run.ID, identity)
-		return err
-	}
-	return nil
+	return s.captureRecovery(ctx, run.ID, run.Status, identity)
 }
 
 func (s *Scheduler) cleanupLeftoverContainer(ctx context.Context, cid runtime.ID, run domain.RunID) error {
@@ -2033,6 +2044,8 @@ func (s *Scheduler) entryFromSidecar(r *domain.Run, sc sidecar) *supervised {
 		retainedUntil:       sc.RetainedUntil,
 		destroyPending:      sc.DestroyPending,
 		evidencePending:     sc.EvidencePending,
+		captureRetry:        cleanupRetry{attempts: sc.CaptureAttempts, next: sc.CaptureRetryAt},
+		captureWaived:       sc.CaptureWaived,
 		cleanupError:        publicCleanupError(sc.CleanupError),
 		runUser:             sc.RunUser,
 		home:                sc.Home,

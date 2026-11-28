@@ -365,13 +365,13 @@ func (s *Scheduler) teardownRun(ctx context.Context, run domain.RunID, actor dom
 		}
 		if entry != nil {
 			if pendingDestroy {
-				if err := s.Kill(ctx, run, actor); err != nil {
+				if err := s.deleteUncaptured(entry, s.Kill(ctx, run, actor)); err != nil {
 					return "", err
 				}
 				continue
 			}
 			if retained {
-				if err := s.expireRetained(ctx, entry); err != nil {
+				if err := s.deleteUncaptured(entry, s.expireRetained(ctx, entry)); err != nil {
 					return "", err
 				}
 				continue
@@ -410,7 +410,7 @@ func (s *Scheduler) teardownRun(ctx context.Context, run domain.RunID, actor dom
 			continue
 		}
 		if retainedEntry != nil {
-			if err := s.expireRetained(ctx, retainedEntry); err != nil {
+			if err := s.deleteUncaptured(retainedEntry, s.expireRetained(ctx, retainedEntry)); err != nil {
 				return "", err
 			}
 			continue
@@ -1168,8 +1168,7 @@ func (s *Scheduler) settleRetainedCompletion(ctx context.Context, entry *supervi
 		s.setPaused(entry, true)
 	}
 	cause = cleanupEvidenceError
-	if err := s.captureFinishEvidence(ctx, entry.runID, outcome, identity); err != nil {
-		logEvidenceFailure(entry.runID, err)
+	if err := s.captureRetained(ctx, entry, outcome, identity); err != nil {
 		return err
 	}
 	cause = cleanupRuntimeError

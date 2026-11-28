@@ -2591,6 +2591,8 @@ func TestMigratedExpiryRetriesEvidenceBeforeDestroyAndKeepsFailureVisible(t *tes
 		t.Fatal(err)
 	}
 	e.cfg.RunContainerTTL = time.Hour
+	clock, advance := movableClock()
+	e.cfg.Now = clock
 	s2 := e.newScheduler(t, e.rt, newFakePTY())
 	retry := &destroyRetryRuntime{Runtime: e.rt}
 	s2.cfg.Runtime = retry
@@ -2601,6 +2603,7 @@ func TestMigratedExpiryRetriesEvidenceBeforeDestroyAndKeepsFailureVisible(t *tes
 		t.Fatal(err)
 	}
 	captureKey := capture.lastRequest().IdempotencyKey
+	advance(cleanupRetryMax)
 	s2.sweepRetained(ctx)
 	if got := capture.lastRequest().IdempotencyKey; got != captureKey {
 		t.Fatalf("terminal retry changed its durable evidence key: %q -> %q", captureKey, got)
@@ -2616,6 +2619,7 @@ func TestMigratedExpiryRetriesEvidenceBeforeDestroyAndKeepsFailureVisible(t *tes
 	if err != nil || !sc.EvidencePending || !sc.DestroyPending || sc.CleanupError != cleanupEvidenceError {
 		t.Fatalf("evidence retry marker = %+v, %v", sc, err)
 	}
+	advance(cleanupRetryMax)
 	s2.sweepRetained(ctx)
 	_, destroys, _ = retry.counts()
 	info, err = s2.Retention(row)

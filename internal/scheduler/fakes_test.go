@@ -761,6 +761,8 @@ func (g *fakeGit) CreateRunCheckoutAt(_ context.Context, ws domain.WorkspaceID, 
 
 func (g *fakeGit) IsVMCheckout(domain.RunID) bool { return false }
 
+func (g *fakeGit) HostCheckout(domain.RunID) bool { return true }
+
 func (g *fakeGit) baseCommitFor(run domain.RunID) string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
