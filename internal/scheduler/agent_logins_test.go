@@ -207,15 +207,16 @@ func TestSignInAddsTheLoginItSavedAndTouchesNoOtherLogin(t *testing.T) {
 // signInWithSlowReconcile signs a login in for a member who has a login
 // directory no row names, which the reconcile after the sign-in removes. It
 // returns once that reconcile is removing the directory's volume, where it
-// stays until release is closed.
-func signInWithSlowReconcile(t *testing.T) (e *signInEnv, orphan string, release chan struct{}) {
+// stays until release is closed; cancelled is closed if its context ends
+// first.
+func signInWithSlowReconcile(t *testing.T) (e *signInEnv, orphan string, release, cancelled chan struct{}) {
 	t.Helper()
 	e = newSignInEnv(t)
 	orphan, err := e.logins.Add(e.member.ID, "claude", "lgn-orphan0000")
 	if err != nil {
 		t.Fatal(err)
 	}
-	reconciling, release := make(chan struct{}), make(chan struct{})
+	reconciling, release, cancelled := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	t.Cleanup(func() {
 		select {
 		case <-release:
@@ -224,9 +225,14 @@ func signInWithSlowReconcile(t *testing.T) (e *signInEnv, orphan string, release
 		}
 	})
 	e.rt.mu.Lock()
-	e.rt.removeVolumeHook = func() {
+	e.rt.removeVolumeHook = func(ctx context.Context) {
 		close(reconciling)
-		<-release
+		select {
+		case <-ctx.Done():
+			close(cancelled)
+			<-release
+		case <-release:
+		}
 	}
 	e.rt.mu.Unlock()
 	if _, _, err = e.signIn(t, "work", func(spec runtime.Spec) {
@@ -245,13 +251,13 @@ func signInWithSlowReconcile(t *testing.T) (e *signInEnv, orphan string, release
 	case <-time.After(10 * time.Second):
 		t.Fatal("the sign-in's reconcile never reached the orphaned login")
 	}
-	return e, orphan, release
+	return e, orphan, release, cancelled
 }
 
 // A sign-in's result does not wait for the reconcile that follows it, which
 // still removes the member's login directories no row names.
 func TestSignInResultComesBeforeItsReconcile(t *testing.T) {
-	_, orphan, release := signInWithSlowReconcile(t)
+	_, orphan, release, _ := signInWithSlowReconcile(t)
 	if _, err := os.Lstat(orphan); err != nil {
 		t.Fatalf("the orphaned login directory while its reconcile is held: %v; want it there, the result having come first", err)
 	}
@@ -262,15 +268,20 @@ func TestSignInResultComesBeforeItsReconcile(t *testing.T) {
 	})
 }
 
-// Close waits for the reconcile a finished sign-in started, so nothing of
-// the sign-in works on the store once Close has returned.
+// Close cancels the reconcile a finished sign-in started and waits for it,
+// so nothing of the sign-in works on the store once Close has returned.
 func TestCloseWaitsForAFinishedSignInsReconcile(t *testing.T) {
-	e, _, release := signInWithSlowReconcile(t)
+	e, _, release, cancelled := signInWithSlowReconcile(t)
 	closed := make(chan struct{})
 	go func() {
 		_ = e.sched.Close()
 		close(closed)
 	}()
+	select {
+	case <-cancelled:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close did not cancel the sign-in's reconcile")
+	}
 	select {
 	case <-closed:
 		t.Fatal("Close returned while the sign-in's reconcile was running")
