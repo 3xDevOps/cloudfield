@@ -5629,7 +5629,11 @@ and applies again once there is room. Sections (`details.tsx`):
   purpose, state, agent and model, "On `<name>`'s account" plus "(fallback
   from `<name>`)" when the store's session carries `requested_account_member_id`,
   its cost or "Cost not reported", its latest report and error, and
-  a **Detached** badge. **Open** opens a started subsession. Under the list: the cost of this session and all its
+  a **Detached** badge. A `queued` or `starting` subsession that carries an
+  error is waiting for room on the server: it reads **Waiting to start**
+  with the waiting dot, the server's refusal text verbatim in a neutral
+  box, and **Show the machine**, which opens Settings › Machines when the
+  server answers `server.capacity`; any other error is in the failed colour. **Open** opens a started subsession. Under the list: the cost of this session and all its
   descendants, "At least $X: N sessions report no cost" when some are unmetered
   and "Cost not reported" when none are metered, never $0; the split by
   paying account; tokens; and "1 of 8 busy, 1 queued" against the
