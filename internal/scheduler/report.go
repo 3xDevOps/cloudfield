@@ -33,8 +33,10 @@ var errProvisioning = errors.New("the session is still provisioning")
 // The agent starts before its launch marks the run running, so a report that
 // arrives while the run is provisioning waits for that, up to reportWait.
 func (s *Scheduler) ReportAgentState(ctx context.Context, run domain.RunID, report agentstatus.Report) error {
-	if report.UsageLimit && s.continueTerminalRun(ctx, run, report) {
-		return nil
+	if report.UsageLimit {
+		if taken, err := s.continueTerminalRun(ctx, run, report); taken {
+			return err
+		}
 	}
 	deadline := time.Now().Add(reportWait)
 	for {

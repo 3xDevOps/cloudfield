@@ -58,10 +58,11 @@ func TestClaudeDoesNotInventInput(t *testing.T) {
 	if got, ok := FromClaudeHook([]byte(`{"hook_event_name":"UserPromptSubmit","session_id":"root"}`)); !ok || got.State != Working || !got.TurnStart {
 		t.Errorf("a prompt must start a turn: %+v", got)
 	}
+	ended := []domain.RunInputUpdate{{Operation: "replace", Requests: []domain.RunInputRequest{}}}
 	for _, event := range []string{"Stop", "StopFailure"} {
 		got, ok := FromClaudeHook([]byte(`{"hook_event_name":"` + event + `","session_id":"root"}`))
-		if !ok || got.State != Idle || got.SessionEnd || len(got.InputUpdates) != 0 {
-			t.Errorf("%s must only end execution: %+v", event, got)
+		if !ok || got.State != Idle || got.SessionEnd || !reflect.DeepEqual(got.InputUpdates, ended) {
+			t.Errorf("%s must end execution and every request: %+v", event, got)
 		}
 	}
 	if got, _ := FromClaudeHook([]byte(`{"hook_event_name":"Stop","session_id":"root"}`)); !got.Stop {
@@ -83,10 +84,10 @@ func TestClaudeDoesNotInventInput(t *testing.T) {
 		{`[{"id":"a","type":"local_agent"},{"id":"m","type":"monitor_mcp"},{"id":"s","type":"local_bash"}]`, Report{State: Working, Reason: "working in background: 2 tasks"}},
 		{`[{"id":"w","type":"local_workflow"}]`, Report{State: Working, Reason: "working in background: 1 task"}},
 		{`[{"id":"m","type":"monitor_mcp"}]`, Report{State: Working, Reason: "working in background: 1 task", Tools: true}},
-		{`[{"id":"s","type":"local_bash","description":"dev server"}]`, Report{State: Idle, Reason: ReasonIdle}},
+		{`[{"id":"s","type":"local_bash","description":"dev server"}]`, Report{State: Idle, Reason: ReasonIdle, InputUpdates: ended}},
 	} {
 		got, ok := FromClaudeHook([]byte(`{"hook_event_name":"Stop","background_tasks":` + tc.tasks + `}`))
-		if !ok || got.State != tc.want.State || got.Reason != tc.want.Reason || got.Tools != tc.want.Tools || len(got.InputUpdates) != 0 {
+		if !ok || got.State != tc.want.State || got.Reason != tc.want.Reason || got.Tools != tc.want.Tools || !reflect.DeepEqual(got.InputUpdates, tc.want.InputUpdates) {
 			t.Errorf("Stop with background tasks %s = %+v, want %+v", tc.tasks, got, tc.want)
 		}
 	}
@@ -134,12 +135,13 @@ func TestClaudeSubagentHooksLeaveTheTurnAlone(t *testing.T) {
 // 429 that shares its error kind.
 func TestClaudeStopFailureUsageLimit(t *testing.T) {
 	limit := "You've hit your session limit · resets 3pm (UTC)"
+	ended := []domain.RunInputUpdate{{Operation: "replace", Requests: []domain.RunInputRequest{}}}
 	got, ok := FromClaudeHook([]byte(`{"session_id":"s1","transcript_path":"/root/.claude/projects/x/s1.jsonl","cwd":"/workspace","hook_event_name":"StopFailure","error":"rate_limit","last_assistant_message":"` + limit + `"}`))
-	if want := (Report{State: Idle, Reason: limit, SessionID: "s1", UsageLimit: true}); !ok || !reflect.DeepEqual(got, want) {
+	if want := (Report{State: Idle, Reason: limit, InputUpdates: ended, SessionID: "s1", UsageLimit: true}); !ok || !reflect.DeepEqual(got, want) {
 		t.Fatalf("usage limit = %+v, mapped=%v; want %+v", got, ok, want)
 	}
 	got, ok = FromClaudeHook([]byte(`{"session_id":"s1","hook_event_name":"StopFailure","error":"rate_limit","last_assistant_message":"API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited"}`))
-	if want := (Report{State: Idle, Reason: "agent failed", SessionID: "s1"}); !ok || !reflect.DeepEqual(got, want) {
+	if want := (Report{State: Idle, Reason: "agent failed", InputUpdates: ended, SessionID: "s1"}); !ok || !reflect.DeepEqual(got, want) {
 		t.Fatalf("transient 429 = %+v, mapped=%v; want %+v", got, ok, want)
 	}
 }
