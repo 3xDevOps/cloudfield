@@ -133,6 +133,7 @@ internal/coord: reached only through the scheduler
 internal/coordcli: reached only through the scheduler
 internal/coordhooks: reached only through the scheduler
 internal/cost: reached only through the scheduler
+internal/ctxlock: reached only through the scheduler
 internal/envname: reached only through the scheduler
 internal/evidence: reached only through the scheduler
 internal/fallback: reached only through the scheduler
