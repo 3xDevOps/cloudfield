@@ -135,7 +135,11 @@ func (s *Service) scan(ctx context.Context, fire bool) error {
 				slog.Warn("templates: unparseable cron", "schedule", sc.ID, "cron", sc.Cron, "error", perr)
 				continue
 			}
-			s.timers[sc.ID] = &timer{spec: sc.Cron, rule: rule, next: rule.Next(now)}
+			var fired time.Time
+			if sc.LastFiredAt != nil {
+				fired = *sc.LastFiredAt
+			}
+			s.timers[sc.ID] = &timer{spec: sc.Cron, rule: rule, next: following(rule, fired, now)}
 			continue
 		}
 		// A zero next is a rule with no reachable slot; it is never due,
@@ -145,7 +149,7 @@ func (s *Service) scan(ctx context.Context, fire bool) error {
 		}
 		// One fire per due schedule per scan, and the next slot is
 		// computed from now: overdue slots are dropped, not queued.
-		t.next = t.rule.Next(now)
+		t.next = following(t.rule, t.next, now)
 		due = append(due, sc)
 	}
 	for id := range before {
@@ -220,6 +224,24 @@ func (s *Service) allowed(ctx context.Context, member domain.MemberID, workspace
 		return fmt.Errorf("member %s may no longer launch sessions: %w", member, err)
 	}
 	return nil
+}
+
+// following is rule's first slot after now whose wall-clock time is later
+// than fired's. When clocks fall back, robfig matches the repeated hour a
+// second time; this keeps each wall-clock time to one launch, also across
+// a restart. A rule without CRON_TZ= carries time.Local and runs in UTC,
+// where nothing repeats.
+func following(rule cron.Schedule, fired, now time.Time) time.Time {
+	next := rule.Next(now)
+	spec, ok := rule.(*cron.SpecSchedule)
+	if !ok || spec.Location == time.Local {
+		return next
+	}
+	last := fired.In(spec.Location).Format(time.DateTime)
+	for !next.IsZero() && next.In(spec.Location).Format(time.DateTime) <= last {
+		next = rule.Next(next)
+	}
+	return next
 }
 
 func (s *Service) seed(id, spec string, rule cron.Schedule) time.Time {

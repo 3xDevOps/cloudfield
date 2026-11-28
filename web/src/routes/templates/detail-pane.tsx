@@ -1,6 +1,6 @@
 import { useId, useRef, useState, type ReactNode } from 'react'
 import { modeLabel } from '@/components/launch/modes'
-import { ChevronLeft, Ellipsis } from '@/components/icons'
+import { ChevronLeft, Clock, Ellipsis } from '@/components/icons'
 import { FillProgress, PromptFill, PromptFooter, runIfReady, useEntranceOnChange, type PrimaryAction, type Typed } from '@/components/templates/prompt-fill'
 import { AgentGlyph } from '@/components/ui/agent-glyph'
 import { Badge } from '@/components/ui/badge'
@@ -9,14 +9,16 @@ import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from '@/compo
 import { RelativeTime } from '@/components/ui/relative-time'
 import { money } from '@/lib/format'
 import type { Schedule, Template } from '@/lib/types'
+import { describeRule } from '@/routes/templates/schedule'
 
 function Timing({ template, schedule }: { template: Template; schedule?: Schedule }) {
   if (!schedule) return <>Saved <RelativeTime at={template.created_at} /></>
   const fire = schedule.next_fire_at ? ['next', schedule.next_fire_at] as const : schedule.last_fire_at ? ['last', schedule.last_fire_at] as const : null
+  const shown = describeRule(schedule.cron)
   return (
     <>
-      Scheduled <code className="font-code">{schedule.cron}</code> UTC
-      {fire && <>, {fire[0]} <RelativeTime at={fire[1]} /></>}
+      Scheduled {'words' in shown ? shown.words : <><code className="font-code">{shown.cron}</code> {shown.zone}</>}
+      {fire && <span className="whitespace-nowrap">, {fire[0]} <RelativeTime at={fire[1]} /></span>}
     </>
   )
 }
@@ -54,7 +56,7 @@ export function DetailPane({
   const body = useRef<HTMLDivElement>(null)
   const [hint, setHint] = useState<string | null>(null)
   useEntranceOnChange(body, template.name)
-  const menu = onSchedule || onDuplicate || onDelete
+  const menu = onDuplicate || onDelete
   return (
     <section aria-labelledby={headingID} className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -66,13 +68,18 @@ export function DetailPane({
           )}
           {notice}
           <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-            <div className="flex min-w-0 flex-1 items-center gap-2">
+            <div className="flex min-w-40 flex-1 items-center gap-2">
               <h2 id={headingID} className="min-w-0 truncate text-title text-text">{template.name}</h2>
               <Badge>{modeLabel(template.mode)}</Badge>
             </div>
             <FillProgress template={template} typed={typed} />
             <div className="flex shrink-0 items-center gap-1">
               {onEdit && <Button variant="secondary" size="sm" onClick={onEdit}>Edit</Button>}
+              {onSchedule && (
+                <Button variant="secondary" size="sm" disabled={saving} onClick={onSchedule}>
+                  <Clock />Schedule
+                </Button>
+              )}
               {menu && (
                 <Menu>
                   <MenuTrigger asChild>
@@ -81,11 +88,10 @@ export function DetailPane({
                     </Button>
                   </MenuTrigger>
                   <MenuContent align="end">
-                    {onSchedule && <MenuItem disabled={saving} onSelect={onSchedule}>Schedule…</MenuItem>}
                     {onDuplicate && <MenuItem onSelect={onDuplicate}>Duplicate</MenuItem>}
                     {onDelete && (
                       <>
-                        {(onSchedule || onDuplicate) && <MenuSeparator />}
+                        {onDuplicate && <MenuSeparator />}
                         <MenuItem tone="danger" disabled={saving} onSelect={onDelete}>Delete</MenuItem>
                       </>
                     )}
