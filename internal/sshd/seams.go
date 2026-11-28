@@ -71,6 +71,10 @@ func launchWithOptions(ctx context.Context, runs RunController, workspace domain
 
 // RunController is the SSH server's view of the scheduler (*scheduler.Scheduler).
 type RunController interface {
+	// Machine measures the machine as admission and the guards do, and VMs
+	// counts its session VMs.
+	Machine(ctx context.Context) scheduler.MachineStatus
+	VMs() domain.VMCounts
 	Launch(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode) (*domain.Run, error)
 	// CheckSharedLaunch reports whether member's launch of harness on
 	// account would be refused over the harness or the account owner's
