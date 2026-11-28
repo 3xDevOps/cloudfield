@@ -288,6 +288,11 @@ func TestWaitingLaunchesAreCappedPerMember(t *testing.T) {
 	if w, perr := e.launch(member.ID, protocol.RunLaunchParams{Task: "another member", Wait: true}); perr != nil || w.Waiting == nil {
 		t.Fatalf("another member's launch = %+v, %v; want it waiting", w, perr)
 	}
+	// A request too large to keep gets the refusal with its size and the limit.
+	if _, perr := e.launch(member.ID, protocol.RunLaunchParams{Task: strings.Repeat("a", maxWaitingParams), Wait: true}); perr == nil || perr.Code != protocol.CodeUnavailable ||
+		!strings.Contains(perr.Message, "insufficient host memory headroom") || !strings.Contains(perr.Message, "at most 65536 bytes") || !strings.Contains(perr.Message, "its request is 655") {
+		t.Fatalf("a launch too large to keep = %v, want the refusal with its size and the limit", perr)
+	}
 }
 
 // A launch asked for through a connector that was removed while it waited
