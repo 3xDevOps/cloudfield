@@ -45,8 +45,14 @@ curl -fsS -H 'aether-edge-version: 6' https://edge-old.example.com/v1/edge | jq 
 Expect `ExecStart=/usr/local/bin/aether-server serve --config
 /etc/aether/server.conf`. With `--edge-url` on that line the service takes
 its address from the flag, and nothing below changes it. With `--data-dir`
-there, pass the same `--data-dir <dir>` to every `cloudfield-server edge`
-command below. With another `--config <file>`, read that file instead and
+there, pass the same `--data-dir <dir>` to `edge status` and `edge trust`
+below, never to `edge move`: where the options file gives another
+directory, `move` refuses with `<file> gives edge-url "<url>" and data-dir
+"<dir>", but edge move runs with "<url>" and "<dir>" from its flags;
+nothing changed, run it again without --edge-url or --data-dir`, and
+without the flag it reads the file's directory, not the service's. `move`
+works only once the options file's `data-dir` is the directory the
+service uses. With another `--config <file>`, read that file instead and
 pass `--config <file>` to every `cloudfield-server edge` and `config`
 command below; `update` and `version` take neither.
 
@@ -55,8 +61,10 @@ https://edge-old.example.com` and the status exits 0 with `edge
 https://edge-old.example.com`, no `running` row, and `connection
 connected since <time>; the edge last answered <n>s ago`. A `running` row
 names another address the running server is at or last dialed. Any other
-`connection` row says this server is not connected there now
-([edge.md](edge.md#checking-the-connection)). The version line is
+`connection` row is no proof that the server is connected there now
+([edge.md](edge.md#checking-the-connection)); `connected since <time>,
+unchecked: ...` exits 0 too, and only says that a server from before
+heartbeats once connected. The version line is
 `aether-server <version> (<commit>)`. The last command prints the
 replacement and the date, or `null` twice when the address is not
 retiring.
@@ -229,10 +237,10 @@ sudo cloudfield-server edge status | grep 'edge key'
 curl -fsS -H 'aether-edge-version: 6' https://edge-new.example.com/v1/edge | jq -r .fingerprint
 ```
 
-Both must print the fingerprint the operator gave you. This is a pre-check
-and proves nothing by itself: the second line is the new address's own
-statement, and an edge key is public. If the three do not agree, stop. If
-they do:
+Both must print the fingerprint the operator gave you, also when the
+server pinned the key only a moment ago. This is a pre-check and proves
+nothing by itself: the second line is the new address's own statement,
+and an edge key is public. If the three do not agree, stop. If they do:
 
 ```sh
 sudo cloudfield-server config set edge-url https://edge-new.example.com
@@ -264,12 +272,24 @@ Check it as in step 4. The server keeps its owner, which it holds per edge
 key, not per address.
 
 **Without a pinned key** (the row reads `not pinned yet; the server pins it
-when it first connects`), the server has nothing to compare with: started
-with the new address, it pins whatever key answers first. So pin the
-operator's key before the new address is written anywhere. `edge trust`
-asks the address given as `--edge-url`, uses the data directory of the
-options file as the service does, and exits non-zero unless it pinned.
-Chain the three commands with `&&`, so that nothing runs after a refusal:
+when it first connects`), the server has nothing to compare with: it pins
+whatever key answers its first connection, and the running service keeps
+dialing. So stop the service first, then pin the operator's key before
+the new address is written anywhere. Stopping it ends every connection to
+this server:
+
+```sh
+sudo systemctl stop aether-server
+sudo cloudfield-server edge status | grep 'edge key'
+```
+
+The row must still read `not pinned yet`. If it shows a fingerprint, the
+service pinned a key before it stopped: follow **With a pinned key**
+above, whose three fingerprints must agree, and start the service with
+its restart. Otherwise chain the three commands with `&&`, so that
+nothing runs after a refusal. `edge trust` asks the address given as
+`--edge-url`, uses the data directory of the options file as the service
+does, and exits non-zero unless it pinned:
 
 ```sh
 sudo cloudfield-server edge trust --edge-url https://edge-new.example.com &&
@@ -293,9 +313,10 @@ when it next reconnects` and a line on the owner, and the other two
 commands run. Any other answer, or none, ends in `aether-server: not
 pinned; the edge key is unchanged`, and an address that does not answer in
 the error of the request. Nothing after it runs: the options file still
-names the old address and the service was not restarted. Stop there and
-ask the operator. Never run the other two commands by hand after a
-refusal. Check it as in step 4.
+names the old address and the service stays stopped. Stop there and ask
+the operator. Never run the other two commands by hand after a refusal;
+`sudo systemctl start aether-server` brings the server back at the old
+address. Check it as in step 4.
 
 ## Moving a device
 
@@ -318,20 +339,28 @@ under the platform's config directory, which on Linux is
 ```sh
 d=${CLOUDFIELD_CONFIG_DIR:-${AETHER_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}}}
 [ -d "$d/cloudfield" ] && d=$d/cloudfield || d=$d/aether
-cp -p "$d/config.json" "$d/config.json.before-move"
+(umask 077; set -C; cat "$d/config.json" > "$d/config.json.before-move") &&
+  cmp "$d/config.json" "$d/config.json.before-move" && echo "kept $d/config.json.before-move"
 jq -r '.edges | to_entries[] | "\(.key)  \(.value.account.login // .value.account.email)"' "$d/edge-tokens.json"
 jq '{default: {addr, key, edge_url, server_id}, links: [.links[]? | {name, addr, edge_url, server_id}]}' "$d/config.json"
 cloudfield servers --edge https://edge-old.example.com
 ```
 
-No command prints a token. The `cp` keeps the whole links file, which the
-steps below rewrite. The first `jq` prints each relay origin this computer
-holds a token for, and the account. The second prints the default link,
-which is the top-level fields of `config.json`, and each saved link: its
-name, direct address, edge address and server id. Note every entry whose
-`edge_url` is `https://edge-old.example.com`, and the whole default link.
-The last command asks the edge: it lists your servers when the token for
-the old address still works. An entry in the file does not show that.
+No command prints a token. The second line keeps the whole links file,
+which the steps below rewrite, and must print `kept <file>`: go on only
+then. `set -C` refuses to overwrite: an error that the file exists means
+a copy from an earlier attempt is there. That copy is the original: keep
+it, and do not make another. The first `jq` prints each relay origin this
+computer holds a token for, as the token file spells it, and the account.
+The second
+prints the default link, which is the top-level fields of `config.json`,
+and each saved link: its name, direct address, edge address and server
+id. Note every entry that names the old relay host, and the whole default
+link. `https://edge-old.example.com:443` is the same address as
+`https://edge-old.example.com`, and the token file keeps the spelling it
+was signed in with: note it as printed. The last command asks the edge: it lists
+your servers when the token for the old address still works. An entry in
+the file does not show that.
 
 While the address is retiring, a `cloudfield` command that the old address
 answers prints, once, on stderr after its own output:
@@ -405,17 +434,27 @@ are these:
    2. Link each saved link that names the old address, with `--name <name>`.
    3. Link the server of the original default link again, last, with the
       `--addr` it had and the edge address it now has, so it is the
-      default again. A default link with no `server_id` is a direct link,
-      which the links above replaced without saving: restore it with
-      `cloudfield link <addr>`, and `--key <file>` if it had a `key`.
+      default again.
    4. Run the `jq` line for `config.json` again. Link any entry that still
       names the old address with `--name <its name>`, then repeat 3.
+   5. A default link with no `server_id` was a direct link, which the
+      links above replaced without saving. Never restore it with
+      `cloudfield link <addr>`: that dials before any `known_hosts` of
+      the old link is back, checks the host key against
+      `~/.ssh/known_hosts`, and trusts and records a host it does not
+      find there. Put the saved top-level fields back instead, keeping
+      the links as they are now:
+
+      ```sh
+      jq -s '.[0] + (.[1] | with_entries(select(.key == "links")))' "$d/config.json.before-move" "$d/config.json" > "$d/config.json.new" &&
+        cat "$d/config.json.new" > "$d/config.json" && rm "$d/config.json.new"
+      ```
 
    What `link` does not carry over: except when it relinks the server the
    default link already names, it writes the link anew, without the
    `repo`, `known_hosts`, `user` and `key` the link had, and the default
-   link without `gui_server`. Compare with the copy and put back by hand
-   what differs beside `edge_url`:
+   link without `gui_server`. Compare with the copy and put back by hand,
+   in an editor, what differs beside `edge_url`:
 
    ```sh
    diff <(jq -S . "$d/config.json.before-move") <(jq -S . "$d/config.json")
@@ -440,7 +479,9 @@ are these:
    and Windows ones.
 
 4. Sign out at the old address while it still answers, so its token is
-   revoked there:
+   revoked there. Give `--edge` exactly as the first `jq` line printed
+   it, with `:443` if it has one: `logout` finds the token only under
+   that spelling.
 
    ```sh
    cloudfield logout --edge https://edge-old.example.com
@@ -451,8 +492,8 @@ are these:
    still signed in to edge-new.example.com; sign out there with: aether logout --edge https://edge-new.example.com
    ```
 
-Check it: the first `jq` line no longer lists
-`https://edge-old.example.com`, the second shows no `edge_url` with it, and
+Check it: the first `jq` line no longer lists the old relay host in any
+spelling, the second shows no `edge_url` with it, and
 `cloudfield servers --edge https://edge-new.example.com` prints your
 servers. That is the edge's list, not a connection to a server; the `link`
 lines of step 2 are. Then delete `config.json.before-move`.
@@ -474,10 +515,17 @@ address. A join link names its edge, so the phone moves with one:
 
 1. Once the server has moved, an admin makes a join link for the GitHub
    account the phone is signed in with: `cloudfield invite --github
-   <login>` ([Links](#links)).
-2. On the phone, paste the link into the app's field `Have an invitation
-   or claim link?` or `Claim or invite link`. The app signs in at the edge
-   the link names; use the same GitHub account, then select **Join**.
+   <login> --workspace <workspace>` ([Links](#links)). Only a super admin
+   may leave `--workspace` out; another admin is refused with `an admin's
+   invitation names at least one workspace they own (--workspace
+   <workspace>)`.
+2. On the phone, open the link in the browser. Its page at the new
+   address opens the app, by itself or with **Open in Cloudfield**. The
+   app signs in at the edge the link names; use the same GitHub account,
+   then select **Join**. The app's own fields for a link, `Have an
+   invitation or claim link?` while signed out and `Claim or invite link`
+   while signed in, are not there when its only sign-in is at a retired
+   address.
 3. The server finds the member by that GitHub account before it looks at
    the invitation, so the phone joins as the member it already is. If the
    app shows `Waiting for an admin of <server> to approve this device`, an
@@ -741,7 +789,11 @@ Entries are comma-separated. Every check is in
    used since or not. Read who is left with `aether-edge retiring` at the
    start, tell the owners it lists, and read it again right before step 4.
    A run with neither option, or of an image from before them, stops the
-   recording: what it issues has no origin and is deleted at step 4 too.
+   recording: what it issues has no origin. Step 4 deletes it too, unless
+   it was used once at a pair that stays after recording began again: any
+   request with the token records it there, a `cloudfield servers`
+   included. A connector request records only its server and relay
+   origin, and gives no token an origin.
 3. If the old pair is the first pair (`--signin-origin`, `--relay-origin`,
    `--github-client-id`), swap: make the new pair the first, move the old
    one into `--origin-pairs`, keep `--retiring-pairs`, restart. The first
@@ -806,7 +858,7 @@ accounts with a session  <n>    <n>     <n>      <n>
 ```
 
 Each server row is a claimed server whose last recorded enrollment or claim
-was at this relay origin; its owner login is whom to tell, and is empty
+was at this relay origin; its owner login is whom to tell, and is `-`
 for a server with no owner. With none, the table is the line `no server
 last enrolled or claimed here`. The counts are of the tokens and sessions
 that exist now, by last use; the session rows count accounts, and pending
@@ -967,43 +1019,58 @@ to an image that has both options (`aether-edge serve -h` lists
 (`aether-edge schema --json`) is not that check.
 
 - An image without the options ignores both variables. It records
-  nothing and issues device tokens and sessions with no recorded origin,
-  which the next retired start deletes on every pair. It sends servers no
-  notice, so a server cannot move itself off a retired address, and it
-  answers a retired host `421`, not `410`.
+  nothing and issues device tokens and sessions with no recorded origin.
+  The next retired start deletes those on every pair, except one used in
+  between at a pair that stays while an image with the options recorded.
+  It sends servers no notice, so a server cannot move itself off a
+  retired address, and it answers a retired host `421`, not `410`, except
+  on `/healthz`.
 - A backup from before step 1 has no recorded origin on any row and no
   record that the edge recorded, so an edge with `--retired-pairs` refuses
   to start on it while it holds a sign-in, with the refusal under
   [Order](#order).
 - On a backup taken while the pair was retiring the edge starts and
-  deletes the same sign-ins again. That restore also brings back every
-  device token revoked since and loses the accounts, sign-ins and claims
+  deletes the same sign-ins again. A restore brings back only the rows
+  the backup holds: of the device tokens revoked since, those recorded at
+  a pair that stays are valid again, and the start deletes the others
+  with the retired pair's. It loses the accounts, sign-ins and claims
   made since ([edge.md](edge.md#backup-and-recovery)).
-- An image without the options accepts the restored tokens at every
+- An image without the options accepts every restored token at every
   served pair.
 
 Take a backup right before step 4 and another once its checks pass.
 `aether-edge backup` copies `edge.db` only; `--with-key` also copies the
-edge key, a separate file the edge does not start without. Check the
-offline copy of the key by its fingerprint (`ssh-keygen -lf <copy>`
-against `.fingerprint` of `GET /v1/edge`), not by its presence.
-
-With `aether-edge-update`, hold the updater's lock for the whole of each
-manual change, from before the edit until after the checks. Every run
-takes that lock first and exits when another process holds it. In a root
-shell:
+edge key, a separate file the edge does not start without. Only the
+private key restores an edge. Check the offline copy by the fingerprint
+derived from it, not by its presence:
 
 ```sh
-exec 9>/var/lib/aether-edge-update/lock
-flock -n 9 && echo locked
+ssh-keygen -y -f <copy> | ssh-keygen -lf -
 ```
 
-Without `locked`, a run is in progress: wait for it. Leave the shell to
-release the lock. Stopping the timer is not enough: it does not exclude a
-run started by hand or by `aether-edge-update-recover.service`. From step
-1 on, never run `aether-edge-update --rollback`, with or without
-`--restore-backup`, while `/var/lib/aether-edge-update/previous` names a
-release without the options. Set `AETHER_EDGE_UPDATE_RELAY_URL` to the new
+It prints the `.fingerprint` of `GET /v1/edge` and no key material, and
+fails on a copy of the public key alone, for which `ssh-keygen -lf
+<copy>` would print the same fingerprint.
+
+With `aether-edge-update`, turn the updater off for the time of each
+manual change, with the inverse of the command that
+[edge.md](edge.md#installing-the-updater) turns it on with, and run no
+`aether-edge-update` command by hand in that time:
+
+```sh
+systemctl is-active aether-edge-update.service aether-edge-update-recover.service
+sudo systemctl disable --now aether-edge-update.timer aether-edge-update-recover.service
+```
+
+Run the first line again after the second. `activating` or
+`deactivating` is a run in progress: let it end. Never stop
+`aether-edge-update.service`, which rolls back a switch it interrupts.
+The updater checks a release's promotion, signature and build order, not
+which commits it has, so before it is on again (`sudo systemctl enable
+--now` with the same two units), and before any `aether-edge-update
+--rollback`, check that the release it would run has both options.
+`--rollback` returns to the release in the `previous` file of the
+updater's state directory. Set `AETHER_EDGE_UPDATE_RELAY_URL` to the new
 relay origin before step 4, since the updater's checks get `410` at a
 retired one ([edge.md](edge.md#automatic-updates)).
 
