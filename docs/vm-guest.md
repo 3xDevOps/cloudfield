@@ -549,6 +549,27 @@ holds for it. A restore starts Cloud Hypervisor with `--restore` in its
 default mode, which writes every saved page into the guest's memory before
 the VM can be resumed.
 
+The page cache the snapshot writes is charged to the VM's unit. Held to
+the unit's `MemoryMax`, the save of a VM whose session filled it reached
+the limit, and the kernel could then kill Cloud Hypervisor (`Memory cgroup
+out of memory: Killed process ... (cloud-hyperviso)`), which lost the
+session's memory. So the save writes `max` to the unit's `memory.max` once
+the guest is paused and can take no more memory
+(`TestKVMSaveOfAFullVMNeverReachesTheUnitsMemoryLimit`).
+
+A saved VM's unit ends, and its next one starts with `MemoryMax`. A guest
+that stays paused in its unit, after a save that failed or one a stopping
+server cut short, keeps `max` until it is resumed. The resume writes the
+limit from the VM's record once Cloud Hypervisor has answered, which it
+does only when it is done writing a snapshot, and once the files of a
+snapshot that saved nothing are removed: resumed with the limit under
+their page cache, the monitor was killed the same way
+(`TestKVMAResumeAfterASnapshotGivesTheUnitItsMemoryLimitBack`).
+A snapshot is not covered while systemd applies the unit's settings again,
+which writes `MemoryMax` back from its own state: `systemctl daemon-reload`
+does that, and so does a start or stop of another unit in the slice that
+changes the slice's enabled controllers.
+
 Cloud Hypervisor v54.1 can load that memory on demand instead
 (`memory_restore_mode=ondemand`): it resumes at once and copies each page in
 through `userfaultfd` on its first use. That mode is not used. It takes a

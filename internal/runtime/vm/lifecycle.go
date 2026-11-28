@@ -100,7 +100,7 @@ func (e *engine) stop(ctx context.Context, key string, grace time.Duration) erro
 	_ = e.thaw(key)
 	api := newCHAPI(e.path(key, apiSocket))
 	if state, stateErr := api.state(ctx); stateErr == nil && state == "Paused" {
-		if err = api.resume(ctx); err != nil {
+		if err = e.resumeGuest(ctx, rec); err != nil {
 			return fmt.Errorf("vm runtime: resume before stop: %w", err)
 		}
 	}
@@ -531,7 +531,7 @@ func (e *engine) resume(ctx context.Context, key string) error {
 	}
 	// A frozen VM can also be halted, as after a failed save.
 	if !rec.Frozen || e.halted(ctx, key) {
-		err = newCHAPI(e.path(key, apiSocket)).resume(ctx)
+		err = e.resumeGuest(ctx, rec)
 	}
 	if err == nil && rec.Frozen {
 		err = e.thawSession(ctx, rec)
