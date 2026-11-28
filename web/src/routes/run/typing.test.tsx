@@ -1,10 +1,10 @@
-import { act, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { api } from '@/lib/api'
-import { TypingIndicator, useTypingSignal } from '@/routes/run/typing'
+import { TypingIndicator, useTypingSignal, useWakeOnTyping } from '@/routes/run/typing'
 import { useStore } from '@/store'
 import { applyEvent } from '@/store/sync'
 import { typingThrottleMs, typingTtlMs } from '@/store/typing'
-import { alice, bob, serverInfo, vera } from '@/test/fixtures'
+import { alice, bob, run, runRecords, serverInfo, vera } from '@/test/fixtures'
 
 vi.mock('@/lib/api', async () => {
   const { fakeApi } = await import('@/test/fixtures')
@@ -131,5 +131,48 @@ describe('useTypingSignal', () => {
     expect(api.presenceTyping).toHaveBeenLastCalledWith(runID)
     view.unmount()
     expect(api.presenceTyping).toHaveBeenLastCalledWith(runID, true)
+  })
+})
+
+describe('useWakeOnTyping', () => {
+  const asleep = (fields: Parameters<typeof run>[0] = {}) =>
+    runRecords(run({ id: runID, status: 'needs-attention', asleep_since: '2026-11-11T09:00:00Z', ...fields }))[runID]!
+
+  function Field({ record, maySteer = true }: { record: ReturnType<typeof asleep>; maySteer?: boolean }) {
+    const wake = useWakeOnTyping(record, maySteer)
+    return <input aria-label="Message" onChange={(event) => wake(event.target.value)} />
+  }
+  const type = (value: string) => fireEvent.change(screen.getByLabelText('Message'), { target: { value } })
+
+  beforeEach(() => void vi.mocked(api.runWake).mockClear())
+
+  it('wakes a sleeping session once, at the first keystroke', () => {
+    render(<Field record={asleep()} />)
+    expect(api.runWake).not.toHaveBeenCalled()
+    type('h')
+    type('he')
+    expect(api.runWake).toHaveBeenCalledTimes(1)
+    expect(api.runWake).toHaveBeenCalledWith(runID)
+  })
+
+  it('wakes the session again on its next sleep, and not while it wakes', () => {
+    const view = render(<Field record={asleep()} />)
+    type('h')
+    view.rerender(<Field record={asleep({ asleep_since: '2026-11-11T10:00:00Z', waking: true })} />)
+    type('he')
+    expect(api.runWake).toHaveBeenCalledTimes(1)
+    view.rerender(<Field record={asleep({ asleep_since: '2026-11-11T10:00:00Z' })} />)
+    type('hel')
+    expect(api.runWake).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ['an awake session', asleep({ asleep_since: undefined }), true],
+    ['a closed session', asleep({ status: 'merged' }), true],
+    ['a member who cannot steer', asleep(), false],
+  ])('leaves %s alone', (_, record, maySteer) => {
+    render(<Field record={record} maySteer={maySteer} />)
+    type('h')
+    expect(api.runWake).not.toHaveBeenCalled()
   })
 })

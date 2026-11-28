@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -18,6 +20,37 @@ type CapacityStore interface {
 	CapacityCounts(ctx context.Context, since time.Time) ([]domain.CapacityCount, error)
 	// PruneCapacityCounts deletes the counters of the hours before before.
 	PruneCapacityCounts(ctx context.Context, before time.Time) error
+	// RecordVMCounts keeps the server's latest count of its session VMs,
+	// for cloudfield-server status to read without the server.
+	RecordVMCounts(ctx context.Context, c domain.VMCounts, at time.Time) error
+	// VMCounts returns the latest count and when it was taken, the zero
+	// time when none was.
+	VMCounts(ctx context.Context) (domain.VMCounts, time.Time, error)
+}
+
+func (d *DB) RecordVMCounts(ctx context.Context, c domain.VMCounts, at time.Time) error {
+	_, err := d.db.ExecContext(ctx, `
+INSERT INTO capacity_vms (id, at, awake, frozen, paused, saved, stopped, closed) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
+ON CONFLICT(id) DO UPDATE SET at = ?1, awake = ?2, frozen = ?3, paused = ?4, saved = ?5, stopped = ?6, closed = ?7`,
+		at.UTC().UnixNano(), c.Awake, c.Frozen, c.Paused, c.Saved, c.Stopped, c.Closed)
+	if err != nil {
+		return fmt.Errorf("store: record session VM counts: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) VMCounts(ctx context.Context) (domain.VMCounts, time.Time, error) {
+	var c domain.VMCounts
+	var at int64
+	err := d.db.QueryRowContext(ctx, `SELECT at, awake, frozen, paused, saved, stopped, closed FROM capacity_vms WHERE id = 1`).
+		Scan(&at, &c.Awake, &c.Frozen, &c.Paused, &c.Saved, &c.Stopped, &c.Closed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return c, time.Time{}, nil
+	}
+	if err != nil {
+		return c, time.Time{}, fmt.Errorf("store: session VM counts: %w", err)
+	}
+	return c, time.Unix(0, at).UTC(), nil
 }
 
 func (d *DB) CountCapacityEvent(ctx context.Context, e domain.CapacityEvent) error {

@@ -494,6 +494,7 @@ var noReplay = map[string]bool{
 	protocol.MethodAgentLoginRemove:    true,
 	protocol.MethodAgentLoginOrder:     true,
 	protocol.MethodAgentLoginAutomatic: true,
+	protocol.MethodAgentLoginShare:     true,
 
 	protocol.MethodWorkspaceAdd:             true,
 	protocol.MethodWorkspaceDelete:          true,

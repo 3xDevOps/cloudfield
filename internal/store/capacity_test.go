@@ -53,3 +53,22 @@ func TestCapacityEventsAddUpPerHourAndCounter(t *testing.T) {
 		t.Fatalf("counts after pruning the hours before the last = %+v, %v; want only the last hour's", got, err)
 	}
 }
+
+func TestVMCountsKeepTheLatest(t *testing.T) {
+	db := openTestDB(t)
+	ctx := t.Context()
+	if _, at, err := db.VMCounts(ctx); err != nil || !at.IsZero() {
+		t.Fatalf("counts before any = %v, %v; want none", at, err)
+	}
+	first, second := time.Date(2026, 11, 27, 14, 0, 0, 0, time.UTC), time.Date(2026, 11, 27, 15, 0, 0, 0, time.UTC)
+	if err := db.RecordVMCounts(ctx, domain.VMCounts{Awake: 9}, first); err != nil {
+		t.Fatal(err)
+	}
+	want := domain.VMCounts{Awake: 1, Frozen: 2, Paused: 3, Saved: 4, Stopped: 5, Closed: 6}
+	if err := db.RecordVMCounts(ctx, want, second); err != nil {
+		t.Fatal(err)
+	}
+	if got, at, err := db.VMCounts(ctx); err != nil || got != want || !at.Equal(second) {
+		t.Fatalf("counts = %+v at %v, %v; want the latest", got, at, err)
+	}
+}

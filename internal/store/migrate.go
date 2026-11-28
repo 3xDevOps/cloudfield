@@ -2723,6 +2723,19 @@ CREATE TABLE capacity_counts (
 	PRIMARY KEY (hour, kind, op, cause)
 ) WITHOUT ROWID;
 `,
+	// v119: the server's latest count of its session VMs, one row.
+	`
+CREATE TABLE capacity_vms (
+	id     INTEGER PRIMARY KEY CHECK (id = 1),
+	at     INTEGER NOT NULL,
+	awake  INTEGER NOT NULL,
+	frozen INTEGER NOT NULL,
+	paused  INTEGER NOT NULL,
+	saved   INTEGER NOT NULL,
+	stopped INTEGER NOT NULL,
+	closed  INTEGER NOT NULL
+);
+`,
 }
 
 // existingDatabaseMigrations run after their version's migration, in the

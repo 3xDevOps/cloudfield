@@ -140,7 +140,7 @@ The volumes:
 | `share` | The virtio-fs share tagged `aether`, on `/run/aether-guest/share`. Binds are `nosuid,nodev`, and `virtiofsd` drops `CAP_MKNOD` and `CAP_SETFCAP`, so the guest cannot land a device node or a file-capability binary on the host. Only checkouts left on the server's disk use it. | A path in the share |
 | `home` | The [file service](#the-file-service), on `/run/aether-guest/home`. Binds are `nosuid,nodev`. | The index of a shared host file |
 | `data` | The disk with serial `data`, on `/run/aether-guest/data`. A missing source directory is created with the mode and owner its target has in the image, so `/tmp` keeps its sticky bit. | A path on the disk |
-| `cache` | The disk with serial `cache`, on `/run/aether-guest/cache`: the session's copy-on-write layer over the member's newest tool caches, or an empty disk. Its root is mode `1777` and has no `lost+found`. | `.` |
+| `cache` | The disk with serial `cache`, on `/run/aether-guest/cache`: the session's copy-on-write layer over the member's newest tool caches, or an empty disk. Its root is mode `1777` and has no `lost+found`. Every 10 minutes, while the disk is more than half full, the helper deletes the least recently used entries of `go-build` whose use time is more than 2 hours old, until the disk is back to half. Go moves an entry's use time at most once an hour, so an entry used in the last hour stays. Deleting an entry that came with the member's caches frees nothing on the server. A wake sets the VM's clock forward, so a go command that runs across a save of more than an hour can lose entries it still reads. | `.` |
 | `state` | The disk with serial `state`, on `/run/aether-guest/state`: the session's own agent databases, which outlive the VM. A missing source directory is created as on `data`. | A path on the disk |
 | `helper` | The helper's own executable, the server binary the VM booted with, bound read-only. | `.` |
 
@@ -566,13 +566,13 @@ which writes `MemoryMax` back from its own state: `systemctl daemon-reload`
 does that, and so does a start or stop of another unit in the slice that
 changes the slice's enabled controllers.
 
-Cloud Hypervisor v54.1 can load that memory on demand instead
+Cloud Hypervisor can load that memory on demand instead
 (`memory_restore_mode=ondemand`): it resumes at once and copies each page in
-through `userfaultfd` on its first use. That mode is not used. It takes a
-page that is already in the guest's memory as loaded
+through `userfaultfd` on its first use. That mode is not used. Through v55.0
+it takes a page that is already in the guest's memory as loaded
 (`UFFDIO_COPY` answers `EEXIST`), so a page anything read before the
 `userfaultfd` was registered keeps the zeros of that read instead of its
-saved bytes. On a hosted runner a host process reads each new process's
+saved bytes. Measured with v54.1: on a hosted runner a host process reads each new process's
 memory through `/proc/<pid>/mem`: of 31 restores of one saved 5 GiB VM
 whose memory file was read from disk, 12 came back with 11 to 419 saved
 pages zeroed at the start of the RAM past 4 GiB, and all 7 such VMs that

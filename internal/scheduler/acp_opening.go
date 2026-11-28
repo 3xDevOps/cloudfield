@@ -112,11 +112,18 @@ func (d *acpDriver) hold(ctx context.Context, run *domain.Run, prompt domain.Age
 	}
 	ctx = context.WithoutCancel(ctx)
 	o.held = append(o.held, func() {
+		d.s.mu.Lock()
+		entry := d.s.runs[run.ID]
+		moving := entry != nil && entry.moving
+		d.s.mu.Unlock()
 		sess, err, _ := d.liveNow(run.ID)
 		var outcome string
-		if err == nil {
+		switch {
+		case moving:
+			err = d.s.movingError(ctx, run.ID)
+		case err == nil:
 			outcome, err = d.prompt(ctx, sess, run, prompt, steer, delivered)
-		} else {
+		default:
 			err = fmt.Errorf("%w: %w", ptyhost.ErrNoSession, err)
 		}
 		// A prompt queued behind a turn reports through prompt's callback.

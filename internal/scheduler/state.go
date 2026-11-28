@@ -442,7 +442,9 @@ type sidecar struct {
 	LoginID domain.LoginID `json:"login_id,omitempty"`
 	// VerifiedLogins are the account owners whose own login the runtime
 	// confirmed in a container of this run.
-	VerifiedLogins      []domain.Account         `json:"verified_logins,omitempty"`
+	VerifiedLogins []domain.Account `json:"verified_logins,omitempty"`
+	// Restricted are the accounts the run left on a restriction message.
+	Restricted          []domain.MemberID        `json:"restricted,omitempty"`
 	Reporter            harness.Reporter         `json:"reporter,omitempty"`
 	Egress              bool                     `json:"egress,omitempty"`
 	AgentState          agentstatus.State        `json:"agent_state,omitempty"`
@@ -545,6 +547,7 @@ func (e *supervised) sidecar() sidecar {
 		LoginMember:         string(e.loginMember),
 		LoginID:             e.loginID,
 		VerifiedLogins:      e.verifiedLogins,
+		Restricted:          e.restricted,
 		Reporter:            e.reporter,
 		Egress:              e.egress,
 		AgentState:          e.agentReport.State,

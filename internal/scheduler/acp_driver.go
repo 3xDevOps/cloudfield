@@ -130,35 +130,6 @@ func (d *acpDriver) lockOp(run domain.RunID) func() {
 	}
 }
 
-func (d *acpDriver) continuationOwed(entry *supervised) bool {
-	d.s.mu.Lock()
-	defer d.s.mu.Unlock()
-	return entry.accountSwap != nil && entry.accountSwap.Continuation != ""
-}
-
-func (d *acpDriver) sendContinuation(entry *supervised) {
-	d.s.mu.Lock()
-	swap := entry.accountSwap
-	d.s.mu.Unlock()
-	if swap == nil || swap.Continuation == "" {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), acpConnectTimeout)
-	defer cancel()
-	sess, err := d.live(ctx, entry.runID)
-	if err == nil {
-		_, err = sess.Prompt(ctx, []acp.ContentBlock{acp.TextBlock(swap.Continuation)}, false, nil)
-	}
-	d.s.clearAccountSwap(entry, swap)
-	switch {
-	case err == nil || usageLimited(err):
-	case d.oneShot(entry):
-		d.endOneShot(entry, false, agentstatus.Report{State: agentstatus.Idle, Reason: "send the continuation to the agent: " + err.Error()})
-	default:
-		slog.Warn("scheduler: send the continuation to the agent", "run", entry.runID, "error", err)
-	}
-}
-
 // usageLimited reports a prompt refused on the account's usage limit, which
 // the session's turn-end callback hands to a move: ending a background run
 // for it here would race that move.
@@ -186,12 +157,25 @@ func (d *acpDriver) Resume(ctx context.Context, entry *supervised, att runtime.A
 		}
 		return d.openRestored(ctx, entry, how)
 	}
-	if !d.continuationOwed(entry) {
+	d.s.mu.Lock()
+	swap := entry.accountSwap
+	sending := swap != nil && swap.Sending
+	owed := swap != nil && swap.Continuation != "" && !sending
+	d.s.mu.Unlock()
+	switch {
+	case sending:
+		// A previous server process may have sent the continuation, which
+		// the agent may be working on: its conversation is taken up, never
+		// replaced, and nothing is sent.
+		d.connect(ctx, entry, openSent)
+		d.s.clearAccountSwap(entry, swap)
+		d.wakeIdle(entry.runID)
+	case owed:
+		d.connect(ctx, entry, openContinue)
+		d.sendContinuation(entry, swap)
+	default:
 		d.connect(ctx, entry, openRestore)
-		return nil
 	}
-	d.connect(ctx, entry, openContinue)
-	d.sendContinuation(entry)
 	return nil
 }
 
@@ -275,6 +259,9 @@ func (d *acpDriver) prompt(ctx context.Context, sess *acphost.Session, run *doma
 		// No turn took the prompt; one awaiting acceptance settles through
 		// the callback.
 		settle(err)
+	}
+	if err == nil {
+		d.continued(sess, run.ID)
 	}
 	if errors.Is(err, acphost.ErrClosed) {
 		err = fmt.Errorf("%w: %w", ptyhost.ErrSessionEnded, err)
@@ -422,6 +409,10 @@ const (
 	// saved, and fails rather than start a conversation the member did not
 	// have.
 	openWake
+	// openSent is openWake after a restart that found a move's continuation
+	// being sent, which the agent may be working on: a Background run's task
+	// is not started again either.
+	openSent
 )
 
 var errKeeperUnreached = errors.New("reattach to the agent's keeper")
@@ -509,10 +500,11 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 	if !ok {
 		return fmt.Errorf("%w: the runtime cannot run a managed exec", runtime.ErrExecUnavailable)
 	}
-	// A restart during a launch's open leaves no session to restore: the
-	// run's first one is still owed, with its mode, model, effort and task,
-	// whatever a keeper of the unfinished open holds.
-	fresh := how == openNew || how == openRestore && run.HarnessSessionID == "" && cachedSession == ""
+	// A restart during a launch's open, or a move after one that failed,
+	// leaves no session to restore: the run's first one is still owed, with
+	// its mode, model, effort and task, whatever a keeper of the unfinished
+	// open holds.
+	fresh := how == openNew || (how == openRestore || how == openContinue) && run.HarnessSessionID == "" && cachedSession == ""
 	sessionID, mode := "", profile.ACPMode
 	if !fresh {
 		sessionID = run.HarnessSessionID
@@ -531,7 +523,7 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 	var exec, bridge runtime.ManagedExec
 	var keeper *acpkeeper.Client
 	var adopt *acphost.Adoption
-	if (how == openRestore || how == openWake) && kept && !fresh {
+	if (how == openRestore || how == openWake || how == openSent) && kept && !fresh {
 		exec, keeper, bridge, err = d.reattach(ctx, entry, managed, cid)
 		if err == nil {
 			state := keeper.State()
@@ -611,7 +603,7 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 		Cwd:            d.s.cfg.WorktreeMount,
 		MCPServers:     mcp,
 		SessionID:      sessionID,
-		RequireRestore: how == openSwitch || how == openContinue || how == openWake,
+		RequireRestore: how == openSwitch || how == openContinue || how == openWake || how == openSent,
 		Logger:         slog.Default().With("run", runID),
 		AutoAllow:      oneShot,
 		SystemPrompt:   systemPrompt,
@@ -789,7 +781,11 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 		d.endOneShot(entry, false, agentstatus.Report{State: agentstatus.Idle, Reason: "model not set: " + modelErr.Error()})
 	case oneShot && effortErr != nil:
 		d.endOneShot(entry, false, agentstatus.Report{State: agentstatus.Idle, Reason: "effort not set: " + effortErr.Error()})
-	case how == openContinue:
+	case how == openContinue && !fresh:
+	case oneShot && how == openSent && sess.State().TurnInFlight:
+		// The continuation's turn runs on; its end ends the run.
+	case oneShot && how == openSent:
+		d.endSent(ctx, entry, sess, run)
 	case oneShot && adopt != nil && sess.State().TurnInFlight:
 		// The adopted turn runs on; its end ends the run.
 	case oneShot:
@@ -802,6 +798,18 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 		// The restore's idle report can run before setRun, when the run
 		// does not look idle yet.
 		d.wakeIdle(runID)
+	}
+	if how == openContinue && fresh {
+		// The task, sent instead, leaves nothing to continue.
+		d.s.mu.Lock()
+		swap := entry.accountSwap
+		d.s.mu.Unlock()
+		d.s.clearAccountSwap(entry, swap)
+	}
+	if how != openContinue && sess.SessionID() == sessionID {
+		if swap := d.owedContinuation(entry); swap != nil {
+			d.s.goMove(func() { d.sendContinuation(entry, swap) })
+		}
 	}
 	return nil
 }

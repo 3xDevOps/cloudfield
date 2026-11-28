@@ -26,6 +26,7 @@ func init() {
 	registerMethod(protocol.MethodAgentLoginRemove, (*Server).agentLoginRemove)
 	registerMethod(protocol.MethodAgentLoginOrder, (*Server).agentLoginOrder)
 	registerMethod(protocol.MethodAgentLoginAutomatic, (*Server).agentLoginAutomatic)
+	registerMethod(protocol.MethodAgentLoginShare, (*Server).agentLoginShare)
 }
 
 // LoginSignIns runs the sign-ins of new logins, each in a container of its
@@ -43,6 +44,9 @@ type LoginSignIns interface {
 	// LoginInUse lists the sessions on an added login, moving to it, or
 	// queued to start on it, each with the member who owns it.
 	LoginInUse(ctx context.Context, account domain.Account) (map[domain.RunID]domain.MemberID, error)
+	// RevokeLogin moves teammates' running sessions off a login its owner
+	// turned off for shares.
+	RevokeLogin(login domain.Account)
 	// RemoveLoginVolume removes the volume the mounts of a login's
 	// directory come from.
 	RemoveLoginVolume(ctx context.Context, member domain.MemberID, agent string, id domain.LoginID) error
@@ -240,7 +244,7 @@ func (s *Server) agentLoginRemove(ctx context.Context, member domain.MemberID, r
 			slices.Sort(own)
 			var parts []string
 			if len(own) > 0 {
-				parts = append(parts, "your sessions "+strings.Join(own, ", ")+" (end them)")
+				parts = append(parts, "your sessions "+strings.Join(own, ", ")+" (end them, or free the sandbox of one that has ended)")
 			}
 			if teammates > 0 {
 				parts = append(parts, fmt.Sprintf("%d of your teammates' sessions, which hold it until they end and their containers go (revoking the share you gave a teammate, with cloudfield account revoke <member-id>, moves their running sessions off it)", teammates))
@@ -269,6 +273,7 @@ func (s *Server) agentLoginRemove(ctx context.Context, member domain.MemberID, r
 	if err := s.cfg.Store.DeleteAgentLogin(ctx, member, p.Agent, login.ID); err != nil {
 		return nil, rpcError(err)
 	}
+	fallback.ForgetRunOuts(member, p.Agent)
 	noteChange(ctx)
 	return struct{}{}, nil
 }
@@ -304,6 +309,9 @@ func (s *Server) agentLoginAutomatic(ctx context.Context, member domain.MemberID
 	if perr != nil {
 		return nil, perr
 	}
+	if p.Automatic == nil {
+		return nil, invalidParams("automatic is required: true or false")
+	}
 	s.authorizationMu.Lock()
 	defer s.authorizationMu.Unlock()
 	logins, perr := s.agentLoginCaller(ctx, member, p.Agent)
@@ -313,7 +321,7 @@ func (s *Server) agentLoginAutomatic(ctx context.Context, member domain.MemberID
 	if len(logins) == 0 {
 		return nil, invalidParams("you have only the default login; add a login first")
 	}
-	if err := s.cfg.Store.SetAgentLoginAutomatic(ctx, member, p.Agent, domain.LoginID(p.LoginID), p.Automatic); err != nil {
+	if err := s.cfg.Store.SetAgentLoginAutomatic(ctx, member, p.Agent, domain.LoginID(p.LoginID), *p.Automatic); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, &protocol.Error{Code: protocol.CodeNotFound, Message: fmt.Sprintf("you have no login %q", p.LoginID)}
 		}
@@ -417,4 +425,38 @@ func (s *Server) mayLaunch(ctx context.Context, member domain.MemberID, method s
 		return &protocol.Error{Code: protocol.CodeDenied, Message: method + ": " + err.Error()}
 	}
 	return nil
+}
+
+func (s *Server) agentLoginShare(ctx context.Context, member domain.MemberID, raw json.RawMessage) (any, *protocol.Error) {
+	p, perr := decodeParams[protocol.AgentLoginShareParams](raw)
+	if perr != nil {
+		return nil, perr
+	}
+	if p.Shared == nil {
+		return nil, invalidParams("shared is required: true or false")
+	}
+	s.authorizationMu.Lock()
+	defer s.authorizationMu.Unlock()
+	logins, perr := s.agentLoginCaller(ctx, member, p.Agent)
+	if perr != nil {
+		return nil, perr
+	}
+	if len(logins) == 0 {
+		return nil, invalidParams("you have only the default login; add a login first")
+	}
+	if err := s.cfg.Store.SetAgentLoginShared(ctx, member, p.Agent, domain.LoginID(p.LoginID), *p.Shared); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, &protocol.Error{Code: protocol.CodeNotFound, Message: fmt.Sprintf("you have no login %q", p.LoginID)}
+		}
+		return nil, rpcError(err)
+	}
+	noteChange(ctx)
+	if !*p.Shared && s.cfg.LoginSignIns != nil {
+		login := domain.Account{Member: member}
+		if id := domain.LoginID(p.LoginID); id.Added() {
+			login.Login = id
+		}
+		s.cfg.LoginSignIns.RevokeLogin(login)
+	}
+	return struct{}{}, nil
 }

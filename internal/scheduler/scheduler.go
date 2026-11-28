@@ -420,9 +420,14 @@ type supervised struct {
 	// loginID is loginMember's added login the container mounts; empty for
 	// their default login.
 	loginID domain.LoginID
+	// account is the run's account and login the container was planned on.
+	account domain.Account
 	// verifiedLogins are the account owners whose own login a container of
 	// this run was started with, as the runtime confirmed at start.
 	verifiedLogins []domain.Account
+	// restricted are the accounts this run left on a restriction message,
+	// whose logins it does not move to again.
+	restricted []domain.MemberID
 	// reporter is recovered from the sidecar, since only the launch or mode
 	// switch knew which command the container runs.
 	reporter harness.Reporter
