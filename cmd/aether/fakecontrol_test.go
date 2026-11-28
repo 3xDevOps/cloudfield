@@ -18,12 +18,14 @@ import (
 )
 
 // fakeReply is one served method: what it answers and the params of the last
-// request it received.
+// request it received. byParams, when set, answers each request from its
+// params instead of result.
 type fakeReply struct {
-	mu     sync.Mutex
-	result any
-	err    *protocol.Error
-	got    json.RawMessage
+	mu       sync.Mutex
+	result   any
+	byParams func(json.RawMessage) any
+	err      *protocol.Error
+	got      json.RawMessage
 }
 
 func (r *fakeReply) answer(result any) {
@@ -70,7 +72,11 @@ func serveFakeControl(server io.ReadWriteCloser, replies map[string]*fakeReply) 
 			reply.got = append(json.RawMessage(nil), req.Params...)
 			resp.Error = reply.err
 			if reply.err == nil {
-				resp.Result, _ = json.Marshal(reply.result)
+				result := reply.result
+				if reply.byParams != nil {
+					result = reply.byParams(req.Params)
+				}
+				resp.Result, _ = json.Marshal(result)
 			}
 			reply.mu.Unlock()
 		}

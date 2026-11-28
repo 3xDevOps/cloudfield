@@ -281,23 +281,11 @@ func Parse(path string, body []byte) (Config, error) {
 }
 
 // LinkedEdges are the edge URLs the saved links name, the default link's
-// first, none when nothing is linked. Unlike Load it takes a config with
-// named links only.
+// first, none when nothing is linked.
 func LinkedEdges() ([]string, error) {
-	path, err := Path()
+	cfg, err := Saved()
 	if err != nil {
 		return nil, err
-	}
-	body, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("cli: read config: %w", err)
-	}
-	var cfg Config
-	if err := json.Unmarshal(body, &cfg); err != nil {
-		return nil, fmt.Errorf("cli: parse config: %w", err)
 	}
 	var edges []string
 	if cfg.EdgeURL != "" {
@@ -309,6 +297,27 @@ func LinkedEdges() ([]string, error) {
 		}
 	}
 	return edges, nil
+}
+
+// Saved is the saved config, the zero Config when there is none. Unlike
+// Load it takes a config with named links only.
+func Saved() (Config, error) {
+	path, err := Path()
+	if err != nil {
+		return Config{}, err
+	}
+	body, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return Config{}, nil
+	}
+	if err != nil {
+		return Config{}, fmt.Errorf("cli: read config: %w", err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(body, &cfg); err != nil {
+		return Config{}, fmt.Errorf("cli: parse config: %w", err)
+	}
+	return cfg, nil
 }
 
 // Save writes cfg to the linked-server config path (directory 0700, file 0600).

@@ -353,8 +353,9 @@ func (s *Scheduler) deleteDevelopment(ctx context.Context, id domain.RunID) erro
 // recoverDevelopment never fails startup for one session: a session whose
 // terminals or browser companion cannot be recovered is logged, and a
 // companion that cannot release held input is kept unavailable until the
-// session's browser is reset. Sessions recover concurrently, so hung
-// companions do not add up past the update trial's deadline.
+// session's browser is reset. Each step is bounded and sessions recover
+// browserRecoveryConcurrency at a time, so a session that does not answer
+// holds a slot for at most the bounds of its two steps.
 func (s *Scheduler) recoverDevelopment(ctx context.Context) error {
 	type recoveredDevelopment struct {
 		runID       domain.RunID
@@ -379,8 +380,16 @@ func (s *Scheduler) recoverDevelopment(ctx context.Context) error {
 				return
 			}
 			defer s.needGuest(entry.containerID)()
-			if err := s.RecoverDevelopmentTerminals(ctx, entry.runID); err != nil && ctx.Err() == nil {
+			terminalsCtx, cancel := context.WithTimeout(ctx, recoveryStepTimeout)
+			err := s.RecoverDevelopmentTerminals(terminalsCtx, entry.runID)
+			cutShort := terminalsCtx.Err() != nil
+			cancel()
+			switch {
+			case ctx.Err() != nil:
+			case err != nil:
 				slog.Warn("scheduler: recovery: session terminals unavailable", "run", entry.runID, "error", err)
+			case cutShort:
+				slog.Warn("scheduler: recovery: session terminals not taken up in time", "run", entry.runID, "waited", recoveryStepTimeout)
 			}
 			if err := s.recoverDevelopmentBrowser(ctx, entry.runID, entry.containerID, entry.freeze); err != nil && ctx.Err() == nil {
 				slog.Warn("scheduler: recovery: session browser", "run", entry.runID, "error", err)
@@ -391,17 +400,14 @@ func (s *Scheduler) recoverDevelopment(ctx context.Context) error {
 	return ctx.Err()
 }
 
-const (
-	browserRecoveryTimeout     = 30 * time.Second
-	browserRecoveryConcurrency = 8
-)
+const browserRecoveryConcurrency = 8
 
 func (s *Scheduler) recoverDevelopmentBrowser(parent context.Context, id domain.RunID, cid containerruntime.ID, freeze bool) error {
 	d := s.developmentState()
 	if d.manager == nil || cid == "" {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(parent, browserRecoveryTimeout)
+	ctx, cancel := context.WithTimeout(parent, recoveryStepTimeout)
 	defer cancel()
 	lock := d.lock(id)
 	lock.Lock()

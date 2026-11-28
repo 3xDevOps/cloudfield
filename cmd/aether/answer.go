@@ -108,10 +108,10 @@ func needLines(it protocol.AttentionItem) []string {
 			add("it offers no allow once or reject once option, and aether answer never answers for always; decide it in the Cloudfield dashboard")
 		default:
 			if it.Request.URL != "" {
-				add("open %s, then:", it.Request.URL)
+				add("open %s, then:", printable(it.Request.URL))
 			}
 			for _, o := range options {
-				add("aether answer %s %s %s    # %s", run, quoted, shellquote.Quote(o.ID), printable(o.Label))
+				add("aether answer %s %s %s    # %s", run, quoted, shellquote.Quote(printable(o.ID)), printable(o.Label))
 			}
 			if len(it.Request.Schema) > 0 {
 				add("an option that accepts takes --values '<json object>' for the form %s", printable(string(it.Request.Schema)))

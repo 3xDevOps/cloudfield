@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/3xDevOps/cloudfield/internal/coordtransport"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 )
 
@@ -138,6 +139,42 @@ func TestReportClaudeBlocksAStopTheServerHolds(t *testing.T) {
 	var continued protocol.RunReportParams
 	if err := json.Unmarshal((<-sock.requests).Params, &continued); err != nil || continued.Stop {
 		t.Fatalf("continued stop params = %+v, %v; want one Aether may not hold", continued, err)
+	}
+}
+
+// Claude Code's last message leaves the session only from a subsession, cut
+// to a message body.
+func TestReportClaudeSendsASubsessionsLastMessage(t *testing.T) {
+	t.Setenv(coordtransport.SubsessionEnv, "")
+	sock := newFakeCoordSocket(t)
+	stop := `{"hook_event_name":"Stop","session_id":"abc","last_assistant_message":"a` + strings.Repeat("é", protocol.CoordMaxBodyBytes) + `"}`
+	sent := func() string {
+		t.Helper()
+		withStdin(t, stop, true)
+		report([]string{"claude", "--socket", sock.path})
+		var params protocol.RunReportParams
+		if err := json.Unmarshal((<-sock.requests).Params, &params); err != nil {
+			t.Fatal(err)
+		}
+		return params.LastMessage
+	}
+	if got := sent(); got != "" {
+		t.Fatalf("a session with no parent sent its last message: %d bytes", len(got))
+	}
+	t.Setenv(coordtransport.SubsessionEnv, "1")
+	if got, want := sent(), "a"+strings.Repeat("é", protocol.CoordMaxBodyBytes/2-1); got != want {
+		t.Fatalf("a subsession sent %d bytes of its last message, want the %d that end on a whole character", len(got), len(want))
+	}
+}
+
+// A session's end is sent as one: the server takes it for no turn end.
+func TestReportClaudeMarksASessionsEnd(t *testing.T) {
+	sock := newFakeCoordSocket(t)
+	withStdin(t, `{"hook_event_name":"SessionEnd","session_id":"abc"}`, true)
+	report([]string{"claude", "--socket", sock.path})
+	var params protocol.RunReportParams
+	if err := json.Unmarshal((<-sock.requests).Params, &params); err != nil || !params.SessionEnd || params.State != "waiting" {
+		t.Fatalf("run.report params = %+v, %v; want a waiting report marked as a session's end", params, err)
 	}
 }
 

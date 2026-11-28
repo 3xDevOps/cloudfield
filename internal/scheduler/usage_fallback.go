@@ -13,6 +13,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/acphost"
 	"github.com/3xDevOps/cloudfield/internal/adapter"
 	"github.com/3xDevOps/cloudfield/internal/agentstatus"
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
 	"github.com/3xDevOps/cloudfield/internal/fallback"
@@ -31,7 +32,7 @@ type UsageFallback struct {
 	// its admission and over a share revocation; a move holds it from
 	// choosing the account until the run records it, and not while it
 	// replaces the container.
-	AuthorizationMu *sync.Mutex
+	AuthorizationMu *ctxlock.Mutex
 	// Note posts a system note to the run's room; key makes it idempotent.
 	Note func(ctx context.Context, run *domain.Run, body, key string) error
 }
@@ -1025,6 +1026,9 @@ func (s *Scheduler) replaceContainer(ctx context.Context, entry *supervised, f *
 	}
 	if run.ACP {
 		if err := s.acp.openError(run.ID); err != nil {
+			if s.superCtx.Err() != nil {
+				return usageShutdown, ""
+			}
 			s.clearAccountSwap(entry, swap)
 			s.leaveIfRevoked(ctx, entry, &next)
 			return usageNoFallback, fmt.Sprintf("%sthe session is on %s's account and its conversation could not be restored: %v", m.stopped(fromName), toName, err)
@@ -1043,7 +1047,9 @@ func (s *Scheduler) replaceContainer(ctx context.Context, entry *supervised, f *
 		}
 	}
 	switch {
-	case again == "" && run.ACP:
+	// An Enhanced session with no conversation to continue was given its
+	// task instead, which cleared the marker.
+	case again == "" && run.ACP && swap != nil:
 		s.acp.sendContinuation(entry, swap)
 	case again == "":
 	case run.ACP:

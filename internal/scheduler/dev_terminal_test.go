@@ -40,7 +40,8 @@ type terminalTestRuntime struct {
 	loseReady  bool
 	resumes    atomic.Int32
 	// recoverHold, once set, holds every RecoverExec until it closes or the
-	// caller's context ends, as a frozen guest does.
+	// caller's context ends, as a frozen guest does. Cut short, it fails as
+	// the VM runtime does when the read of an exit record is cut short.
 	recoverHold chan struct{}
 }
 
@@ -129,9 +130,10 @@ func (r *terminalTestRuntime) RecoverExec(ctx context.Context, identity runtime.
 	if hold != nil {
 		select {
 		case <-hold:
+			return nil, runtime.ErrExecUnavailable
 		case <-ctx.Done():
+			return nil, fmt.Errorf("%w: execution %s: %w", runtime.ErrNotFound, identity.ExecID, ctx.Err())
 		}
-		return nil, runtime.ErrExecUnavailable
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()

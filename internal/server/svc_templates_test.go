@@ -4,10 +4,10 @@ import (
 	"context"
 	"path/filepath"
 	"slices"
-	"sync"
 	"testing"
 	"time"
 
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/sshd"
 	"github.com/3xDevOps/cloudfield/internal/store/storetest"
@@ -18,12 +18,12 @@ import (
 // admitted.
 type lockedRuns struct {
 	sshd.RunController
-	mu                      *sync.Mutex
+	mu                      *ctxlock.Mutex
 	starts                  []bool
 	atLaunch, afterAdmitted bool
 }
 
-func held(mu *sync.Mutex) bool {
+func held(mu *ctxlock.Mutex) bool {
 	if mu.TryLock() {
 		mu.Unlock()
 		return false
@@ -64,7 +64,7 @@ func TestATemplateLaunchHoldsTheLaunchMutexUntilItsRunIsStored(t *testing.T) {
 	if err := db.CreateMember(t.Context(), ada); err != nil {
 		t.Fatal(err)
 	}
-	mu := &sync.Mutex{}
+	mu := &ctxlock.Mutex{}
 	runs := &lockedRuns{mu: mu}
 	launch := func() *domain.Run {
 		t.Helper()

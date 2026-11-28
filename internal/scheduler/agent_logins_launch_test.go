@@ -300,7 +300,7 @@ func TestALaunchNamingNoLoginNeverFallsBackToALoginThatIsOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI, "")
-	if !errors.Is(err, ErrNoStartLogin) || !strings.Contains(err.Error(), ": work: ") || !strings.Contains(err.Error(), "default is automatic off; name one with cloudfield session --login <name>") {
+	if !errors.Is(err, ErrNoStartLogin) || !strings.Contains(err.Error(), ": work: ") || !strings.Contains(err.Error(), "default is automatic off; name one with cloudfield session --agent claude --login <name>") {
 		t.Fatalf("Ada's start with work signed out and her API-key default automatic off: %v; want refused naming both", err)
 	}
 	dir, _ := e.logins.Path(e.member.ID, "claude", work.Login)

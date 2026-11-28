@@ -151,6 +151,7 @@ const (
 	MethodWorkspaceMirrorRefresh   = "workspace.mirror.refresh"
 	MethodWorkspaceMirrorAdopt     = "workspace.mirror.adopt"
 	MethodWorkspaceMirrorDisable   = "workspace.mirror.disable"
+	MethodWorkspaceMirrorWarm      = "workspace.mirror.warm"
 )
 
 // JSON-RPC 2.0 error codes.
