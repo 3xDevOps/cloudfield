@@ -555,8 +555,8 @@ defaults; any session's composer can insert a filled-in template as a draft.
 A schedule is a cron rule: five fields or an `@descriptor`, evaluated in UTC
 unless it starts with `CRON_TZ=<IANA zone> `, as in `cloudfield schedule set
 standup "CRON_TZ=Europe/Berlin 30 9 * * 1-5"`. A zoned rule keeps its wall-clock
-time across daylight saving changes, and a time the clocks skip does not fire
-that day. On the Templates page, **Schedule** picks daily, weekly or monthly at
+time across daylight saving changes: a time the clocks skip does not fire
+that day, and a time they repeat fires once. On the Templates page, **Schedule** picks daily, weekly or monthly at
 a time in a zone, your browser's by default, and shows the rule it saves;
 **Cron** takes any rule. A schedule that was due while the server was
 down waits for its next occurrence. `cloudfield template list|delete` and `cloudfield

@@ -140,7 +140,7 @@ func (s *Service) scan(ctx context.Context, fire bool) error {
 		}
 		// One fire per due schedule per scan, and the next slot is
 		// computed from now: overdue slots are dropped, not queued.
-		t.next = t.rule.Next(now)
+		t.next = following(t.rule, t.next, now)
 		due = append(due, sc)
 	}
 	for id := range before {
@@ -215,6 +215,22 @@ func (s *Service) allowed(ctx context.Context, member domain.MemberID, workspace
 		return fmt.Errorf("member %s may no longer launch sessions: %w", member, err)
 	}
 	return nil
+}
+
+// following is rule's first slot after now. When clocks fall back, robfig
+// matches the repeated hour a second time, so a slot at the same
+// wall-clock time as due, the one just fired, is skipped. A rule without
+// CRON_TZ= carries time.Local and runs in UTC, where nothing repeats.
+func following(rule cron.Schedule, due, now time.Time) time.Time {
+	next := rule.Next(now)
+	spec, ok := rule.(*cron.SpecSchedule)
+	if !ok || spec.Location == time.Local || next.IsZero() {
+		return next
+	}
+	if next.In(spec.Location).Format(time.DateTime) == due.In(spec.Location).Format(time.DateTime) {
+		return rule.Next(next)
+	}
+	return next
 }
 
 func (s *Service) seed(id, spec string, rule cron.Schedule) time.Time {
