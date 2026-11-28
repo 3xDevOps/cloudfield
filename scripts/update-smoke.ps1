@@ -45,6 +45,9 @@ if (($initialPreferences.ExclusionPath -join "`0") -ne $agentExclusion -or $init
     throw "Run this scenario in a disposable runner whose only Defender exclusion is $agentExclusion."
 }
 $knownDetections = @(Get-MpThreatDetection | ForEach-Object { $_.DetectionID })
+. (Join-Path $PSScriptRoot 'defender-fixture.ps1')
+& (Join-Path $PSScriptRoot 'defender-fixture-test.ps1')
+$fixtureResource = Get-FixtureResource $FakeRelease
 $node = (Get-Command node.exe -CommandType Application | Select-Object -First 1).Source
 $installer = Join-Path $PSScriptRoot 'install.ps1'
 
@@ -244,11 +247,12 @@ function Set-Slow([string]$Delay) {
 }
 
 function Assert-NoNewDetections([string]$When) {
-    $detections = @(Get-MpThreatDetection | Where-Object { $_.DetectionID -notin $knownDetections })
+    $new = @(Get-MpThreatDetection | Where-Object { $_.DetectionID -notin $knownDetections })
+    $detections = @(Select-CountedDetections $new $fixtureResource $When)
     if ($detections.Count -gt 0) {
         throw ("Defender detected threats $When, even if remediated: " + ($detections | Format-List | Out-String))
     }
-    Write-Host "ok: Get-MpThreatDetection has no new detection $When"
+    Write-Host "ok: Get-MpThreatDetection has no new detection that counts $When"
 }
 
 # The updater pins https://github.com. A fake-release instance answers

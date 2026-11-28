@@ -1069,6 +1069,16 @@ Start Menu and the registry, so they refuse to run unless
 fails, `scripts/defender-diagnostics.ps1` prints Defender's detections in the
 job log. The screenshots are uploaded as `windows-desktop-*` artifacts.
 
+`update-smoke.ps1` fails on any Defender detection made while it runs, with
+one exception: a detection whose every resource is the fake release server
+the job builds (`-FakeRelease`), a fixture that is never shipped and that
+Defender's machine-learning signature sometimes names. It prints
+`note: Defender detection ... of the test fixture alone, not counted:` with
+the threat and the path, and goes on. A detection that names any other file,
+alone or beside the fixture, fails the job. `scripts/defender-fixture.ps1`
+holds the rule and `pwsh scripts/defender-fixture-test.ps1` checks it on any
+system; the smoke test runs that check before it starts.
+
 When `update-smoke.ps1` cannot move `aether.exe` because another process
 holds it open, it prints the processes Windows Restart Manager names and
 waits up to 30 s for them to close it. It fails if Restart Manager names no
