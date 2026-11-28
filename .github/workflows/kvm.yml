@@ -58,4 +58,5 @@ jobs:
       - name: VM tests (real Cloud Hypervisor VMs)
         env:
           GOFLAGS: -v
-        run: sudo env "PATH=$PATH" "HOME=$HOME" "GOFLAGS=$GOFLAGS" make test-kvm
+        # The runner is thrown away, so a test may reload its systemd.
+        run: sudo env "PATH=$PATH" "HOME=$HOME" "GOFLAGS=$GOFLAGS" AETHER_VM_TEST_DAEMON_RELOAD=1 make test-kvm
