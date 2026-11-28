@@ -14,24 +14,13 @@ func init() {
 	registerMethod(protocol.MethodServerCapacity, (*Server).serverCapacity)
 }
 
-// MachineReader is the scheduler measuring its machine and counting its
-// session VMs.
-type MachineReader interface {
-	Machine(ctx context.Context) scheduler.MachineStatus
-	VMs() domain.VMCounts
-}
-
 func (s *Server) serverCapacity(ctx context.Context, member domain.MemberID, _ json.RawMessage) (any, *protocol.Error) {
-	reader, ok := s.cfg.Runs.(MachineReader)
-	if !ok {
-		return nil, &protocol.Error{Code: protocol.CodeUnavailable, Message: "server.capacity: this server does not measure its machine"}
-	}
 	now := time.Now()
 	hours, err := s.cfg.Store.CapacityCounts(ctx, now.Add(-CapacityFortnight))
 	if err != nil {
 		return nil, rpcError(err)
 	}
-	result := CapacityResult(reader.Machine(ctx), reader.VMs(), hours, now)
+	result := CapacityResult(s.cfg.Runs.Machine(ctx), s.cfg.Runs.VMs(), hours, now)
 	if !s.superAdmin(ctx, member) {
 		for _, r := range []*protocol.ServerCapacityRefusal{result.LastLaunchRefusal, result.LastWakeRefusal} {
 			if r != nil {
