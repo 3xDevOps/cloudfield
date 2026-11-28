@@ -259,18 +259,23 @@ describe('saved launch draft', () => {
       .mockRejectedValueOnce(Object.assign(new Error('run.launch: server did not answer run.launch within 1m0s'), { code: -32004 }))
       .mockRejectedValueOnce(Object.assign(new Error('run.launch: workspace is being deleted'), { code: -32009 }))
       .mockRejectedValueOnce(Object.assign(new Error('run.launch: workspace is being deleted'), { code: -32009 }))
+      .mockRejectedValueOnce(Object.assign(new Error('run.launch: the launch under idempotency_key "k" waited for room and ended expired: no room; use a new key to launch again'), { code: -32004 }))
+      .mockRejectedValueOnce(Object.assign(new Error('run.launch: workspace is being deleted'), { code: -32009 }))
     render(<PaletteDialogs />)
     await waitFor(() => expect(launchButton().disabled).toBe(false))
-    for (const calls of [1, 2, 3, 4]) {
+    for (const calls of [1, 2, 3, 4, 5, 6]) {
       fireEvent.click(launchButton())
       await waitFor(() => expect(api.runLaunchOrWait).toHaveBeenCalledTimes(calls))
       await waitFor(() => expect(launchButton().disabled).toBe(false))
     }
-    const [lost, timedOut, refused, anew] = keys()
+    const [lost, timedOut, refused, anew, ended, afterEnded] = keys()
     expect(lost).toBeTruthy()
     expect(timedOut).toBe(lost)
     expect(refused).toBe(lost)
     expect(anew).not.toBe(lost)
+    // A key whose launch waited and ended never launches again.
+    expect(ended).not.toBe(anew)
+    expect(afterEnded).not.toBe(ended)
   })
 
   it('keeps the task and refusal when a collapsed launch fails', async () => {

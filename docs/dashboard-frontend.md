@@ -2856,8 +2856,9 @@ the dashboard opens the [waiting launch](#missing-run) under the session ID
 reserved for it. A launch whose answer never arrived (no response, or the
 gateway's "server did not answer") is sent again under the same key when the
 member presses Launch with the form unchanged, so the server returns the
-launch it kept and not a second; a refusal, a changed form and a reload each
-end the key. A launch that does not wait is answered only once the session is
+launch it kept and not a second. A changed form, a reload and any refusal
+but the server's "unavailable", which keeps nothing under the key, each end
+it. A launch that does not wait is answered only once the session is
 provisioned, which can take seconds, so the dialog navigates only then: until
 the answer the button reads "Launching…" with a spinner,
 and past the deadline "Still waiting for the server…". A refusal that

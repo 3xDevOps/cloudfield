@@ -10,6 +10,7 @@ import { useStore } from '@/store'
 import { keepsLaunches, launchOpen, refreshWaitingLaunches } from '@/store/waiting-launches'
 
 const retryMs = 5000
+const none: string[] = []
 
 /** Whether the server keeps launches it has no room for. */
 export function useLaunchWait(): boolean {
@@ -57,7 +58,8 @@ export function WaitingLaunch({ runId, fallback }: { runId: string; fallback: Re
   const navigate = useStore((s) => s.navigate)
   // A phone opens a session over its tab bar, where the list is "Sessions".
   const mobile = useIsMobile()
-  const launch = useStore((s) => s.waitingLaunches[runId])
+  // An identity change empties these only once its own read answers.
+  const launch = useStore((s) => (s.launchesFor === s.identityKey ? s.waitingLaunches[runId] : undefined))
   const openDialog = useStore((s) => s.openPaletteDialog)
   const [none, setNone] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -190,7 +192,7 @@ export function WaitingLaunches({ narrow }: { narrow?: boolean }) {
   const offered = useLaunchWait()
   const navigate = useStore((s) => s.navigate)
   const launches = useStore((s) => s.waitingLaunches)
-  const own = useStore((s) => s.ownLaunches)
+  const own = useStore((s) => (s.launchesFor === s.identityKey ? s.ownLaunches : none))
   const shown = useStore((s) => (s.route.name === 'run' ? s.route.params.runId : undefined))
   useEffect(() => {
     // A launch made elsewhere shows when a list opens, without waiting for the minute's read.
