@@ -74,6 +74,8 @@ func (s *Scheduler) stopRecoveredAsleep(ctx context.Context, entry *supervised) 
 		s.mu.Lock()
 		entry.asleepRunning = !entry.asleepSaved
 		s.mu.Unlock()
+		// Until here the run read as asleep with its processes stopped.
+		s.publishSleep(entry)
 		return
 	}
 	if err := s.stopLeftoverAsleep(ctx, entry); err != nil {
