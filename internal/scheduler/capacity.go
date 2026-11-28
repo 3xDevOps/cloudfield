@@ -156,8 +156,8 @@ func (s *Scheduler) reserveLaunch(ctx context.Context, run domain.RunID, retry b
 func (s *Scheduler) reserveWake(ctx context.Context, run domain.RunID, cid runtime.ID) (func(), error) {
 	claim := s.wakeClaim(cid)
 	claim.op, claim.run = opWake, run
-	if ctx.Value(guardWake{}) != nil {
-		claim.op = opWakeRetry
+	if ctx.Value(autoWake{}) != nil {
+		claim.op = opWakeAuto
 	}
 	return s.reserve(ctx, claim)
 }

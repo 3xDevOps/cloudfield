@@ -736,7 +736,7 @@ deletes rows older than 90 days. A counter is a `kind`, an `op` and a
 
 | `kind` | Counted when | `op` | `cause` |
 | --- | --- | --- | --- |
-| `refusal` | Admission refused a start | `launch`, `launch-retry` (the server trying a waiting subsession again), `wake`, `wake-retry` (the memory guard waking by itself a VM it saved while it worked), `boot` (a stopped VM booted to commit its work), `start` (a login terminal, a browser, an assistant sign-in, an agent update, a move to another account) | `memory`, `stall`, `disk`, `unknown` (a measurement failed or timed out behind other admissions) |
+| `refusal` | Admission refused a start for memory or disk | `launch`, `launch-retry` (the server trying a waiting subsession again), `wake`, `wake-auto` (a wake nobody asked for: the memory guard waking a VM it saved while it worked, or the sweep waking a session idle for seven days to close it), `boot` (a stopped VM booted to commit its work), `start` (any other container or VM: a member's environment terminal, an agent sign-in, the assistant's container, a browser, an agent update, a move to another account) | `memory`, `stall`, `disk`, `unknown` (a measurement failed or timed out behind other admissions) |
 | `wait` | A subsession the server had no room for went back to the queue, once for each | `subsession` | |
 | `wait-end` | A subsession that waited stopped waiting | `subsession` | `started`, `refused`, `cancelled` |
 | `freeze` | The memory brake froze at least one session VM, once each time it engages | | |
@@ -747,12 +747,15 @@ Each row holds the `count` and the sum of each event's figures, in bytes:
 - `available_bytes` and `floor_bytes`: available memory and the floor
   admission keeps, for a memory refusal, a freeze and a save (measured
   before the save).
-- `used_bytes`: the memory in use at a memory or stall refusal, read a
-  moment after it.
-- `idle_hour_bytes`: what the session VMs idle for over an hour held of it.
-  It covers the VMs the memory guard may save: not a Background session,
-  one held awake, one with a question pending, or one whose save failed in
-  the last five minutes. A sleeping VM counts from when it fell asleep.
+- `used_bytes`: the memory in use at a memory or stall refusal. It is read
+  when the event is counted, after any pass that saved idle VMs for that
+  admission, so it is not the same instant as `available_bytes`.
+- `idle_hour_bytes`: what session VMs idle for over an hour, and the VMs
+  of closed sessions, held then. It covers session VMs the memory guard may
+  save: not a container session, a Background session, one held awake, one
+  with a question pending, one being saved, or one whose save failed in the
+  last five minutes. A sleeping VM counts from when it fell asleep. On a
+  server whose sessions are containers it is 0.
 - `vm_bytes`: what a saved VM held.
 - `waited_seconds` and `max_waited_seconds`: the total and the longest time
   from a subsession's first refusal for room, when its parent was told it
@@ -761,14 +764,25 @@ Each row holds the `count` and the sum of each event's figures, in bytes:
 - `last_at`, `last_run` and `last_text`: the counter's latest event, with
   the refusal as its caller got it.
 
-What the counts are not: `wake` counts attempts, so one session a person
-keeps trying to wake counts each time. A disk refusal's figures are in its
-text. A VM saved because it stayed paused for an hour is not counted: no
-shortage caused it. Counting never holds up a launch or a wake: events go
-to the database from a queue of 256, and one that finds it full is logged
-(`not counted, too many wait for the database`) and not counted. An event
-whose end falls in a server restart, such as a waiting subsession that
-started as the server stopped, can go uncounted.
+What the counts are not:
+
+- `wake` counts attempts, so one session a person keeps trying to wake
+  counts each time. It includes wakes the server makes for someone: to
+  deliver mail to a sleeping session, and before a close or a kill. Callers
+  that ask while a wake runs share it and its counter.
+- A waiting subsession's refusals are counted as `refusal` too (`launch`,
+  then `launch-retry`), beside its `wait`.
+- A disk refusal's figures are in its text. A refusal for browser CPU is
+  not counted. A VM saved because it stayed paused for an hour is not
+  counted: no shortage caused it.
+- An event whose end falls in a server restart, such as a waiting
+  subsession that started as the server stopped, can go uncounted.
+
+Counting never holds up admission, the brake or the guard: their events go
+to the database from a queue of 256. One that finds the queue full, or that
+a stopping server has not written, is logged (`not counted, ...`) and not
+counted. A subsession's `wait` and `wait-end` are written by the subsession
+service itself, after its state changed and outside the launch lock.
 
 ## Where a launch or a wake spends its time
 

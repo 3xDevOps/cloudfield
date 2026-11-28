@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/store"
 )
 
 // The admissions the capacity counters tell apart.
@@ -14,15 +15,15 @@ const (
 	opLaunch      = "launch"
 	opLaunchRetry = "launch-retry"
 	opWake        = "wake"
-	opWakeRetry   = "wake-retry"
+	opWakeAuto    = "wake-auto"
 	opBoot        = "boot"
 	opStart       = "start"
 )
 
-// guardWake marks the context of a wake the memory guard makes by itself,
-// of a VM it saved while it worked, so its refusals are counted apart from
-// the wakes somebody asked for.
-type guardWake struct{}
+// autoWake marks the context of a wake nobody asked for: the memory guard
+// waking a VM it saved while it worked, and the sweep waking a session idle
+// for days to close it. Their refusals are counted apart.
+type autoWake struct{}
 
 // idleHour is how long a session VM has been idle before the memory it
 // holds counts as idle in a refusal's figures.
@@ -58,15 +59,24 @@ func (s *Scheduler) countCapacity(e domain.CapacityEvent, memory bool) {
 // ends. A count that cannot be written is logged: what was counted has
 // already happened. The memory figures of a refusal are measured here, a
 // moment after it, and cover the session VMs the memory guard may save.
-func (s *Scheduler) countCapacityEvents(ctx context.Context) {
-	if err := s.cfg.Store.PruneCapacityCounts(ctx, time.Now().Add(-capacityCountsKept)); err != nil {
+// counts is the store the scheduler was built with.
+func (s *Scheduler) countCapacityEvents(ctx context.Context, counts store.CapacityStore) {
+	if err := counts.PruneCapacityCounts(ctx, time.Now().Add(-capacityCountsKept)); err != nil {
 		slog.Warn("scheduler: capacity: prune old counts", "error", err)
 	}
 	for {
 		var c capacityCount
 		select {
 		case <-ctx.Done():
-			return
+			// What still waits is said, not lost in silence.
+			for {
+				select {
+				case c = <-s.capacityCounts:
+					slog.Warn("scheduler: capacity: not counted, the server is stopping", "kind", c.event.Kind, "op", c.event.Op, "cause", c.event.Cause, "run", c.event.Run, "text", c.event.Text)
+				default:
+					return
+				}
+			}
 		case c = <-s.capacityCounts:
 		}
 		e := c.event
@@ -76,7 +86,8 @@ func (s *Scheduler) countCapacityEvents(ctx context.Context) {
 			}
 			candidates, _ := s.memoryCandidates(ctx)
 			for _, candidate := range candidates {
-				if candidate.idle && !candidate.since.IsZero() && e.At.Sub(candidate.since) >= idleHour {
+				// A closed session's VM has no time of last use and is idle.
+				if candidate.closed || candidate.idle && e.At.Sub(candidate.since) >= idleHour {
 					e.IdleHourBytes += candidate.memory
 				}
 			}
@@ -84,7 +95,7 @@ func (s *Scheduler) countCapacityEvents(ctx context.Context) {
 		slog.Info("scheduler: capacity: "+e.Kind, "op", e.Op, "cause", e.Cause, "run", e.Run, "available", e.AvailableBytes, "floor", e.FloorBytes,
 			"used", e.UsedBytes, "idle_hour", e.IdleHourBytes, "vm", e.VMBytes, "text", e.Text)
 		writeCtx, cancel := context.WithTimeout(ctx, capacityProbeTimeout)
-		err := s.cfg.Store.CountCapacityEvent(writeCtx, e)
+		err := counts.CountCapacityEvent(writeCtx, e)
 		cancel()
 		if err != nil {
 			slog.Warn("scheduler: capacity: count "+e.Kind, "error", err)
